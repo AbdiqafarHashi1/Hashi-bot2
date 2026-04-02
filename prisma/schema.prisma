@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  backtestRuns BacktestRun[]
+}
+
+model Settings {
+  id               String   @id @default(cuid())
+  generalSettings  Json
+  riskSettings     Json
+  strategySettings Json
+  telegramSettings Json
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model BacktestRun {
+  id         String   @id @default(cuid())
+  status     String   @default("pending")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  userId     String?
+  strategyId String?
+
+  user      User?           @relation(fields: [userId], references: [id])
+  strategy  StrategyConfig? @relation(fields: [strategyId], references: [id])
+  results   BacktestResult[]
+}
+
+model BacktestResult {
+  id           String   @id @default(cuid())
+  metrics      Json
+  createdAt    DateTime @default(now())
+  backtestRunId String
+
+  backtestRun BacktestRun @relation(fields: [backtestRunId], references: [id], onDelete: Cascade)
+}
+
+model Signal {
+  id        String   @id @default(cuid())
+  symbol    String
+  timeframe String
+  payload   Json
+  createdAt DateTime @default(now())
+}
+
+model StrategyConfig {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  config    Json
+  enabled   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  backtestRuns BacktestRun[]
+}

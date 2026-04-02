@@ -1,0 +1,24 @@
+{
+  "name": "@hashi/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "smoke": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "test:fallback": "tsx src/fallback-test.ts",
+    "run:backtest": "pnpm --dir ../.. backtest"
+  },
+  "dependencies": {
+    "@hashi/config": "workspace:*",
+    "@hashi/core": "workspace:*",
+    "@hashi/db": "workspace:*",
+    "ioredis": "^5.4.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "@types/node": "^22.10.2"
+  }
+}
