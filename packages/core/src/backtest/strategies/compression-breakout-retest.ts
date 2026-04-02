@@ -12,6 +12,7 @@ export type BreakoutProfileConfig = {
   maxCompression: number;
   maxContraction: number;
   minBreakoutStrength: number;
+  minBreakoutCloseOffsetAtr: number;
   maxChaseDistanceAtr: number;
   minRoomToTargetR: number;
 };
@@ -61,8 +62,8 @@ export class CompressionBreakoutRetestStrategy implements StrategyContract {
     const breakoutStrength = body / range;
     if (breakoutStrength < this.profile.minBreakoutStrength) return [];
 
-    const isLongBreakout = breakoutCandle.close > priorHigh + atrValue * 0.08;
-    const isShortBreakout = breakoutCandle.close < priorLow - atrValue * 0.08;
+    const isLongBreakout = breakoutCandle.close > priorHigh + atrValue * this.profile.minBreakoutCloseOffsetAtr;
+    const isShortBreakout = breakoutCandle.close < priorLow - atrValue * this.profile.minBreakoutCloseOffsetAtr;
     if (!isLongBreakout && !isShortBreakout) return [];
 
     const side = isLongBreakout ? "LONG" : "SHORT";
