@@ -3,9 +3,10 @@ import type { StrategyContract } from "../strategy-contract";
 import type { StrategyProfileType } from "../strategy-types";
 import { CompressionBreakoutRetestStrategy, type BreakoutProfileConfig, BREAKOUT_MODULE_FAMILY } from "./strategies/compression-breakout-retest";
 import { TrendPullbackContinuationStrategy, type TrendProfileConfig, TREND_MODULE_FAMILY } from "./strategies/trend-pullback-continuation";
+import { MeanReversionSnapbackStrategy, type MeanReversionProfileConfig, MEAN_REVERSION_MODULE_FAMILY } from "./strategies/mean-reversion-snapback";
 
 export type StrategyRegistryEntry = {
-  id: "trend_pullback_strict" | "trend_pullback_balanced" | "compression_breakout_strict" | "compression_breakout_balanced";
+  id: "trend_pullback_strict" | "trend_pullback_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced";
   label: string;
   moduleFamily: string;
   profileType: StrategyProfileType;
@@ -19,6 +20,7 @@ export type StrategyRegistryEntry = {
 
 const trend = (cfg: TrendProfileConfig) => () => new TrendPullbackContinuationStrategy(cfg);
 const breakout = (cfg: BreakoutProfileConfig) => () => new CompressionBreakoutRetestStrategy(cfg);
+const meanReversion = (cfg: MeanReversionProfileConfig) => () => new MeanReversionSnapbackStrategy(cfg);
 
 export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
   {
@@ -68,6 +70,64 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
     experimental: false,
     minScore: 57,
     create: breakout({ strategyId: "compression_breakout_balanced", profileType: "balanced", maxCompression: 0.024, maxContraction: 0.82, minBreakoutStrength: 0.5, maxChaseDistanceAtr: 0.85, minRoomToTargetR: 1.35 })
+  },
+  {
+    id: "mean_reversion_strict",
+    label: "Mean Reversion (Strict)",
+    moduleFamily: MEAN_REVERSION_MODULE_FAMILY,
+    profileType: "strict",
+    description: "Higher-selectivity exhaustion snapbacks with tighter regime and geometry bounds.",
+    regimeIntent: ["NEUTRAL", "TREND_STRETCHED"],
+    productionEligible: true,
+    experimental: false,
+    minScore: 62,
+    create: meanReversion({
+      strategyId: "mean_reversion_strict",
+      profileType: "strict",
+      allowedRegimes: ["NEUTRAL", "TREND_STRETCHED"],
+      minStretchFromValueAtr: 1.35,
+      minExhaustionScore: 0.62,
+      minConfirmationStrength: 0.62,
+      minCounterWickRatio: 0.35,
+      maxImpulseAtr: 1.25,
+      minRoomToTargetR: 1.1,
+      maxRoomToTargetR: 3.2,
+      minStopDistanceAtr: 0.45,
+      maxStopDistanceAtr: 1.8,
+      maxDistancePastExtremeAtr: 0.45,
+      strictTrendStretchGate: true,
+      maxBarsSinceExtreme: 8,
+      stallExitBars: 11
+    })
+  },
+  {
+    id: "mean_reversion_balanced",
+    label: "Mean Reversion (Balanced)",
+    moduleFamily: MEAN_REVERSION_MODULE_FAMILY,
+    profileType: "balanced",
+    description: "Bounded mean reversion participation with broader, but still disciplined, eligibility.",
+    regimeIntent: ["NEUTRAL", "TREND_STRETCHED", "CHOP"],
+    productionEligible: true,
+    experimental: false,
+    minScore: 56,
+    create: meanReversion({
+      strategyId: "mean_reversion_balanced",
+      profileType: "balanced",
+      allowedRegimes: ["NEUTRAL", "TREND_STRETCHED", "CHOP"],
+      minStretchFromValueAtr: 1.05,
+      minExhaustionScore: 0.52,
+      minConfirmationStrength: 0.48,
+      minCounterWickRatio: 0.26,
+      maxImpulseAtr: 1.7,
+      minRoomToTargetR: 0.95,
+      maxRoomToTargetR: 3.8,
+      minStopDistanceAtr: 0.35,
+      maxStopDistanceAtr: 2.2,
+      maxDistancePastExtremeAtr: 0.7,
+      strictTrendStretchGate: false,
+      maxBarsSinceExtreme: 12,
+      stallExitBars: 14
+    })
   }
 ];
 
