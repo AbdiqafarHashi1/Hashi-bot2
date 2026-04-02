@@ -57,7 +57,7 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
     productionEligible: true,
     experimental: false,
     minScore: 64,
-    create: breakout({ strategyId: "compression_breakout_strict", profileType: "strict", maxCompression: 0.018, maxContraction: 0.72, minBreakoutStrength: 0.62, maxChaseDistanceAtr: 0.50, minRoomToTargetR: 1.7 })
+    create: breakout({ strategyId: "compression_breakout_strict", profileType: "strict", maxCompression: 0.018, maxContraction: 0.72, minBreakoutStrength: 0.62, minBreakoutCloseOffsetAtr: 0.22, maxChaseDistanceAtr: 0.50, minRoomToTargetR: 1.7 })
   },
   {
     id: "compression_breakout_balanced",
@@ -69,7 +69,7 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
     productionEligible: true,
     experimental: false,
     minScore: 57,
-    create: breakout({ strategyId: "compression_breakout_balanced", profileType: "balanced", maxCompression: 0.024, maxContraction: 0.82, minBreakoutStrength: 0.5, maxChaseDistanceAtr: 0.80, minRoomToTargetR: 1.35 })
+    create: breakout({ strategyId: "compression_breakout_balanced", profileType: "balanced", maxCompression: 0.024, maxContraction: 0.82, minBreakoutStrength: 0.5, minBreakoutCloseOffsetAtr: 0.15, maxChaseDistanceAtr: 0.80, minRoomToTargetR: 1.35 })
   },
   {
     id: "mean_reversion_strict",
