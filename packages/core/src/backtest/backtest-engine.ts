@@ -18,6 +18,72 @@ export type BacktestRunOutput = {
   analytics: BacktestAnalytics;
 };
 
+const BREAKOUT_STRATEGY_IDS = new Set(["compression_breakout_strict", "compression_breakout_balanced"]);
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+type SizingInputs = {
+  equity: number;
+  entry: number;
+  stop: number;
+  strategyId?: string;
+  confidence: number;
+  riskPercent: number;
+  riskMode?: "balanced" | "aggressive";
+  baseRiskPct?: number;
+  maxRiskPctCap?: number;
+  sizeModMin?: number;
+  sizeModMax?: number;
+  maxPositionNotional?: number;
+  regime: ReturnType<typeof classifyRegime>;
+};
+
+function computeBreakoutSizeModifier({ regime, confidence, sizeModMin = 0.7, sizeModMax = 1.2 }: Pick<SizingInputs, "regime" | "confidence" | "sizeModMin" | "sizeModMax">): number {
+  const diagnostics = regime.diagnostics;
+  const regimeTilt = regime.regime === "COMPRESSION_READY" ? 0.1 : regime.regime === "TREND_ORDERLY" ? 0.05 : regime.regime === "CHOP" ? -0.2 : regime.regime === "SHOCK_UNSTABLE" ? -0.3 : 0;
+  const chopTilt = diagnostics.chop < 0.45 ? 0.05 : diagnostics.chop > 0.62 ? -0.1 : 0;
+  const confidenceTilt = (confidence - 0.5) * 0.2;
+  const raw = 1 + regimeTilt + chopTilt + confidenceTilt;
+  return clamp(raw, sizeModMin, sizeModMax);
+}
+
+function resolvePositionSizing(inputs: SizingInputs): { quantity: number; riskAmount: number; sizeModifier: number } | null {
+  const stopDistance = Math.abs(inputs.entry - inputs.stop);
+  if (stopDistance <= 0 || !Number.isFinite(stopDistance)) return null;
+
+  const isBreakout = Boolean(inputs.strategyId && BREAKOUT_STRATEGY_IDS.has(inputs.strategyId));
+  const defaultModeRiskPct = inputs.riskMode === "aggressive" ? 0.02 : 0.01;
+  const requestedRiskPct = isBreakout ? (inputs.baseRiskPct ?? defaultModeRiskPct) : inputs.riskPercent / 100;
+  const maxRiskPctCap = inputs.maxRiskPctCap ?? 0.025;
+  const appliedRiskPct = clamp(requestedRiskPct, 0, maxRiskPctCap);
+
+  const sizeModifier = isBreakout
+    ? computeBreakoutSizeModifier({
+        regime: inputs.regime,
+        confidence: inputs.confidence,
+        sizeModMin: inputs.sizeModMin,
+        sizeModMax: inputs.sizeModMax
+      })
+    : 1;
+
+  const desiredRiskAmount = inputs.equity * appliedRiskPct * sizeModifier;
+  let quantity = desiredRiskAmount / stopDistance;
+  if (!Number.isFinite(quantity) || quantity <= 0) return null;
+
+  const maxNotional = inputs.maxPositionNotional;
+  if (maxNotional && maxNotional > 0 && inputs.entry > 0) {
+    const maxQtyFromNotional = maxNotional / inputs.entry;
+    quantity = Math.min(quantity, maxQtyFromNotional);
+  }
+
+  if (!Number.isFinite(quantity) || quantity <= 0) return null;
+  return {
+    quantity,
+    riskAmount: quantity * stopDistance,
+    sizeModifier
+  };
+}
+
 const isEntryTriggered = (plan: TradePlan, candle: Candle) => plan.entry >= candle.low && plan.entry <= candle.high;
 
 export class BacktestEngine {
@@ -120,15 +186,28 @@ export class BacktestEngine {
         continue;
       }
 
-      const riskAmount = equity * (config.riskPercent / 100);
-      const stopDistance = Math.abs(plan.entry - plan.stop);
-      if (stopDistance === 0) {
+      const sizing = resolvePositionSizing({
+        equity,
+        entry: plan.entry,
+        stop: plan.stop,
+        strategyId: plan.strategyId,
+        confidence: best.confidence,
+        riskPercent: config.riskPercent,
+        riskMode: config.riskMode,
+        baseRiskPct: config.baseRiskPct,
+        maxRiskPctCap: config.maxRiskPctCap,
+        sizeModMin: config.sizeModMin,
+        sizeModMax: config.sizeModMax,
+        maxPositionNotional: config.maxPositionNotional,
+        regime
+      });
+
+      if (!sizing) {
         skippedSignals.push({ timestamp: candle.openTime, reason: "Invalid stop distance", candidateScore: best.score });
         equityCurve.push({ timestamp: candle.openTime, equity });
         continue;
       }
 
-      const qty = riskAmount / stopDistance;
       tradeCounter += 1;
       funnel.executed += 1;
 
@@ -150,12 +229,12 @@ export class BacktestEngine {
         stop: plan.stop,
         tp1: plan.tp1,
         tp2: plan.tp2,
-        quantity: qty,
-        riskAmount,
+        quantity: sizing.quantity,
+        riskAmount: sizing.riskAmount,
         openedAtIndex: i,
         entryTime: candle.openTime,
         state: "open",
-        remainingQty: qty,
+        remainingQty: sizing.quantity,
         realizedPnl: 0,
         mfe: 0,
         mae: 0,
@@ -202,6 +281,8 @@ export class BacktestEngine {
         maxDrawdown,
         avgWinner: grossPnL / Math.max(wins, 1),
         avgLoser: closedTrades.filter((t) => t.pnl < 0).reduce((s, t) => s + t.pnl, 0) / Math.max(losses, 1),
+        avgPositionSize: closedTrades.reduce((sum, t) => sum + t.quantity, 0) / Math.max(closedTrades.length, 1),
+        avgPositionNotional: closedTrades.reduce((sum, t) => sum + Math.abs(t.quantity * t.entry), 0) / Math.max(closedTrades.length, 1),
         tp1Percent: closedTrades.filter((t) => t.outcomeType === "tp1_only").length / Math.max(closedTrades.length, 1),
         tp2Percent: closedTrades.filter((t) => t.outcomeType === "tp2").length / Math.max(closedTrades.length, 1),
         stopPercent: closedTrades.filter((t) => t.outcomeType === "stop" || t.outcomeType === "partial_then_stop").length / Math.max(closedTrades.length, 1),

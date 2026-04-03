@@ -15,7 +15,13 @@ const envSchema = z.object({
   DEFAULT_HTF_2: timeframeSchema.default("4h"),
   DEFAULT_PRIMARY_PROVIDER: providerSchema.default("binance"),
   DEFAULT_BACKUP_PROVIDER: providerSchema.default("bybit"),
-  DEFAULT_DATASET_PATH: z.string().default("data/ETHUSDT_15m.csv")
+  DEFAULT_DATASET_PATH: z.string().default("data/ETHUSDT_15m.csv"),
+  RISK_MODE: z.enum(["balanced", "aggressive"]).default("balanced"),
+  BASE_RISK_PCT: z.coerce.number().positive().default(0.01),
+  MAX_RISK_PCT_CAP: z.coerce.number().positive().default(0.025),
+  SIZE_MOD_MIN: z.coerce.number().positive().default(0.7),
+  SIZE_MOD_MAX: z.coerce.number().positive().default(1.2),
+  MAX_POSITION_NOTIONAL: z.coerce.number().positive().optional()
 });
 
 export type RuntimeConfig = z.infer<typeof envSchema>;

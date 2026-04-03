@@ -7,6 +7,12 @@ export type BacktestConfig = {
   timeframe: Timeframe;
   initialBalance: number;
   riskPercent: number;
+  riskMode?: "balanced" | "aggressive";
+  baseRiskPct?: number;
+  maxRiskPctCap?: number;
+  sizeModMin?: number;
+  sizeModMax?: number;
+  maxPositionNotional?: number;
   allowCompounding: boolean;
   warmupCandles: number;
   minScore?: number;
@@ -117,6 +123,8 @@ export type BacktestSummary = {
   maxDrawdown: number;
   avgWinner: number;
   avgLoser: number;
+  avgPositionSize: number;
+  avgPositionNotional: number;
   tp1Percent: number;
   tp2Percent: number;
   stopPercent: number;
