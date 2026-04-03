@@ -55,23 +55,72 @@ type ComparisonRow = {
   maxDrawdown: number;
 };
 
+const BREAKOUT_STRATEGY_IDS = new Set(["compression_breakout_strict", "compression_breakout_balanced"]);
+type BreakoutOperatingMode = "stable" | "growth";
+
+type RuntimeRiskProfile = {
+  riskMode: "balanced" | "aggressive";
+  baseRiskPct?: number;
+  maxRiskPctCap?: number;
+  sizeModMin?: number;
+  sizeModMax?: number;
+};
+
+function parseNumber(value?: string): number | undefined {
+  if (!value) return undefined;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : undefined;
+}
+
+function resolveRiskProfile(strategyId: string): RuntimeRiskProfile {
+  const mode = (process.env.BREAKOUT_OPERATING_MODE as BreakoutOperatingMode | undefined) ?? "stable";
+  const isBreakout = BREAKOUT_STRATEGY_IDS.has(strategyId);
+
+  const modeDefaults: RuntimeRiskProfile | undefined = isBreakout
+    ? mode === "growth"
+      ? {
+          riskMode: "aggressive",
+          baseRiskPct: 0.03,
+          maxRiskPctCap: 0.05,
+          sizeModMin: 0.7,
+          sizeModMax: 1.2
+        }
+      : {
+          riskMode: "balanced",
+          baseRiskPct: 0.01,
+          maxRiskPctCap: 0.025,
+          sizeModMin: 0.7,
+          sizeModMax: 1.0
+        }
+    : undefined;
+
+  return {
+    riskMode: (process.env.RISK_MODE as "balanced" | "aggressive" | undefined) ?? modeDefaults?.riskMode ?? "balanced",
+    baseRiskPct: parseNumber(process.env.BASE_RISK_PCT) ?? modeDefaults?.baseRiskPct,
+    maxRiskPctCap: parseNumber(process.env.MAX_RISK_PCT_CAP) ?? modeDefaults?.maxRiskPctCap,
+    sizeModMin: parseNumber(process.env.SIZE_MOD_MIN) ?? modeDefaults?.sizeModMin,
+    sizeModMax: parseNumber(process.env.SIZE_MOD_MAX) ?? modeDefaults?.sizeModMax
+  };
+}
+
 async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h" | "4h", strategyId: string, name?: string) {
   const entry = getStrategyById(strategyId);
   if (!entry) throw new Error(`Unknown strategy id: ${strategyId}`);
 
   const candles = await loadCandlesFromCsv({ filePath: dataset });
   const engine = new BacktestEngine(entry.create());
+  const riskProfile = resolveRiskProfile(strategyId);
   const config: BacktestConfig = {
     name: name ?? `${strategyId}-${Date.now()}`,
     symbol,
     timeframe,
-    initialBalance: 10_000,
+    initialBalance: Number(arg("equity-start", process.env.EQUITY_START ?? "10000")),
     riskPercent: 1,
-    riskMode: (process.env.RISK_MODE as "balanced" | "aggressive" | undefined) ?? "balanced",
-    baseRiskPct: process.env.BASE_RISK_PCT ? Number(process.env.BASE_RISK_PCT) : undefined,
-    maxRiskPctCap: process.env.MAX_RISK_PCT_CAP ? Number(process.env.MAX_RISK_PCT_CAP) : undefined,
-    sizeModMin: process.env.SIZE_MOD_MIN ? Number(process.env.SIZE_MOD_MIN) : undefined,
-    sizeModMax: process.env.SIZE_MOD_MAX ? Number(process.env.SIZE_MOD_MAX) : undefined,
+    riskMode: riskProfile.riskMode,
+    baseRiskPct: riskProfile.baseRiskPct,
+    maxRiskPctCap: riskProfile.maxRiskPctCap,
+    sizeModMin: riskProfile.sizeModMin,
+    sizeModMax: riskProfile.sizeModMax,
     maxPositionNotional: process.env.MAX_POSITION_NOTIONAL ? Number(process.env.MAX_POSITION_NOTIONAL) : undefined,
     allowCompounding: false,
     warmupCandles: 50,
