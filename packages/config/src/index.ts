@@ -3,6 +3,7 @@ import type { Timeframe } from "@hashi/core";
 
 const providerSchema = z.enum(["binance", "bybit"]);
 const timeframeSchema = z.enum(["15m", "1h", "4h"] satisfies [Timeframe, ...Timeframe[]]);
+const breakoutOperatingModeSchema = z.enum(["stable", "growth"]);
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -16,6 +17,8 @@ const envSchema = z.object({
   DEFAULT_PRIMARY_PROVIDER: providerSchema.default("binance"),
   DEFAULT_BACKUP_PROVIDER: providerSchema.default("bybit"),
   DEFAULT_DATASET_PATH: z.string().default("data/ETHUSDT_15m.csv"),
+  EQUITY_START: z.coerce.number().positive().default(10_000),
+  BREAKOUT_OPERATING_MODE: breakoutOperatingModeSchema.default("stable"),
   RISK_MODE: z.enum(["balanced", "aggressive"]).default("balanced"),
   BASE_RISK_PCT: z.coerce.number().positive().default(0.01),
   MAX_RISK_PCT_CAP: z.coerce.number().positive().default(0.025),
