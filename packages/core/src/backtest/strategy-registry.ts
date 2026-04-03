@@ -97,7 +97,13 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
       maxDistancePastExtremeAtr: 0.45,
       strictTrendStretchGate: true,
       maxBarsSinceExtreme: 8,
-      stallExitBars: 11
+      stallExitBars: 9,
+      minStretchZScore: 0.8,
+      minCompositeStretchScore: 1.25,
+      minRejectionScore: 0.34,
+      minStabilizationScore: 0.25,
+      tp1RMultiple: 0.7,
+      tp2ValueBufferAtr: 0.18
     })
   },
   {
@@ -126,7 +132,13 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
       maxDistancePastExtremeAtr: 0.7,
       strictTrendStretchGate: false,
       maxBarsSinceExtreme: 12,
-      stallExitBars: 14
+      stallExitBars: 11,
+      minStretchZScore: 0.7,
+      minCompositeStretchScore: 1.05,
+      minRejectionScore: 0.26,
+      minStabilizationScore: 0.2,
+      tp1RMultiple: 0.65,
+      tp2ValueBufferAtr: 0.12
     })
   }
 ];

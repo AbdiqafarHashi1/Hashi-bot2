@@ -23,6 +23,12 @@ export type MeanReversionProfileConfig = {
   strictTrendStretchGate?: boolean;
   maxBarsSinceExtreme: number;
   stallExitBars: number;
+  minStretchZScore: number;
+  minCompositeStretchScore: number;
+  minRejectionScore: number;
+  minStabilizationScore: number;
+  tp1RMultiple: number;
+  tp2ValueBufferAtr: number;
 };
 
 type MeanReversionMetadata = {
@@ -35,8 +41,12 @@ type MeanReversionMetadata = {
   tp2: number;
   valueAnchor: number;
   stretchFromValueAtr: number;
+  stretchZScore: number;
+  compositeStretchScore: number;
   exhaustionScore: number;
   confirmationStrength: number;
+  rejectionScore: number;
+  stabilizationScore: number;
   counterWickRatio: number;
   roomToTargetR: number;
   stopDistanceAtr: number;
@@ -78,6 +88,8 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
     if (!this.explicitRegimeGate(regime, extensionState.stretchFromValueAtr)) return [];
 
     if (Math.abs(extensionState.stretchFromValueAtr) < this.profile.minStretchFromValueAtr) return [];
+    if (Math.abs(extensionState.stretchZScore) < this.profile.minStretchZScore) return [];
+    if (extensionState.compositeStretchScore < this.profile.minCompositeStretchScore) return [];
 
     const side: SignalSide = extensionState.side === "LONG" ? "SHORT" : "LONG";
 
@@ -89,6 +101,12 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
 
     const confirmationStrength = this.calcConfirmationStrength(last, prev, extensionState.side);
     if (confirmationStrength < this.profile.minConfirmationStrength) return [];
+
+    const rejectionScore = this.calcRejectionScore(last, prev, extensionState.side, atrValue);
+    if (rejectionScore < this.profile.minRejectionScore) return [];
+
+    const stabilizationScore = this.calcStabilizationScore(exec, extensionState.side, atrValue, valueAnchor);
+    if (stabilizationScore < this.profile.minStabilizationScore) return [];
 
     const impulseAtr = this.recentImpulseAtr(exec, 4, extensionState.side, atrValue);
     if (impulseAtr > this.profile.maxImpulseAtr) return [];
@@ -112,10 +130,10 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
     if (stopDistanceAtr < this.profile.minStopDistanceAtr || stopDistanceAtr > this.profile.maxStopDistanceAtr) return [];
 
     const tp1 = side === "LONG"
-      ? entry + stopDistance * 0.8
-      : entry - stopDistance * 0.8;
+      ? entry + stopDistance * this.profile.tp1RMultiple
+      : entry - stopDistance * this.profile.tp1RMultiple;
 
-    const tp2 = this.reversionTarget(exec, side, entry, valueAnchor, stopDistance);
+    const tp2 = this.reversionTarget(exec, side, entry, valueAnchor, stopDistance, atrValue);
     const roomToTargetR = Math.abs(tp2 - entry) / Math.max(stopDistance, 1e-9);
     if (roomToTargetR < this.profile.minRoomToTargetR || roomToTargetR > this.profile.maxRoomToTargetR) return [];
 
@@ -129,8 +147,12 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
       tp2,
       valueAnchor,
       stretchFromValueAtr: Math.abs(extensionState.stretchFromValueAtr),
+      stretchZScore: Math.abs(extensionState.stretchZScore),
+      compositeStretchScore: extensionState.compositeStretchScore,
       exhaustionScore,
       confirmationStrength,
+      rejectionScore,
+      stabilizationScore,
       counterWickRatio,
       roomToTargetR,
       stopDistanceAtr,
@@ -181,8 +203,12 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
       confidence: score / 100,
       reasons: [
         `stretchATR=${md.stretchFromValueAtr.toFixed(2)}`,
+        `zScore=${md.stretchZScore.toFixed(2)}`,
+        `stretchComposite=${md.compositeStretchScore.toFixed(2)}`,
         `exhaustion=${md.exhaustionScore.toFixed(2)}`,
         `confirm=${md.confirmationStrength.toFixed(2)}`,
+        `rejection=${md.rejectionScore.toFixed(2)}`,
+        `stabilization=${md.stabilizationScore.toFixed(2)}`,
         `wick=${md.counterWickRatio.toFixed(2)}`,
         `roomR=${md.roomToTargetR.toFixed(2)}`
       ]
@@ -197,8 +223,12 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
     if (!md) return { valid: false, reasons: ["Missing mean reversion metadata"] };
 
     if (md.stretchFromValueAtr < this.profile.minStretchFromValueAtr) return { valid: false, reasons: ["Insufficient stretch"] };
+    if (md.stretchZScore < this.profile.minStretchZScore) return { valid: false, reasons: ["Insufficient z-score stretch"] };
+    if (md.compositeStretchScore < this.profile.minCompositeStretchScore) return { valid: false, reasons: ["Composite stretch too weak"] };
     if (md.exhaustionScore < this.profile.minExhaustionScore) return { valid: false, reasons: ["Insufficient exhaustion"] };
     if (md.confirmationStrength < this.profile.minConfirmationStrength) return { valid: false, reasons: ["Weak confirmation"] };
+    if (md.rejectionScore < this.profile.minRejectionScore) return { valid: false, reasons: ["Weak rejection"] };
+    if (md.stabilizationScore < this.profile.minStabilizationScore) return { valid: false, reasons: ["Weak stabilization"] };
     if (md.counterWickRatio < this.profile.minCounterWickRatio) return { valid: false, reasons: ["Insufficient counter-wick structure"] };
     if (md.stopDistanceAtr < this.profile.minStopDistanceAtr || md.stopDistanceAtr > this.profile.maxStopDistanceAtr) {
       return { valid: false, reasons: ["Stop geometry out of bounds"] };
@@ -247,9 +277,52 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
 
   private detectExtensionState(exec: Candle[], atrValue: number, valueAnchor: number) {
     const last = exec[exec.length - 1];
+    const closeSeries = closes(exec);
+    const recent = closeSeries.slice(-50);
+    const mean = recent.reduce((sum, c) => sum + c, 0) / Math.max(1, recent.length);
+    const variance = recent.reduce((sum, c) => sum + (c - mean) ** 2, 0) / Math.max(1, recent.length);
+    const std = Math.sqrt(Math.max(variance, 1e-9));
     const stretchFromValueAtr = (last.close - valueAnchor) / Math.max(atrValue, 1e-9);
+    const stretchZScore = (last.close - valueAnchor) / std;
+    const emaDistAtr = Math.abs(last.close - valueAnchor) / Math.max(atrValue, 1e-9);
+    const compositeStretchScore = Math.min(2.5, (Math.abs(stretchZScore) * 0.7) + (emaDistAtr * 0.9));
     const side: SignalSide = stretchFromValueAtr > 0 ? "LONG" : stretchFromValueAtr < 0 ? "SHORT" : "NONE";
-    return { side, stretchFromValueAtr };
+    return { side, stretchFromValueAtr, stretchZScore, compositeStretchScore };
+  }
+
+  private calcRejectionScore(last: Candle, prev: Candle, stretchedSide: SignalSide, atrValue: number) {
+    const range = Math.max(last.high - last.low, 1e-9);
+    const counterWick = stretchedSide === "LONG"
+      ? Math.max(0, last.high - Math.max(last.open, last.close))
+      : Math.max(0, Math.min(last.open, last.close) - last.low);
+    const closeBackInRange = stretchedSide === "LONG"
+      ? Number(last.close <= prev.high)
+      : Number(last.close >= prev.low);
+    const awayFromExtreme = stretchedSide === "LONG"
+      ? Number((last.high - last.close) / Math.max(atrValue, 1e-9) >= 0.12)
+      : Number((last.close - last.low) / Math.max(atrValue, 1e-9) >= 0.12);
+
+    return Math.max(0, Math.min(1, (counterWick / range) * 0.55 + closeBackInRange * 0.25 + awayFromExtreme * 0.2));
+  }
+
+  private calcStabilizationScore(exec: Candle[], stretchedSide: SignalSide, atrValue: number, valueAnchor: number) {
+    const recent = exec.slice(-3);
+    if (recent.length < 3) return 0;
+    const last = recent[2];
+    const prev = recent[1];
+    const prev2 = recent[0];
+
+    const impulseDecel = stretchedSide === "LONG"
+      ? Math.max(0, (prev.close - last.close) / Math.max(atrValue, 1e-9))
+      : Math.max(0, (last.close - prev.close) / Math.max(atrValue, 1e-9));
+    const failedContinuation = stretchedSide === "LONG"
+      ? Number(last.high <= Math.max(prev.high, prev2.high))
+      : Number(last.low >= Math.min(prev.low, prev2.low));
+    const slightValueRecovery = stretchedSide === "LONG"
+      ? Number(last.close <= valueAnchor + atrValue * 0.7)
+      : Number(last.close >= valueAnchor - atrValue * 0.7);
+
+    return Math.max(0, Math.min(1, Math.min(1, impulseDecel) * 0.4 + failedContinuation * 0.35 + slightValueRecovery * 0.25));
   }
 
   private calcExhaustionScore(last: Candle, atrValue: number, stretchedSide: SignalSide) {
@@ -313,15 +386,19 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
     return Math.min(...slice.map((c) => c.low));
   }
 
-  private reversionTarget(exec: Candle[], side: SignalSide, entry: number, valueAnchor: number, stopDistance: number) {
+  private reversionTarget(exec: Candle[], side: SignalSide, entry: number, valueAnchor: number, stopDistance: number, atrValue: number) {
     const recent = exec.slice(-24);
     const structureTarget = side === "LONG"
       ? Math.min(valueAnchor, recent.reduce((min, c) => Math.min(min, c.low), Number.POSITIVE_INFINITY) + stopDistance * 3.5)
       : Math.max(valueAnchor, recent.reduce((max, c) => Math.max(max, c.high), Number.NEGATIVE_INFINITY) - stopDistance * 3.5);
 
+    const valueCap = side === "LONG"
+      ? valueAnchor - atrValue * this.profile.tp2ValueBufferAtr
+      : valueAnchor + atrValue * this.profile.tp2ValueBufferAtr;
+
     const valueBiased = side === "LONG"
-      ? Math.max(entry + stopDistance * 1.2, structureTarget)
-      : Math.min(entry - stopDistance * 1.2, structureTarget);
+      ? Math.min(valueCap, Math.max(entry + stopDistance * 1.0, structureTarget))
+      : Math.max(valueCap, Math.min(entry - stopDistance * 1.0, structureTarget));
 
     return valueBiased;
   }
