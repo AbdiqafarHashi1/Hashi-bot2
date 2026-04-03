@@ -67,6 +67,12 @@ async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h
     timeframe,
     initialBalance: 10_000,
     riskPercent: 1,
+    riskMode: (process.env.RISK_MODE as "balanced" | "aggressive" | undefined) ?? "balanced",
+    baseRiskPct: process.env.BASE_RISK_PCT ? Number(process.env.BASE_RISK_PCT) : undefined,
+    maxRiskPctCap: process.env.MAX_RISK_PCT_CAP ? Number(process.env.MAX_RISK_PCT_CAP) : undefined,
+    sizeModMin: process.env.SIZE_MOD_MIN ? Number(process.env.SIZE_MOD_MIN) : undefined,
+    sizeModMax: process.env.SIZE_MOD_MAX ? Number(process.env.SIZE_MOD_MAX) : undefined,
+    maxPositionNotional: process.env.MAX_POSITION_NOTIONAL ? Number(process.env.MAX_POSITION_NOTIONAL) : undefined,
     allowCompounding: false,
     warmupCandles: 50,
     minScore: entry.minScore
