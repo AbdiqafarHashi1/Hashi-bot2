@@ -3,10 +3,11 @@ import type { StrategyContract } from "../strategy-contract";
 import type { StrategyProfileType } from "../strategy-types";
 import { CompressionBreakoutRetestStrategy, type BreakoutProfileConfig, BREAKOUT_MODULE_FAMILY } from "./strategies/compression-breakout-retest";
 import { TrendPullbackContinuationStrategy, type TrendProfileConfig, TREND_MODULE_FAMILY } from "./strategies/trend-pullback-continuation";
+import { SwingContinuationStrategy, type SwingProfileConfig, SWING_MODULE_FAMILY } from "./strategies/swing-continuation";
 import { MeanReversionSnapbackStrategy, type MeanReversionProfileConfig, MEAN_REVERSION_MODULE_FAMILY } from "./strategies/mean-reversion-snapback";
 
 export type StrategyRegistryEntry = {
-  id: "trend_pullback_strict" | "trend_pullback_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced";
+  id: "trend_pullback_strict" | "trend_pullback_balanced" | "swing_continuation_strict" | "swing_continuation_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced";
   label: string;
   moduleFamily: string;
   profileType: StrategyProfileType;
@@ -20,6 +21,7 @@ export type StrategyRegistryEntry = {
 
 const trend = (cfg: TrendProfileConfig) => () => new TrendPullbackContinuationStrategy(cfg);
 const breakout = (cfg: BreakoutProfileConfig) => () => new CompressionBreakoutRetestStrategy(cfg);
+const swing = (cfg: SwingProfileConfig) => () => new SwingContinuationStrategy(cfg);
 const meanReversion = (cfg: MeanReversionProfileConfig) => () => new MeanReversionSnapbackStrategy(cfg);
 
 export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
@@ -46,6 +48,54 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
     experimental: false,
     minScore: 58,
     create: trend({ strategyId: "trend_pullback_balanced", profileType: "balanced", maxDistanceFromValueAtr: 1.5, minRoomToTargetR: 1.45, minTriggerStrength: 0.45, minStopDistanceAtr: 0.35, maxStopDistanceAtr: 2.6 })
+  },
+  {
+    id: "swing_continuation_strict",
+    label: "Swing Continuation (Strict)",
+    moduleFamily: SWING_MODULE_FAMILY,
+    profileType: "strict",
+    description: "Selective trend continuation pullbacks requiring deeper value retrace and stronger resumption.",
+    regimeIntent: ["TREND_ORDERLY", "TREND_STRETCHED"],
+    productionEligible: true,
+    experimental: false,
+    minScore: 62,
+    create: swing({
+      strategyId: "swing_continuation_strict",
+      profileType: "strict",
+      minPullbackDepthAtr: 0.55,
+      maxPullbackDepthAtr: 1.5,
+      minResumptionBodyRatio: 0.52,
+      minResumptionCloseOffsetAtr: 0.04,
+      maxExtensionFromEma20Atr: 0.9,
+      minRoomToTargetR: 2.0,
+      minTrendStrength: 0.66,
+      minStopDistanceAtr: 0.55,
+      maxStopDistanceAtr: 2.8
+    })
+  },
+  {
+    id: "swing_continuation_balanced",
+    label: "Swing Continuation (Balanced)",
+    moduleFamily: SWING_MODULE_FAMILY,
+    profileType: "balanced",
+    description: "Broader continuation pullbacks while preserving trend alignment and anti-extension safeguards.",
+    regimeIntent: ["TREND_ORDERLY", "TREND_STRETCHED"],
+    productionEligible: true,
+    experimental: false,
+    minScore: 56,
+    create: swing({
+      strategyId: "swing_continuation_balanced",
+      profileType: "balanced",
+      minPullbackDepthAtr: 0.4,
+      maxPullbackDepthAtr: 1.8,
+      minResumptionBodyRatio: 0.42,
+      minResumptionCloseOffsetAtr: 0.0,
+      maxExtensionFromEma20Atr: 1.1,
+      minRoomToTargetR: 1.7,
+      minTrendStrength: 0.5,
+      minStopDistanceAtr: 0.45,
+      maxStopDistanceAtr: 3.0
+    })
   },
   {
     id: "compression_breakout_strict",

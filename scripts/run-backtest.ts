@@ -56,7 +56,8 @@ type ComparisonRow = {
 };
 
 const BREAKOUT_STRATEGY_IDS = new Set(["compression_breakout_strict", "compression_breakout_balanced"]);
-type BreakoutOperatingMode = "stable" | "growth";
+const SWING_STRATEGY_IDS = new Set(["swing_continuation_strict", "swing_continuation_balanced"]);
+type OperatingMode = "stable" | "growth";
 
 type RuntimeRiskProfile = {
   riskMode: "balanced" | "aggressive";
@@ -73,11 +74,13 @@ function parseNumber(value?: string): number | undefined {
 }
 
 function resolveRiskProfile(strategyId: string): RuntimeRiskProfile {
-  const mode = (process.env.BREAKOUT_OPERATING_MODE as BreakoutOperatingMode | undefined) ?? "stable";
+  const breakoutMode = (process.env.BREAKOUT_OPERATING_MODE as OperatingMode | undefined) ?? "stable";
+  const swingMode = (process.env.SWING_OPERATING_MODE as OperatingMode | undefined) ?? "stable";
   const isBreakout = BREAKOUT_STRATEGY_IDS.has(strategyId);
+  const isSwing = SWING_STRATEGY_IDS.has(strategyId);
 
   const modeDefaults: RuntimeRiskProfile | undefined = isBreakout
-    ? mode === "growth"
+    ? breakoutMode === "growth"
       ? {
           riskMode: "aggressive",
           baseRiskPct: 0.03,
@@ -92,7 +95,23 @@ function resolveRiskProfile(strategyId: string): RuntimeRiskProfile {
           sizeModMin: 0.7,
           sizeModMax: 1.0
         }
-    : undefined;
+    : isSwing
+      ? swingMode === "growth"
+        ? {
+            riskMode: "aggressive",
+            baseRiskPct: 0.015,
+            maxRiskPctCap: 0.03,
+            sizeModMin: 0.85,
+            sizeModMax: 1.05
+          }
+        : {
+            riskMode: "balanced",
+            baseRiskPct: 0.008,
+            maxRiskPctCap: 0.02,
+            sizeModMin: 0.85,
+            sizeModMax: 1.0
+          }
+      : undefined;
 
   return {
     riskMode: (process.env.RISK_MODE as "balanced" | "aggressive" | undefined) ?? modeDefaults?.riskMode ?? "balanced",
