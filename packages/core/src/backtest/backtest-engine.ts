@@ -19,6 +19,7 @@ export type BacktestRunOutput = {
 };
 
 const BREAKOUT_STRATEGY_IDS = new Set(["compression_breakout_strict", "compression_breakout_balanced"]);
+const SWING_STRATEGY_IDS = new Set(["swing_continuation_strict", "swing_continuation_balanced"]);
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
@@ -52,8 +53,9 @@ function resolvePositionSizing(inputs: SizingInputs): { quantity: number; riskAm
   if (stopDistance <= 0 || !Number.isFinite(stopDistance)) return null;
 
   const isBreakout = Boolean(inputs.strategyId && BREAKOUT_STRATEGY_IDS.has(inputs.strategyId));
+  const isSwing = Boolean(inputs.strategyId && SWING_STRATEGY_IDS.has(inputs.strategyId));
   const defaultModeRiskPct = inputs.riskMode === "aggressive" ? 0.02 : 0.01;
-  const requestedRiskPct = isBreakout ? (inputs.baseRiskPct ?? defaultModeRiskPct) : inputs.riskPercent / 100;
+  const requestedRiskPct = isBreakout || isSwing ? (inputs.baseRiskPct ?? defaultModeRiskPct) : inputs.riskPercent / 100;
   const maxRiskPctCap = inputs.maxRiskPctCap ?? 0.025;
   const appliedRiskPct = clamp(requestedRiskPct, 0, maxRiskPctCap);
 
