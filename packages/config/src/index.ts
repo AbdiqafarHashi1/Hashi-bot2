@@ -3,7 +3,7 @@ import type { Timeframe } from "@hashi/core";
 
 const providerSchema = z.enum(["binance", "bybit"]);
 const timeframeSchema = z.enum(["15m", "1h", "4h"] satisfies [Timeframe, ...Timeframe[]]);
-const breakoutOperatingModeSchema = z.enum(["stable", "growth"]);
+const breakoutOperatingModeSchema = z.enum(["stable", "growth", "bounded_aggression"]);
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
