@@ -85,7 +85,7 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
       strategyId: "mean_reversion_strict",
       profileType: "strict",
       allowedRegimes: ["NEUTRAL", "TREND_STRETCHED"],
-      minStretchFromValueAtr: 1.35,
+      minStretchFromValueAtr: 1.45,
       minExhaustionScore: 0.62,
       minConfirmationStrength: 0.62,
       minCounterWickRatio: 0.35,
@@ -97,13 +97,17 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
       maxDistancePastExtremeAtr: 0.45,
       strictTrendStretchGate: true,
       maxBarsSinceExtreme: 8,
-      stallExitBars: 9,
+      stallExitBars: 8,
       minStretchZScore: 0.8,
       minCompositeStretchScore: 1.25,
       minRejectionScore: 0.34,
       minStabilizationScore: 0.25,
       tp1RMultiple: 0.7,
-      tp2ValueBufferAtr: 0.18
+      tp1ToTp2Fraction: 0.5,
+      tp2ValueBufferAtr: 0.15,
+      tp2MinDistanceAtr: 0.85,
+      tp2MaxDistanceAtr: 2.2,
+      localAnchorLookback: 20
     })
   },
   {
@@ -120,7 +124,7 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
       strategyId: "mean_reversion_balanced",
       profileType: "balanced",
       allowedRegimes: ["NEUTRAL", "TREND_STRETCHED", "CHOP"],
-      minStretchFromValueAtr: 1.05,
+      minStretchFromValueAtr: 1.0,
       minExhaustionScore: 0.52,
       minConfirmationStrength: 0.48,
       minCounterWickRatio: 0.26,
@@ -132,13 +136,17 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
       maxDistancePastExtremeAtr: 0.7,
       strictTrendStretchGate: false,
       maxBarsSinceExtreme: 12,
-      stallExitBars: 11,
+      stallExitBars: 9,
       minStretchZScore: 0.7,
       minCompositeStretchScore: 1.05,
       minRejectionScore: 0.26,
       minStabilizationScore: 0.2,
       tp1RMultiple: 0.65,
-      tp2ValueBufferAtr: 0.12
+      tp1ToTp2Fraction: 0.58,
+      tp2ValueBufferAtr: 0.1,
+      tp2MinDistanceAtr: 0.7,
+      tp2MaxDistanceAtr: 2.6,
+      localAnchorLookback: 20
     })
   }
 ];
