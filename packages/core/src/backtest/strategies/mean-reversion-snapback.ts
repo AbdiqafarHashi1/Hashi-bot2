@@ -28,7 +28,11 @@ export type MeanReversionProfileConfig = {
   minRejectionScore: number;
   minStabilizationScore: number;
   tp1RMultiple: number;
+  tp1ToTp2Fraction: number;
   tp2ValueBufferAtr: number;
+  tp2MinDistanceAtr: number;
+  tp2MaxDistanceAtr: number;
+  localAnchorLookback: number;
 };
 
 type MeanReversionMetadata = {
@@ -41,6 +45,7 @@ type MeanReversionMetadata = {
   tp2: number;
   valueAnchor: number;
   stretchFromValueAtr: number;
+  anchorDistanceAtr: number;
   stretchZScore: number;
   compositeStretchScore: number;
   exhaustionScore: number;
@@ -49,6 +54,7 @@ type MeanReversionMetadata = {
   stabilizationScore: number;
   counterWickRatio: number;
   roomToTargetR: number;
+  tp2DistanceAtr: number;
   stopDistanceAtr: number;
   impulseAtr: number;
   extensionAgeBars: number;
@@ -77,7 +83,7 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
     const atrValue = atr(exec, 14);
     if (!atrValue) return [];
 
-    const valueAnchor = emaSeries(closes(exec), 34).at(-1);
+    const valueAnchor = this.localValueAnchor(exec);
     if (!valueAnchor) return [];
 
     const prev = exec[exec.length - 2];
@@ -129,11 +135,15 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
     const stopDistanceAtr = stopDistance / atrValue;
     if (stopDistanceAtr < this.profile.minStopDistanceAtr || stopDistanceAtr > this.profile.maxStopDistanceAtr) return [];
 
+    const tp2 = this.reversionTarget(side, entry, valueAnchor, atrValue);
+    const tp2Distance = Math.abs(tp2 - entry);
+    const tp1Distance = Math.min(
+      stopDistance * this.profile.tp1RMultiple,
+      tp2Distance * this.profile.tp1ToTp2Fraction
+    );
     const tp1 = side === "LONG"
-      ? entry + stopDistance * this.profile.tp1RMultiple
-      : entry - stopDistance * this.profile.tp1RMultiple;
-
-    const tp2 = this.reversionTarget(exec, side, entry, valueAnchor, stopDistance, atrValue);
+      ? entry + tp1Distance
+      : entry - tp1Distance;
     const roomToTargetR = Math.abs(tp2 - entry) / Math.max(stopDistance, 1e-9);
     if (roomToTargetR < this.profile.minRoomToTargetR || roomToTargetR > this.profile.maxRoomToTargetR) return [];
 
@@ -147,6 +157,7 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
       tp2,
       valueAnchor,
       stretchFromValueAtr: Math.abs(extensionState.stretchFromValueAtr),
+      anchorDistanceAtr: Math.abs(extensionState.anchorDistanceAtr),
       stretchZScore: Math.abs(extensionState.stretchZScore),
       compositeStretchScore: extensionState.compositeStretchScore,
       exhaustionScore,
@@ -155,6 +166,7 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
       stabilizationScore,
       counterWickRatio,
       roomToTargetR,
+      tp2DistanceAtr: tp2Distance / Math.max(atrValue, 1e-9),
       stopDistanceAtr,
       impulseAtr,
       extensionAgeBars,
@@ -203,6 +215,7 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
       confidence: score / 100,
       reasons: [
         `stretchATR=${md.stretchFromValueAtr.toFixed(2)}`,
+        `anchorDistATR=${md.anchorDistanceAtr.toFixed(2)}`,
         `zScore=${md.stretchZScore.toFixed(2)}`,
         `stretchComposite=${md.compositeStretchScore.toFixed(2)}`,
         `exhaustion=${md.exhaustionScore.toFixed(2)}`,
@@ -210,7 +223,8 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
         `rejection=${md.rejectionScore.toFixed(2)}`,
         `stabilization=${md.stabilizationScore.toFixed(2)}`,
         `wick=${md.counterWickRatio.toFixed(2)}`,
-        `roomR=${md.roomToTargetR.toFixed(2)}`
+        `roomR=${md.roomToTargetR.toFixed(2)}`,
+        `tp2DistATR=${md.tp2DistanceAtr.toFixed(2)}`
       ]
     };
   }
@@ -278,16 +292,16 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
   private detectExtensionState(exec: Candle[], atrValue: number, valueAnchor: number) {
     const last = exec[exec.length - 1];
     const closeSeries = closes(exec);
-    const recent = closeSeries.slice(-50);
+    const recent = closeSeries.slice(-Math.max(30, this.profile.localAnchorLookback + 8));
     const mean = recent.reduce((sum, c) => sum + c, 0) / Math.max(1, recent.length);
     const variance = recent.reduce((sum, c) => sum + (c - mean) ** 2, 0) / Math.max(1, recent.length);
     const std = Math.sqrt(Math.max(variance, 1e-9));
-    const stretchFromValueAtr = (last.close - valueAnchor) / Math.max(atrValue, 1e-9);
+    const anchorDistanceAtr = (last.close - valueAnchor) / Math.max(atrValue, 1e-9);
+    const stretchFromValueAtr = anchorDistanceAtr;
     const stretchZScore = (last.close - valueAnchor) / std;
-    const emaDistAtr = Math.abs(last.close - valueAnchor) / Math.max(atrValue, 1e-9);
-    const compositeStretchScore = Math.min(2.5, (Math.abs(stretchZScore) * 0.7) + (emaDistAtr * 0.9));
+    const compositeStretchScore = Math.min(2.5, (Math.abs(stretchZScore) * 0.65) + (Math.abs(anchorDistanceAtr) * 0.95));
     const side: SignalSide = stretchFromValueAtr > 0 ? "LONG" : stretchFromValueAtr < 0 ? "SHORT" : "NONE";
-    return { side, stretchFromValueAtr, stretchZScore, compositeStretchScore };
+    return { side, stretchFromValueAtr, anchorDistanceAtr, stretchZScore, compositeStretchScore };
   }
 
   private calcRejectionScore(last: Candle, prev: Candle, stretchedSide: SignalSide, atrValue: number) {
@@ -386,20 +400,22 @@ export class MeanReversionSnapbackStrategy implements StrategyContract {
     return Math.min(...slice.map((c) => c.low));
   }
 
-  private reversionTarget(exec: Candle[], side: SignalSide, entry: number, valueAnchor: number, stopDistance: number, atrValue: number) {
-    const recent = exec.slice(-24);
-    const structureTarget = side === "LONG"
-      ? Math.min(valueAnchor, recent.reduce((min, c) => Math.min(min, c.low), Number.POSITIVE_INFINITY) + stopDistance * 3.5)
-      : Math.max(valueAnchor, recent.reduce((max, c) => Math.max(max, c.high), Number.NEGATIVE_INFINITY) - stopDistance * 3.5);
-
+  private reversionTarget(side: SignalSide, entry: number, valueAnchor: number, atrValue: number) {
     const valueCap = side === "LONG"
       ? valueAnchor - atrValue * this.profile.tp2ValueBufferAtr
       : valueAnchor + atrValue * this.profile.tp2ValueBufferAtr;
+    const rawDistance = side === "LONG" ? valueCap - entry : entry - valueCap;
+    const boundedDistance = Math.max(
+      this.profile.tp2MinDistanceAtr * atrValue,
+      Math.min(this.profile.tp2MaxDistanceAtr * atrValue, rawDistance)
+    );
+    return side === "LONG" ? entry + boundedDistance : entry - boundedDistance;
+  }
 
-    const valueBiased = side === "LONG"
-      ? Math.min(valueCap, Math.max(entry + stopDistance * 1.0, structureTarget))
-      : Math.max(valueCap, Math.min(entry - stopDistance * 1.0, structureTarget));
-
-    return valueBiased;
+  private localValueAnchor(exec: Candle[]) {
+    const lookback = Math.max(8, this.profile.localAnchorLookback);
+    const localCloses = closes(exec).slice(-lookback);
+    if (!localCloses.length) return emaSeries(closes(exec), 34).at(-1);
+    return localCloses.reduce((sum, price) => sum + price, 0) / localCloses.length;
   }
 }
