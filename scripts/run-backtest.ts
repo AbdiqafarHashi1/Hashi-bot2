@@ -56,7 +56,7 @@ type ComparisonRow = {
 };
 
 const BREAKOUT_STRATEGY_IDS = new Set(["compression_breakout_strict", "compression_breakout_balanced"]);
-type BreakoutOperatingMode = "stable" | "growth";
+type BreakoutOperatingMode = "stable" | "growth" | "bounded_aggression";
 
 type RuntimeRiskProfile = {
   riskMode: "balanced" | "aggressive";
@@ -64,6 +64,7 @@ type RuntimeRiskProfile = {
   maxRiskPctCap?: number;
   sizeModMin?: number;
   sizeModMax?: number;
+  maxPositionNotional?: number;
 };
 
 function parseNumber(value?: string): number | undefined {
@@ -85,13 +86,22 @@ function resolveRiskProfile(strategyId: string): RuntimeRiskProfile {
           sizeModMin: 0.7,
           sizeModMax: 1.2
         }
-      : {
-          riskMode: "balanced",
-          baseRiskPct: 0.01,
-          maxRiskPctCap: 0.025,
-          sizeModMin: 0.7,
-          sizeModMax: 1.0
-        }
+      : mode === "bounded_aggression"
+        ? {
+            riskMode: "aggressive",
+            baseRiskPct: 0.045,
+            maxRiskPctCap: 0.05,
+            sizeModMin: 0.9,
+            sizeModMax: 1.2,
+            maxPositionNotional: 60_000
+          }
+        : {
+            riskMode: "balanced",
+            baseRiskPct: 0.01,
+            maxRiskPctCap: 0.025,
+            sizeModMin: 0.7,
+            sizeModMax: 1.0
+          }
     : undefined;
 
   return {
@@ -99,7 +109,8 @@ function resolveRiskProfile(strategyId: string): RuntimeRiskProfile {
     baseRiskPct: parseNumber(process.env.BASE_RISK_PCT) ?? modeDefaults?.baseRiskPct,
     maxRiskPctCap: parseNumber(process.env.MAX_RISK_PCT_CAP) ?? modeDefaults?.maxRiskPctCap,
     sizeModMin: parseNumber(process.env.SIZE_MOD_MIN) ?? modeDefaults?.sizeModMin,
-    sizeModMax: parseNumber(process.env.SIZE_MOD_MAX) ?? modeDefaults?.sizeModMax
+    sizeModMax: parseNumber(process.env.SIZE_MOD_MAX) ?? modeDefaults?.sizeModMax,
+    maxPositionNotional: parseNumber(process.env.MAX_POSITION_NOTIONAL) ?? modeDefaults?.maxPositionNotional
   };
 }
 
@@ -121,7 +132,7 @@ async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h
     maxRiskPctCap: riskProfile.maxRiskPctCap,
     sizeModMin: riskProfile.sizeModMin,
     sizeModMax: riskProfile.sizeModMax,
-    maxPositionNotional: process.env.MAX_POSITION_NOTIONAL ? Number(process.env.MAX_POSITION_NOTIONAL) : undefined,
+    maxPositionNotional: riskProfile.maxPositionNotional,
     allowCompounding: false,
     warmupCandles: 50,
     minScore: entry.minScore
