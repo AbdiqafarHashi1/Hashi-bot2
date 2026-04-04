@@ -48,6 +48,16 @@ export type OpenTrade = {
   mfe: number;
   mae: number;
   hadPartialExit: boolean;
+  entryAtr?: number;
+  earlyExitPolicy?: {
+    enabled: boolean;
+    evaluationBars: number;
+    minProgressAtr: number;
+    maxAdverseAtr: number;
+    minContinuationQuality: number;
+    strongBypassThreshold: number;
+    continuationStrength: number;
+  };
 };
 
 export type ClosedTrade = {
@@ -75,7 +85,7 @@ export type ClosedTrade = {
   durationCandles: number;
   durationMs: number;
   state: "closed";
-  exitReason: "tp2" | "stop";
+  exitReason: "tp2" | "stop" | "time_exit";
   outcomeType: TradeOutcomeType;
   pnl: number;
   rMultiple: number;
