@@ -240,7 +240,9 @@ export class BacktestEngine {
         realizedPnl: 0,
         mfe: 0,
         mae: 0,
-        hadPartialExit: false
+        hadPartialExit: false,
+        entryAtr: plan.entryAtr,
+        earlyExitPolicy: plan.earlyExitPolicy
       });
 
       equityCurve.push({ timestamp: candle.openTime, equity });

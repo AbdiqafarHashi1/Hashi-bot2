@@ -42,4 +42,14 @@ export type TradePlan = {
   score: number;
   reasons: string[];
   source: string;
+  entryAtr?: number;
+  earlyExitPolicy?: {
+    enabled: boolean;
+    evaluationBars: number;
+    minProgressAtr: number;
+    maxAdverseAtr: number;
+    minContinuationQuality: number;
+    strongBypassThreshold: number;
+    continuationStrength: number;
+  };
 };
