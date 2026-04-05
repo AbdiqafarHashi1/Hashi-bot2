@@ -1,6 +1,5 @@
 import { classifyRegime, type StrategyContract, type StrategyCandidate, type TradePlan } from "..";
 import type { Candle } from "../domains";
-import { buildHistoricalMarketContext } from "./historical-market-loader";
 import { buildAnalytics } from "./analytics";
 import { processTradeOnCandle } from "./trade-lifecycle";
 import type {
@@ -13,6 +12,7 @@ import type {
   OpenTrade,
   SkippedSignal
 } from "./types";
+import type { MarketContext, Timeframe } from "../domains";
 
 export type BacktestRunOutput = {
   result: BacktestResult;
@@ -97,6 +97,112 @@ function resolvePositionSizing(inputs: SizingInputs): { quantity: number; riskAm
 
 const isEntryTriggered = (plan: TradePlan, candle: Candle) => plan.entry >= candle.low && plan.entry <= candle.high;
 
+type AggregationState = {
+  factor: number;
+  count: number;
+  openTime: number;
+  closeTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  source: Candle["source"];
+};
+
+function createAggregationState(factor: number): AggregationState {
+  return {
+    factor,
+    count: 0,
+    openTime: 0,
+    closeTime: 0,
+    open: 0,
+    high: Number.NEGATIVE_INFINITY,
+    low: Number.POSITIVE_INFINITY,
+    close: 0,
+    volume: 0,
+    source: "BINANCE"
+  };
+}
+
+function pushAggregatedCandle(target: Candle[], state: AggregationState) {
+  target.push({
+    openTime: state.openTime,
+    closeTime: state.closeTime,
+    open: state.open,
+    high: state.high,
+    low: state.low,
+    close: state.close,
+    volume: state.volume,
+    source: state.source
+  });
+  state.count = 0;
+  state.openTime = 0;
+  state.closeTime = 0;
+  state.open = 0;
+  state.high = Number.NEGATIVE_INFINITY;
+  state.low = Number.POSITIVE_INFINITY;
+  state.close = 0;
+  state.volume = 0;
+}
+
+function updateAggregation(target: Candle[], state: AggregationState, candle: Candle) {
+  if (state.count === 0) {
+    state.openTime = candle.openTime;
+    state.open = candle.open;
+    state.high = candle.high;
+    state.low = candle.low;
+    state.source = candle.source;
+    state.volume = 0;
+  } else {
+    state.high = Math.max(state.high, candle.high);
+    state.low = Math.min(state.low, candle.low);
+  }
+
+  state.count += 1;
+  state.closeTime = candle.closeTime;
+  state.close = candle.close;
+  state.volume += candle.volume;
+
+  if (state.count === state.factor) {
+    pushAggregatedCandle(target, state);
+  }
+}
+
+function buildMarketContextFromBuffers(
+  symbol: string,
+  executionTimeframe: Timeframe,
+  primarySource: MarketContext["source"]["primary"],
+  backupSource: MarketContext["source"]["backup"],
+  latestPrice: number,
+  candles15m: Candle[],
+  candles1h: Candle[],
+  candles4h: Candle[],
+  lookbackBars: number
+): MarketContext {
+  const c15m = candles15m.length > lookbackBars ? candles15m.slice(-lookbackBars) : candles15m;
+  const c1h = candles1h.length > lookbackBars ? candles1h.slice(-lookbackBars) : candles1h;
+  const c4h = candles4h.length > lookbackBars ? candles4h.slice(-lookbackBars) : candles4h;
+  return {
+    symbol,
+    executionTimeframe,
+    htf1: "1h",
+    htf2: "4h",
+    source: {
+      primary: primarySource,
+      backup: backupSource,
+      used: primarySource,
+      fallbackUsed: false
+    },
+    latestPrice,
+    candles: {
+      "15m": c15m,
+      "1h": c1h,
+      "4h": c4h
+    }
+  };
+}
+
 export class BacktestEngine {
   constructor(private readonly strategy: StrategyContract) {}
 
@@ -120,9 +226,26 @@ export class BacktestEngine {
     let regretCount = 0;
     let regretMagnitudeSum = 0;
     let shadowComparisons = 0;
+    const candles15m: Candle[] = [];
+    const candles1h: Candle[] = [];
+    const candles4h: Candle[] = [];
+    const agg1h = createAggregationState(4);
+    const agg4h = createAggregationState(16);
+    const contextLookbackBars = 512;
+
+    for (let j = 0; j < config.warmupCandles; j += 1) {
+      const warm = candles[j];
+      if (!warm) break;
+      candles15m.push(warm);
+      updateAggregation(candles1h, agg1h, warm);
+      updateAggregation(candles4h, agg4h, warm);
+    }
 
     for (let i = config.warmupCandles; i < candles.length; i += 1) {
       const candle = candles[i];
+      candles15m.push(candle);
+      updateAggregation(candles1h, agg1h, candle);
+      updateAggregation(candles4h, agg4h, candle);
 
       for (let t = openTrades.length - 1; t >= 0; t -= 1) {
         const state = processTradeOnCandle(openTrades[t], candle, i);
@@ -148,8 +271,17 @@ export class BacktestEngine {
         continue;
       }
 
-      const marketContext = buildHistoricalMarketContext(candles, i, config.timeframe, "1h", "4h", candle.source, candle.source);
-      marketContext.symbol = config.symbol;
+      const marketContext = buildMarketContextFromBuffers(
+        config.symbol,
+        config.timeframe,
+        candle.source,
+        candle.source,
+        candle.close,
+        candles15m,
+        candles1h,
+        candles4h,
+        contextLookbackBars
+      );
 
       const regime = classifyRegime(marketContext);
       const candidates = await this.strategy.generateCandidates(marketContext);

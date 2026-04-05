@@ -84,6 +84,25 @@ Run a single backtest with explicit params:
 pnpm backtest --dataset data/ETHUSDT_15m_sample.csv --symbol ETHUSDT --timeframe 15m --name sample-run
 ```
 
+### Breakout capital policy defaults (merge-candidate lock)
+
+Active production defaults for breakout-only validation harness:
+
+- `signal` mode default policy: `signal_baseline` (no overlay)
+- `personal` mode default policy: `personal_healthy_equity_aggression`
+- `prop` mode default policy: `prop_preservation_governance_safe`
+
+Preserved non-default selectable profiles:
+
+- personal: `personal_baseline`, `personal_preservation`, `personal_milestone_derisk`
+- prop: `prop_baseline`, `prop_tighter_defensive`
+
+Override policy explicitly when needed:
+
+```bash
+pnpm backtest --dataset data/ETHUSDT_15m.csv --mode personal --capital-policy personal_preservation --strategy compression_breakout_balanced --name personal-preservation-check
+```
+
 
 ### 2-year breakout validation harness
 
