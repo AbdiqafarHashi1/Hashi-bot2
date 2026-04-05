@@ -5,6 +5,8 @@ export type BacktestConfig = {
   name: string;
   symbol: Symbol;
   timeframe: Timeframe;
+  mode?: "signal" | "personal" | "prop";
+  modePolicy?: Record<string, unknown>;
   initialBalance: number;
   riskPercent: number;
   riskMode?: "balanced" | "aggressive";

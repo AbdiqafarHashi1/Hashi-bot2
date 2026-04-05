@@ -5,6 +5,7 @@ import { loadCandlesFromCsv } from "../packages/core/src/backtest/csv-loader";
 import type { BacktestConfig } from "../packages/core/src/backtest/types";
 import type { BacktestRunOutput } from "../packages/core/src/backtest/backtest-engine";
 import { ACTIVE_PRODUCTION_STRATEGY_IDS, STRATEGY_REGISTRY, getStrategyById, getProductionStrategies } from "../packages/core/src/backtest/strategy-registry";
+import { DATASET_PRESETS, DEFAULT_BREAKOUT_HARNESS_STRATEGY_ID, MODE_POLICIES, type HarnessMode } from "./backtest-harness";
 
 const args = process.argv.slice(2);
 const arg = (name: string, fallback?: string) => {
@@ -22,6 +23,8 @@ async function persistResult(name: string, output: BacktestRunOutput, meta: Reco
     generatedAt: new Date().toISOString(),
     runMode: meta.runMode,
     strategy: meta.strategy,
+    harnessMode: meta.harnessMode,
+    modePolicy: meta.modePolicy,
     summary: output.result.summary,
     funnel: output.result.funnel,
     strategyContext: output.result.strategyContext,
@@ -134,7 +137,26 @@ function resolveRiskProfile(strategyId: string): RuntimeRiskProfile {
   };
 }
 
-async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h" | "4h", strategyId: string, name?: string) {
+
+function resolveHarnessMode(): HarnessMode {
+  const mode = (arg("mode", "signal") ?? "signal") as HarnessMode;
+  if (!(mode in MODE_POLICIES)) {
+    throw new Error(`Unsupported mode: ${mode}. Supported modes: ${Object.keys(MODE_POLICIES).join(", ")}`);
+  }
+  return mode;
+}
+
+function resolveDatasetPath(defaultPath: string): string {
+  const preset = arg("dataset-preset") as keyof typeof DATASET_PRESETS | undefined;
+  if (!preset) return defaultPath;
+  const entry = DATASET_PRESETS[preset];
+  if (!entry) {
+    throw new Error(`Unknown dataset preset: ${preset}. Available presets: ${Object.keys(DATASET_PRESETS).join(", ")}`);
+  }
+  return entry.datasetPath;
+}
+
+async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h" | "4h", strategyId: string, mode: HarnessMode, name?: string) {
   const entry = getStrategyById(strategyId);
   if (!entry) throw new Error(`Unknown strategy id: ${strategyId}`);
 
@@ -143,10 +165,13 @@ async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h
   const candles = recentCandles > 0 ? loadedCandles.slice(-recentCandles) : loadedCandles;
   const engine = new BacktestEngine(entry.create());
   const riskProfile = resolveRiskProfile(strategyId);
+  const modePolicy = MODE_POLICIES[mode];
   const config: BacktestConfig = {
     name: name ?? `${strategyId}-${Date.now()}`,
     symbol,
     timeframe,
+    mode,
+    modePolicy: MODE_POLICIES[mode],
     initialBalance: Number(arg("equity-start", process.env.EQUITY_START ?? "10000")),
     riskPercent: 1,
     riskMode: riskProfile.riskMode,
@@ -162,16 +187,16 @@ async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h
   };
 
   const output = await engine.run(candles, config);
-  const outPath = await persistResult(config.name, output, { runMode: "single", strategy: entry });
+  const outPath = await persistResult(config.name, output, { runMode: "single", strategy: entry, harnessMode: mode, modePolicy });
   return { entry, output, outPath };
 }
 
-async function runAll(dataset: string, symbol: string, timeframe: "15m" | "1h" | "4h", namePrefix: string) {
+async function runAll(dataset: string, symbol: string, timeframe: "15m" | "1h" | "4h", mode: HarnessMode, namePrefix: string) {
   const rows: ComparisonRow[] = [];
   const files: string[] = [];
 
-  for (const entry of STRATEGY_REGISTRY) {
-    const run = await runSingle(dataset, symbol, timeframe, entry.id, `${namePrefix}-${entry.id}`);
+  for (const entry of getProductionStrategies()) {
+    const run = await runSingle(dataset, symbol, timeframe, entry.id, mode, `${namePrefix}-${entry.id}`);
     files.push(run.outPath);
     rows.push({
       strategyId: entry.id,
@@ -200,7 +225,9 @@ async function runAll(dataset: string, symbol: string, timeframe: "15m" | "1h" |
     dataset,
     symbol,
     timeframe,
-    strategies: STRATEGY_REGISTRY.map(({ create: _c, ...rest }) => rest),
+    mode,
+    modePolicy: MODE_POLICIES[mode],
+    strategies: getProductionStrategies().map(({ create: _c, ...rest }) => rest),
     rows,
     rankings,
     files
@@ -216,20 +243,33 @@ async function runAll(dataset: string, symbol: string, timeframe: "15m" | "1h" |
 }
 
 async function main() {
-  const dataset = arg("dataset", process.env.DEFAULT_DATASET_PATH ?? "data/ETHUSDT_15m.csv")!;
-  const symbol = arg("symbol", "ETHUSDT")!;
-  const timeframe = (arg("timeframe", "15m") ?? "15m") as "15m" | "1h" | "4h";
-  const strategyId = arg("strategy", ACTIVE_PRODUCTION_STRATEGY_IDS[0] ?? getProductionStrategies()[0]?.id ?? STRATEGY_REGISTRY[0].id)!;
+  const mode = resolveHarnessMode();
+  const preset = arg("dataset-preset") as keyof typeof DATASET_PRESETS | undefined;
+  const presetEntry = preset ? DATASET_PRESETS[preset] : undefined;
+  const dataset = resolveDatasetPath(arg("dataset", process.env.DEFAULT_DATASET_PATH ?? "data/ETHUSDT_15m.csv")!);
+  const symbol = arg("symbol", presetEntry?.symbol ?? "ETHUSDT")!;
+  const timeframe = (arg("timeframe", presetEntry?.timeframe ?? "15m") ?? "15m") as "15m" | "1h" | "4h";
+  const strategyId = arg("strategy", DEFAULT_BREAKOUT_HARNESS_STRATEGY_ID ?? ACTIVE_PRODUCTION_STRATEGY_IDS[0] ?? getProductionStrategies()[0]?.id ?? STRATEGY_REGISTRY[0].id)!;
   const name = arg("name", `backtest-${Date.now()}`)!;
 
+  if (!BREAKOUT_STRATEGY_IDS.has(strategyId) && !hasFlag("all-strategies")) {
+    throw new Error(`Only breakout strategies are supported in this harness phase. Received: ${strategyId}`);
+  }
+
+  try {
+    await fs.access(dataset);
+  } catch {
+    throw new Error(`Dataset not found at ${dataset}. Use --dataset to override or place the canonical 2-year file at data/validation/breakout/ETHUSDT_15m_2y_validation.csv`);
+  }
+
   if (hasFlag("all-strategies")) {
-    const out = await runAll(dataset, symbol, timeframe, name);
-    console.log(JSON.stringify({ mode: "all", summaryPath: out.summaryPath, topPF: out.summary.rankings.byProfitFactor[0] }, null, 2));
+    const out = await runAll(dataset, symbol, timeframe, mode, name);
+    console.log(JSON.stringify({ mode: "all", harnessMode: mode, summaryPath: out.summaryPath, topPF: out.summary.rankings.byProfitFactor[0] }, null, 2));
     return;
   }
 
-  const run = await runSingle(dataset, symbol, timeframe, strategyId, name);
-  console.log(JSON.stringify({ mode: "single", strategyId: run.entry.id, outPath: run.outPath, summary: run.output.result.summary }, null, 2));
+  const run = await runSingle(dataset, symbol, timeframe, strategyId, mode, name);
+  console.log(JSON.stringify({ mode: "single", harnessMode: mode, strategyId: run.entry.id, outPath: run.outPath, summary: run.output.result.summary }, null, 2));
 }
 
 main().catch((error) => {
