@@ -16,6 +16,7 @@ export type BacktestConfig = {
   allowCompounding: boolean;
   warmupCandles: number;
   minScore?: number;
+  oneTradeAtTime?: boolean;
 };
 
 export type TradeOutcomeType = "stop" | "tp1_only" | "tp2" | "partial_then_stop" | "time_exit";
@@ -49,6 +50,19 @@ export type OpenTrade = {
   mae: number;
   hadPartialExit: boolean;
   entryAtr?: number;
+  shadowComparison?: {
+    loserStrategyId: string;
+    loserPlan: {
+      side: SignalSide;
+      entry: number;
+      stop: number;
+      tp1: number;
+      tp2: number;
+    };
+    arbitrationReason: string;
+    winnerQuality: number | null;
+    loserQuality: number | null;
+  };
   earlyExitPolicy?: {
     enabled: boolean;
     evaluationBars: number;
@@ -135,6 +149,8 @@ export type BacktestSummary = {
   avgLoser: number;
   avgPositionSize: number;
   avgPositionNotional: number;
+  avgHoldCandles: number;
+  avgHoldMs: number;
   tp1Percent: number;
   tp2Percent: number;
   stopPercent: number;
@@ -142,6 +158,28 @@ export type BacktestSummary = {
   strategyId?: string;
   profileType?: StrategyProfileType;
   moduleFamily?: string;
+};
+
+export type ArbitrationEvent = {
+  timestamp: number;
+  breakoutStrategyId: string;
+  swingStrategyId: string;
+  selectedStrategyId: string | null;
+  rejectedStrategyId: string | null;
+  reason: string;
+  breakoutQuality: number | null;
+  swingQuality: number | null;
+};
+
+export type ArbitrationDiagnostics = {
+  overlapConflictCount: number;
+  breakoutSelectedCount: number;
+  swingSelectedCount: number;
+  nullWhenBothPresentCount: number;
+  regretCount: number;
+  avgRegretMagnitude: number;
+  shadowComparisons: number;
+  events: ArbitrationEvent[];
 };
 
 export type BacktestResult = {
@@ -157,6 +195,7 @@ export type BacktestResult = {
     moduleFamily?: string;
   };
   funnel: BacktestFunnel;
+  arbitrationDiagnostics?: ArbitrationDiagnostics;
 };
 
 export type BacktestAnalyticsGroup = {

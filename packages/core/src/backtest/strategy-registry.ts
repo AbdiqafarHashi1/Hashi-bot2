@@ -5,9 +5,10 @@ import { CompressionBreakoutRetestStrategy, type BreakoutProfileConfig, BREAKOUT
 import { TrendPullbackContinuationStrategy, type TrendProfileConfig, TREND_MODULE_FAMILY } from "./strategies/trend-pullback-continuation";
 import { SwingContinuationStrategy, type SwingProfileConfig, SWING_MODULE_FAMILY } from "./strategies/swing-continuation";
 import { MeanReversionSnapbackStrategy, type MeanReversionProfileConfig, MEAN_REVERSION_MODULE_FAMILY } from "./strategies/mean-reversion-snapback";
+import { CombinedBreakoutSwingArbitratedStrategy } from "./strategies/combined-breakout-swing-arbitrated";
 
 export type StrategyRegistryEntry = {
-  id: "trend_pullback_strict" | "trend_pullback_balanced" | "swing_continuation_strict" | "swing_continuation_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced";
+  id: "trend_pullback_strict" | "trend_pullback_balanced" | "swing_continuation_strict" | "swing_continuation_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced" | "combined_breakout_swing_arbitrated";
   label: string;
   moduleFamily: string;
   profileType: StrategyProfileType;
@@ -23,8 +24,72 @@ const trend = (cfg: TrendProfileConfig) => () => new TrendPullbackContinuationSt
 const breakout = (cfg: BreakoutProfileConfig) => () => new CompressionBreakoutRetestStrategy(cfg);
 const swing = (cfg: SwingProfileConfig) => () => new SwingContinuationStrategy(cfg);
 const meanReversion = (cfg: MeanReversionProfileConfig) => () => new MeanReversionSnapbackStrategy(cfg);
+const combinedBreakoutSwing = () =>
+  new CombinedBreakoutSwingArbitratedStrategy(
+    new CompressionBreakoutRetestStrategy({
+      strategyId: "compression_breakout_balanced",
+      profileType: "balanced",
+      maxCompression: 0.024,
+      maxContraction: 0.82,
+      minBreakoutStrength: 0.5,
+      minBreakoutCloseOffsetAtr: 0.15,
+      maxChaseDistanceAtr: 0.8,
+      minRoomToTargetR: 1.35
+    }),
+    new SwingContinuationStrategy({
+      strategyId: "swing_continuation_balanced",
+      profileType: "balanced",
+      minRegimeScore: 0.5,
+      minDirectionalAlignment: 0.4,
+      minImpulseLegAtr: 0.95,
+      minRetraceFraction: 0.16,
+      maxRetraceFraction: 0.78,
+      maxStructureBreakAtr: 0.38,
+      maxPullbackOverlapHard: 0.86,
+      overlapPenaltyStart: 0.44,
+      minResumptionScore: 0.46,
+      minResumptionBodyRatio: 0.42,
+      minResumptionCloseOffsetAtr: 0.0,
+      minResumptionImpulseAtr: 0.62,
+      minCloseLocationRatio: 0.58,
+      maxLateEntryAtr: 0.32,
+      maxExtensionFromEma20Atr: 0.9,
+      minRoomToTargetR: 2.0,
+      minStopDistanceAtr: 0.4,
+      maxStopDistanceAtr: 2.7,
+      stopPadAtr: 0.18,
+      tp1RMultiple: 1.2,
+      tp2RMultiple: 3.8,
+      strongContinuationThreshold: 0.68,
+      weakContinuationThreshold: 0.4,
+      strongTp2Multiplier: 1.38,
+      weakTp2Multiplier: 0.82,
+      strongTp1Multiplier: 0.88,
+      weakTp1Multiplier: 1.12,
+      strongStopPadMultiplier: 1.06,
+      weakStopPadMultiplier: 0.92,
+      earlyExitEnabled: true,
+      earlyExitEvaluationBars: 6,
+      earlyExitMinProgressAtr: 0.26,
+      earlyExitMaxAdverseAtr: 0.92,
+      earlyExitMinContinuationQuality: 0.3,
+      earlyExitStrongBypassThreshold: 0.74
+    })
+  );
 
 export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
+  {
+    id: "combined_breakout_swing_arbitrated",
+    label: "Combined Breakout + Swing (Arbitrated)",
+    moduleFamily: "COMBINED_ARBITRATED",
+    profileType: "balanced",
+    description: "Runs breakout and swing together and executes only the arbitration winner.",
+    regimeIntent: ["TREND_ORDERLY", "TREND_STRETCHED", "COMPRESSION_READY", "NEUTRAL"],
+    productionEligible: false,
+    experimental: true,
+    minScore: 58,
+    create: combinedBreakoutSwing
+  },
   {
     id: "trend_pullback_strict",
     label: "Trend Pullback (Strict)",

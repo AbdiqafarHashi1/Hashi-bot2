@@ -25,6 +25,7 @@ async function persistResult(name: string, output: BacktestRunOutput, meta: Reco
     summary: output.result.summary,
     funnel: output.result.funnel,
     strategyContext: output.result.strategyContext,
+    arbitrationDiagnostics: output.result.arbitrationDiagnostics,
     trades: output.result.trades,
     analytics: output.analytics,
     equityCurve: output.result.equityCurve,
@@ -137,7 +138,9 @@ async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h
   const entry = getStrategyById(strategyId);
   if (!entry) throw new Error(`Unknown strategy id: ${strategyId}`);
 
-  const candles = await loadCandlesFromCsv({ filePath: dataset });
+  const loadedCandles = await loadCandlesFromCsv({ filePath: dataset });
+  const recentCandles = Number(arg("recent-candles", "0"));
+  const candles = recentCandles > 0 ? loadedCandles.slice(-recentCandles) : loadedCandles;
   const engine = new BacktestEngine(entry.create());
   const riskProfile = resolveRiskProfile(strategyId);
   const config: BacktestConfig = {
@@ -154,6 +157,7 @@ async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h
     maxPositionNotional: riskProfile.maxPositionNotional,
     allowCompounding: false,
     warmupCandles: 50,
+    oneTradeAtTime: strategyId === "combined_breakout_swing_arbitrated",
     minScore: entry.minScore
   };
 

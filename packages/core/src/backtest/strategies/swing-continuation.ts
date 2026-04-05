@@ -2,7 +2,14 @@ import type { MarketContext, RegimeClass } from "../../domains";
 import { atr, closes, directionalSlope, emaSeries } from "../../indicators";
 import { classifyRegime } from "../../regime-engine";
 import type { StrategyContract } from "../../strategy-contract";
-import type { CandidateScore, CandidateValidationResult, StrategyCandidate, StrategyProfileType, TradePlan } from "../../strategy-types";
+import type {
+  CandidateScore,
+  CandidateValidationResult,
+  StrategyCandidate,
+  StrategyExecutionCandidate,
+  StrategyProfileType,
+  TradePlan
+} from "../../strategy-types";
 
 export const SWING_MODULE_FAMILY = "SWING_CONTINUATION_PULLBACK";
 
@@ -179,6 +186,31 @@ export class SwingContinuationStrategy implements StrategyContract {
         : 1);
     const tp1 = side === "LONG" ? entry + stopDistance * tp1Multiple : entry - stopDistance * tp1Multiple;
     const tp2 = side === "LONG" ? entry + stopDistance * tp2Multiple : entry - stopDistance * tp2Multiple;
+    const executionCandidate: StrategyExecutionCandidate = {
+      strategyId: this.profile.strategyId,
+      side: side === "LONG" ? "long" : "short",
+      entryPrice: entry,
+      stopPrice: stop,
+      riskDistance: Math.abs(entry - stop),
+      score: Math.max(0, Math.min(100, resumptionScore * 100)),
+      timestamp: last.closeTime,
+      barIndex: exec.length - 1,
+      metadata: {
+        profileType: this.profile.profileType,
+        regime,
+        retraceFraction: pullback.retraceFraction,
+        pullbackOverlapRatio: pullback.overlapRatio,
+        extensionFromEma20Atr,
+        roomToTargetR,
+        regimeScore: regimeContext.regimeScore,
+        directionalAlignment: regimeContext.directionalAlignment,
+        trendContinuity: regimeContext.trendContinuity,
+        resumptionStrength,
+        resumptionImpulseAtr,
+        resumptionScore,
+        continuationStrength
+      }
+    };
 
     return [{
       strategyId: this.profile.strategyId,
@@ -189,6 +221,7 @@ export class SwingContinuationStrategy implements StrategyContract {
       timeframe: marketContext.executionTimeframe,
       side,
       rationale: ["Regime-weighted continuation context", "Single-leg pullback with retrace-quality checks", "Resumption confirms continuation without breakout-style hard choke"],
+      executionCandidate,
       metadata: {
         regime,
         entry,

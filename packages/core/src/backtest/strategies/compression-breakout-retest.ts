@@ -2,7 +2,14 @@ import type { MarketContext, RegimeClass } from "../../domains";
 import { atr, compressionMetric, rangeWidthContraction } from "../../indicators";
 import { classifyRegime } from "../../regime-engine";
 import type { StrategyContract } from "../../strategy-contract";
-import type { CandidateScore, CandidateValidationResult, StrategyCandidate, StrategyProfileType, TradePlan } from "../../strategy-types";
+import type {
+  CandidateScore,
+  CandidateValidationResult,
+  StrategyCandidate,
+  StrategyExecutionCandidate,
+  StrategyProfileType,
+  TradePlan
+} from "../../strategy-types";
 
 export const BREAKOUT_MODULE_FAMILY = "COMPRESSION_BREAKOUT_RETEST";
 
@@ -82,6 +89,26 @@ export class CompressionBreakoutRetestStrategy implements StrategyContract {
 
     const tp1 = side === "LONG" ? entry + stopDistance * 1.0 : entry - stopDistance * 1.0;
     const tp2 = side === "LONG" ? entry + stopDistance * 2.0 : entry - stopDistance * 2.0;
+    const executionCandidate: StrategyExecutionCandidate = {
+      strategyId: this.profile.strategyId,
+      side: side === "LONG" ? "long" : "short",
+      entryPrice: entry,
+      stopPrice: stop,
+      riskDistance: Math.abs(entry - stop),
+      score: Math.max(0, Math.min(100, breakoutStrength * 100)),
+      timestamp: breakoutCandle.closeTime,
+      barIndex: candles.length - 1,
+      metadata: {
+        profileType: this.profile.profileType,
+        breakoutLevel,
+        compression,
+        contraction,
+        breakoutStrength,
+        chaseDistanceAtr,
+        roomToTargetR,
+        entryMode: isRetest ? "retest" : "continuation"
+      }
+    };
 
     return [{
       strategyId: this.profile.strategyId,
@@ -92,6 +119,7 @@ export class CompressionBreakoutRetestStrategy implements StrategyContract {
       timeframe: marketContext.executionTimeframe,
       side,
       rationale: ["Compression/contraction passed", "Breakout quality passed", isRetest ? "Retest entry" : "Continuation entry", "Anti-chase and room checks passed"],
+      executionCandidate,
       metadata: {
         regime, entry, stop, tp1, tp2, breakoutLevel,
         compressionQuality: Math.max(0, 1 - compression * 50),
