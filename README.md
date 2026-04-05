@@ -84,6 +84,21 @@ Run a single backtest with explicit params:
 pnpm backtest --dataset data/ETHUSDT_15m_sample.csv --symbol ETHUSDT --timeframe 15m --name sample-run
 ```
 
+
+### 2-year breakout validation harness
+
+Use the preset dataset path scaffold and explicit operating mode:
+
+```bash
+pnpm backtest --dataset-preset breakout_2y_15m_validation --mode signal --strategy compression_breakout_balanced --name breakout-2y-signal
+pnpm backtest --dataset-preset breakout_2y_15m_validation --mode personal --strategy compression_breakout_balanced --name breakout-2y-personal
+pnpm backtest --dataset-preset breakout_2y_15m_validation --mode prop --strategy compression_breakout_balanced --name breakout-2y-prop
+```
+
+Dataset scaffold location:
+
+- `data/validation/breakout/ETHUSDT_15m_2y_validation.csv`
+
 Worker hook:
 
 ```bash
