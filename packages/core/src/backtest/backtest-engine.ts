@@ -1,5 +1,5 @@
 import { classifyRegime, type StrategyContract, type StrategyCandidate, type TradePlan } from "..";
-import type { Candle } from "../domains";
+import type { Candle, MarketType } from "../domains";
 import { buildAnalytics } from "./analytics";
 import { processTradeOnCandle } from "./trade-lifecycle";
 import { atr } from "../indicators";
@@ -275,6 +275,7 @@ function updateAggregation(target: Candle[], state: AggregationState, candle: Ca
 
 function buildMarketContextFromBuffers(
   symbol: string,
+  marketType: MarketType,
   executionTimeframe: Timeframe,
   primarySource: MarketContext["source"]["primary"],
   backupSource: MarketContext["source"]["backup"],
@@ -289,6 +290,7 @@ function buildMarketContextFromBuffers(
   const c4h = candles4h.length > lookbackBars ? candles4h.slice(-lookbackBars) : candles4h;
   return {
     symbol,
+    marketType,
     executionTimeframe,
     htf1: "1h",
     htf2: "4h",
@@ -430,6 +432,7 @@ export class BacktestEngine {
               regime: classifyRegime(
                 buildMarketContextFromBuffers(
                   config.symbol,
+                  "crypto",
                   config.timeframe,
                   candle.source,
                   candle.source,
@@ -499,6 +502,7 @@ export class BacktestEngine {
 
       const marketContext = buildMarketContextFromBuffers(
         config.symbol,
+        "crypto",
         config.timeframe,
         candle.source,
         candle.source,

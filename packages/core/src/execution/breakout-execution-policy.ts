@@ -1,4 +1,4 @@
-import type { SignalSide, Symbol, Timeframe } from "../domains";
+import type { MarketType, SignalSide, Symbol, Timeframe } from "../domains";
 
 export type ExecutionMode = "signal_only" | "live_personal" | "live_prop";
 export type SetupGrade = "A+" | "A" | "B";
@@ -6,6 +6,7 @@ export type SetupGrade = "A+" | "A" | "B";
 export type BreakoutSignal = {
   strategyId: string;
   symbol: Symbol;
+  marketType: MarketType;
   timeframe: Timeframe;
   side: Exclude<SignalSide, "NONE">;
   entryPrice: number;
@@ -91,6 +92,8 @@ export type ExecutionIntentInput = {
   signal: BreakoutSignal;
   accountEquityUsd: number;
   currentOpenRiskPct?: number;
+  riskPercentOverride?: number;
+  maxSimultaneousOpenRiskPctOverride?: number;
   governanceLocks?: GovernanceLocks;
 };
 
@@ -158,15 +161,17 @@ export function buildExecutionIntent(input: ExecutionIntentInput): ExecutionInte
       ? defaults.leverageAPlusRange
       : defaults.leverageNormalRange;
 
-  const riskPercent = input.signal.setupGrade === "A+"
+  const baselineRiskPercent = input.signal.setupGrade === "A+"
     ? defaults.riskPerTradeAPlusPct
     : defaults.riskPerTradeBasePct;
+  const riskPercent = input.riskPercentOverride ?? baselineRiskPercent;
 
   const effectiveLeverage = clamp(toMidpoint(leverageRange), 1, defaults.leverageHardCap);
   const lockState: GovernanceLocks = input.governanceLocks ?? {};
 
   let blockedReason: string | null = null;
-  if ((input.currentOpenRiskPct ?? 0) >= defaults.maxSimultaneousOpenRiskPct) blockedReason = "max_open_risk_exceeded";
+  const maxSimultaneousOpenRiskPct = input.maxSimultaneousOpenRiskPctOverride ?? defaults.maxSimultaneousOpenRiskPct;
+  if ((input.currentOpenRiskPct ?? 0) >= maxSimultaneousOpenRiskPct) blockedReason = "max_open_risk_exceeded";
   if (!blockedReason && input.mode === "live_prop" && lockState.dailyLossLockActive) blockedReason = "daily_loss_lock_active";
   if (!blockedReason && input.mode === "live_prop" && lockState.trailingDrawdownLockActive) blockedReason = "trailing_drawdown_lock_active";
   if (!blockedReason && input.mode === "live_prop" && lockState.maxConsecutiveLossLockActive) blockedReason = "max_consecutive_loss_lock_active";
@@ -193,7 +198,7 @@ export function buildExecutionIntent(input: ExecutionIntentInput): ExecutionInte
       : null,
     signal: input.signal,
     governance: {
-      maxSimultaneousOpenRiskPct: defaults.maxSimultaneousOpenRiskPct,
+      maxSimultaneousOpenRiskPct,
       hooks: {
         dailyLossLock: input.mode === "live_prop",
         trailingDrawdownLock: input.mode === "live_prop",
