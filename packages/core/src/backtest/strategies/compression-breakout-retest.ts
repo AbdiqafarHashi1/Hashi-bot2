@@ -36,6 +36,7 @@ type BreakoutMetadata = {
   chaseDistanceAtr: number;
   roomToTargetR: number;
   entryMode: "retest" | "continuation";
+  setupGrade: "A+" | "A" | "B";
 };
 
 export class CompressionBreakoutRetestStrategy implements StrategyContract {
@@ -106,7 +107,8 @@ export class CompressionBreakoutRetestStrategy implements StrategyContract {
         breakoutStrength,
         chaseDistanceAtr,
         roomToTargetR,
-        entryMode: isRetest ? "retest" : "continuation"
+        entryMode: isRetest ? "retest" : "continuation",
+        setupGrade: this.resolveSetupGrade(breakoutStrength)
       }
     };
 
@@ -126,7 +128,8 @@ export class CompressionBreakoutRetestStrategy implements StrategyContract {
         breakoutStrength,
         chaseDistanceAtr,
         roomToTargetR,
-        entryMode: isRetest ? "retest" : "continuation"
+        entryMode: isRetest ? "retest" : "continuation",
+        setupGrade: this.resolveSetupGrade(breakoutStrength)
       } satisfies BreakoutMetadata
     }];
   }
@@ -169,5 +172,11 @@ export class CompressionBreakoutRetestStrategy implements StrategyContract {
       reasons: [...candidate.rationale, `breakout profile=${this.profile.profileType}`],
       source: "compression-breakout-module"
     };
+  }
+
+  private resolveSetupGrade(breakoutStrength: number): "A+" | "A" | "B" {
+    if (breakoutStrength >= 0.75) return "A+";
+    if (breakoutStrength >= 0.6) return "A";
+    return "B";
   }
 }

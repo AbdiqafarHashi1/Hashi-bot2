@@ -1,10 +1,15 @@
 import { Redis } from "ioredis";
 import { getConfig } from "@hashi/config";
 import {
+  ACTIVE_PRODUCTION_STRATEGY_IDS,
   BinanceSpotProvider,
   BybitSpotProvider,
+  LOCKED_CAPITAL_PROGRESSION_DEFAULTS,
+  LOCKED_MODE_GOVERNANCE_DEFAULTS,
   MarketContextLoader,
+  buildExecutionIntent,
   classifyRegime,
+  getProductionStrategies,
   type MarketDataProvider
 } from "@hashi/core";
 
@@ -63,6 +68,50 @@ async function bootstrap() {
         source: marketContext.source,
         latestPrice: marketContext.latestPrice,
         regime
+      },
+      null,
+      2
+    )
+  );
+
+  const productionStrategies = getProductionStrategies({
+    allowResearchStrategies: config.ENABLE_SWING_RESEARCH_MODE
+  });
+
+  const intentPreview = buildExecutionIntent({
+    mode: config.EXECUTION_MODE,
+    accountEquityUsd: config.EQUITY_START,
+    currentOpenRiskPct: 0,
+    signal: {
+      strategyId: config.ACTIVE_PRODUCTION_STRATEGY,
+      symbol: marketContext.symbol,
+      timeframe: marketContext.executionTimeframe,
+      side: "LONG",
+      entryPrice: marketContext.latestPrice,
+      stopPrice: marketContext.latestPrice * 0.99,
+      tp1: marketContext.latestPrice * 1.01,
+      tp2: marketContext.latestPrice * 1.02,
+      score: 70,
+      confidence: 0.7,
+      setupGrade: "A",
+      metadata: {
+        previewOnly: true
+      }
+    }
+  });
+
+  console.log(
+    JSON.stringify(
+      {
+        event: "production_strategy_wiring",
+        mode: config.EXECUTION_MODE,
+        activeProductionStrategyIds: ACTIVE_PRODUCTION_STRATEGY_IDS,
+        selectedActiveStrategy: config.ACTIVE_PRODUCTION_STRATEGY,
+        swingResearchModeEnabled: config.ENABLE_SWING_RESEARCH_MODE,
+        productionStrategies: productionStrategies.map((entry: { id: string }) => entry.id),
+        governanceDefaults: LOCKED_MODE_GOVERNANCE_DEFAULTS,
+        capitalProgressionDefaults: LOCKED_CAPITAL_PROGRESSION_DEFAULTS,
+        executionIntentPreview: intentPreview
       },
       null,
       2

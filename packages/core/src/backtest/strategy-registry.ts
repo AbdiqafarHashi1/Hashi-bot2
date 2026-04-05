@@ -20,6 +20,24 @@ export type StrategyRegistryEntry = {
   create: () => StrategyContract;
 };
 
+export type ProductionActivationState = "active" | "silenced" | "research_only";
+
+export const PRODUCTION_STRATEGY_ACTIVATION: Record<StrategyRegistryEntry["id"], ProductionActivationState> = {
+  combined_breakout_swing_arbitrated: "research_only",
+  trend_pullback_strict: "silenced",
+  trend_pullback_balanced: "silenced",
+  swing_continuation_strict: "silenced",
+  swing_continuation_balanced: "silenced",
+  compression_breakout_strict: "active",
+  compression_breakout_balanced: "active",
+  mean_reversion_strict: "silenced",
+  mean_reversion_balanced: "silenced"
+};
+
+export const ACTIVE_PRODUCTION_STRATEGY_IDS = (Object.entries(PRODUCTION_STRATEGY_ACTIVATION)
+  .filter(([, state]) => state === "active")
+  .map(([id]) => id)) as StrategyRegistryEntry["id"][];
+
 const trend = (cfg: TrendProfileConfig) => () => new TrendPullbackContinuationStrategy(cfg);
 const breakout = (cfg: BreakoutProfileConfig) => () => new CompressionBreakoutRetestStrategy(cfg);
 const swing = (cfg: SwingProfileConfig) => () => new SwingContinuationStrategy(cfg);
@@ -321,3 +339,13 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
 export const STRATEGY_REGISTRY_BY_ID: Map<string, StrategyRegistryEntry> = new Map(STRATEGY_REGISTRY.map((entry) => [entry.id, entry]));
 
 export const getStrategyById = (id: string) => STRATEGY_REGISTRY_BY_ID.get(id);
+
+export function getProductionStrategies(options?: { allowResearchStrategies?: boolean }) {
+  const allowResearchStrategies = options?.allowResearchStrategies ?? false;
+  return STRATEGY_REGISTRY.filter((entry) => {
+    const state = PRODUCTION_STRATEGY_ACTIVATION[entry.id];
+    if (state === "active") return true;
+    if (state === "research_only") return allowResearchStrategies;
+    return false;
+  });
+}
