@@ -104,8 +104,10 @@ export function selectWinner(
     };
   }
 
-  const breakoutQuality = normalizedQuality(breakout, epsilon);
-  const swingQuality = normalizedQuality(swing, epsilon);
+  const breakoutResolved = breakout as StrategyExecutionCandidate;
+  const swingResolved = swing as StrategyExecutionCandidate;
+  const breakoutQuality = normalizedQuality(breakoutResolved, epsilon);
+  const swingQuality = normalizedQuality(swingResolved, epsilon);
 
   if (breakoutQuality < qualityFloor && swingQuality < qualityFloor) {
     return {
