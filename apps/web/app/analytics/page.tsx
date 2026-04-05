@@ -21,11 +21,13 @@ export default function Page() {
   }, []);
 
   return (
-    <section className="space-y-4">
-      <h1 className="text-3xl font-bold">Analytics</h1>
-      <p className="text-slate-300">Regime + score analytics from latest backtest run.</p>
+    <section className="space-y-5">
+      <header>
+        <h1 className="text-3xl font-bold">Analytics</h1>
+        <p className="mt-1 text-sm text-slate-400">Regime and score analytics from the latest backtest artifact.</p>
+      </header>
 
-      <div className="rounded border border-slate-800 bg-slate-900 p-4">
+      <div className="rounded border border-slate-800 bg-slate-900/70 p-4">
         <h2 className="mb-2 font-semibold">Regime Breakdown (PF)</h2>
         <ul className="space-y-1 text-sm text-slate-300">
           {(data?.analytics.byRegime ?? []).map((item) => (
@@ -36,7 +38,7 @@ export default function Page() {
         </ul>
       </div>
 
-      <div className="rounded border border-slate-800 bg-slate-900 p-4">
+      <div className="rounded border border-slate-800 bg-slate-900/70 p-4">
         <h2 className="mb-2 font-semibold">Score Distribution</h2>
         <ul className="space-y-1 text-sm text-slate-300">
           {(data?.analytics.byScoreBucket ?? []).map((item) => (

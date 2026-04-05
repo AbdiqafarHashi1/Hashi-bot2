@@ -88,7 +88,9 @@ const envSchema = z.object({
   MT5_DEMO_SERVER: z.string().optional(),
   MT5_DEMO_BROKER: z.string().optional(),
   MT5_DEMO_TERMINAL_ID: z.string().optional(),
-  MT5_DEMO_SYMBOL_MAP_JSON: jsonRecordSchema
+  MT5_DEMO_SYMBOL_MAP_JSON: jsonRecordSchema,
+  MT5_BRIDGE_BASE_URL: z.string().optional(),
+  MT5_BRIDGE_API_KEY: z.string().optional()
 });
 
 export type RuntimeConfig = z.infer<typeof envSchema>;

@@ -225,7 +225,7 @@ function createAggregationState(factor: number): AggregationState {
     low: Number.POSITIVE_INFINITY,
     close: 0,
     volume: 0,
-    source: "BINANCE"
+    source: "binance_spot"
   };
 }
 
