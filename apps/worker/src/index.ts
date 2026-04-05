@@ -13,6 +13,9 @@ import {
   LOCKED_CAPITAL_PROGRESSION_DEFAULTS,
   LOCKED_MODE_GOVERNANCE_DEFAULTS,
   MarketContextLoader,
+  MarketTypeAwareAnalysisLoader,
+  CryptoLiveKlineAdapter,
+  Mt5ForexLiveBarAdapter,
   classifyRegime,
   getProductionStrategies,
   type MarketDataProvider,
@@ -75,23 +78,60 @@ async function bootstrap() {
   const runtimeSymbols = buildRuntimeSymbols(config);
   const runtime = new BreakoutMultiSymbolRuntime(runtimeSymbols);
 
-  const loader = new MarketContextLoader(primary, backup);
+  const marketTypeLoader = new MarketTypeAwareAnalysisLoader({
+    crypto: new CryptoLiveKlineAdapter(primary, backup),
+    forex: new Mt5ForexLiveBarAdapter({
+      bridgeBaseUrl: config.MT5_BRIDGE_BASE_URL,
+      apiKey: config.MT5_BRIDGE_API_KEY
+    })
+  });
+
+  const [cryptoReadiness, forexReadiness] = await marketTypeLoader.readinessByMarketType({
+    cryptoSymbols: runtimeSymbols.filter((entry) => entry.marketType === "crypto").map((entry) => entry.symbol),
+    forexSymbols: runtimeSymbols.filter((entry) => entry.marketType === "forex").map((entry) => entry.symbol)
+  });
+
+  console.log(
+    JSON.stringify(
+      {
+        event: "live_analysis_readiness",
+        readiness: {
+          crypto: cryptoReadiness,
+          forex: forexReadiness
+        }
+      },
+      null,
+      2
+    )
+  );
+
   const cycleCandidates: Array<{
     symbolContext: SymbolMetadata;
-    marketContext: Awaited<ReturnType<MarketContextLoader["load"]>>;
+    marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
     regime: ReturnType<typeof classifyRegime>;
     candidateCount: number;
     signal: BreakoutSignal;
   }> = [];
+  const unavailableFeeds: Array<{ symbol: string; marketType: SymbolMetadata["marketType"]; reason: string }> = [];
   for (const symbolContext of runtimeSymbols) {
-    const marketContext = await loader.load({
-      symbol: symbolContext.symbol,
-      marketType: symbolContext.marketType,
-      executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
-      htf1: config.DEFAULT_HTF_1,
-      htf2: config.DEFAULT_HTF_2,
-      candleLimit: 200
-    });
+    let marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
+    try {
+      marketContext = await marketTypeLoader.loadContext({
+        symbol: symbolContext.symbol,
+        marketType: symbolContext.marketType,
+        executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
+        htf1: config.DEFAULT_HTF_1,
+        htf2: config.DEFAULT_HTF_2,
+        candleLimit: 200
+      });
+    } catch (error) {
+      unavailableFeeds.push({
+        symbol: symbolContext.symbol,
+        marketType: symbolContext.marketType,
+        reason: error instanceof Error ? error.message : "analysis_feed_unavailable"
+      });
+      continue;
+    }
 
     const regime = classifyRegime(marketContext);
     cycleCandidates.push({
@@ -233,6 +273,7 @@ async function bootstrap() {
           qualityScore: entry.qualityScore,
           weight: entry.weight
         })),
+        unavailableFeeds,
         perSymbolLifecycle: runtime.getSnapshot().map((state) => ({
           symbol: state.context.symbol,
           marketType: state.context.marketType,
@@ -290,7 +331,10 @@ async function bootstrap() {
   }
 
   const fallbackLoader = new MarketContextLoader(new ForcedFailureProvider(), backup);
-  const fallbackSymbol = runtimeSymbols[0] ?? { symbol: config.DEFAULT_SYMBOL, marketType: "crypto" as const };
+  const fallbackSymbol = runtimeSymbols.find((entry) => entry.marketType === "crypto") ?? {
+    symbol: config.DEFAULT_SYMBOL,
+    marketType: "crypto" as const
+  };
   const fallbackContext = await fallbackLoader.load({
     symbol: fallbackSymbol.symbol,
     marketType: fallbackSymbol.marketType,

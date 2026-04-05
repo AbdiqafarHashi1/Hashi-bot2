@@ -29,17 +29,19 @@ export default function Page() {
   }, []);
 
   return (
-    <section className="space-y-4">
-      <h1 className="text-3xl font-bold">Backtests</h1>
-      <p className="text-slate-300">Phase 3 backtest summary placeholder.</p>
+    <section className="space-y-5">
+      <header>
+        <h1 className="text-3xl font-bold">Backtests</h1>
+        <p className="mt-1 text-sm text-slate-400">Backtest artifact summary and recent trades from runtime output.</p>
+      </header>
 
       <div className="grid gap-3 md:grid-cols-3">
-        <div className="rounded border border-slate-800 bg-slate-900 p-4">Total trades: {data?.summary.totalTrades ?? 0}</div>
-        <div className="rounded border border-slate-800 bg-slate-900 p-4">Win rate: {((data?.summary.winRate ?? 0) * 100).toFixed(2)}%</div>
-        <div className="rounded border border-slate-800 bg-slate-900 p-4">PnL: {(data?.summary.totalPnL ?? 0).toFixed(2)}</div>
+        <div className="rounded border border-slate-800 bg-slate-900/70 p-4">Total trades: {data?.summary.totalTrades ?? 0}</div>
+        <div className="rounded border border-slate-800 bg-slate-900/70 p-4">Win rate: {((data?.summary.winRate ?? 0) * 100).toFixed(2)}%</div>
+        <div className="rounded border border-slate-800 bg-slate-900/70 p-4">PnL: {(data?.summary.totalPnL ?? 0).toFixed(2)}</div>
       </div>
 
-      <div className="rounded border border-slate-800 bg-slate-900 p-4">
+      <div className="rounded border border-slate-800 bg-slate-900/70 p-4">
         <h2 className="mb-2 text-lg font-semibold">Trades</h2>
         <table className="w-full text-left text-sm">
           <thead>

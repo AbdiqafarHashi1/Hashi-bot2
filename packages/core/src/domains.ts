@@ -8,7 +8,7 @@ export type SymbolMetadata = {
   marketType: MarketType;
 };
 
-export type MarketDataSource = "binance_spot" | "bybit_spot";
+export type MarketDataSource = "binance_spot" | "bybit_spot" | "mt5_bridge";
 
 export type RegimeClass =
   | "TREND_ORDERLY"

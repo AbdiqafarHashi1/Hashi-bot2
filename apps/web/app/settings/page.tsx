@@ -33,11 +33,13 @@ export default function SettingsPage() {
   const engine = data?.generalSettings?.engine;
 
   return (
-    <section className="space-y-4">
-      <h1 className="text-3xl font-bold">Settings</h1>
-      <p className="text-slate-300">DB-backed settings placeholder.</p>
+    <section className="space-y-5">
+      <header>
+        <h1 className="text-3xl font-bold">Settings</h1>
+        <p className="mt-1 text-sm text-slate-400">DB-backed engine configuration and persisted settings snapshot.</p>
+      </header>
 
-      <div className="rounded border border-slate-800 bg-slate-900 p-4">
+      <div className="rounded border border-slate-800 bg-slate-900/70 p-4">
         <h2 className="mb-3 text-lg font-semibold">Engine Configuration</h2>
         <ul className="space-y-1 text-sm text-slate-300">
           <li>Primary provider: {engine?.primaryLiveProvider ?? "-"}</li>
@@ -49,7 +51,7 @@ export default function SettingsPage() {
         </ul>
       </div>
 
-      <pre className="overflow-auto rounded border border-slate-800 bg-slate-900 p-4 text-xs">
+      <pre className="overflow-auto rounded border border-slate-800 bg-slate-900/70 p-4 text-xs">
         {JSON.stringify(data, null, 2)}
       </pre>
     </section>
