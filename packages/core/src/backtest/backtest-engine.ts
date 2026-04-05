@@ -4,6 +4,7 @@ import { buildHistoricalMarketContext } from "./historical-market-loader";
 import { buildAnalytics } from "./analytics";
 import { processTradeOnCandle } from "./trade-lifecycle";
 import type {
+  ArbitrationDiagnostics,
   BacktestAnalytics,
   BacktestConfig,
   BacktestFunnel,
@@ -37,6 +38,14 @@ type SizingInputs = {
   sizeModMax?: number;
   maxPositionNotional?: number;
   regime: ReturnType<typeof classifyRegime>;
+};
+
+type ShadowPlan = {
+  side: "LONG" | "SHORT" | "NONE";
+  entry: number;
+  stop: number;
+  tp1: number;
+  tp2: number;
 };
 
 function computeBreakoutSizeModifier({ regime, confidence, sizeModMin = 0.7, sizeModMax = 1.2 }: Pick<SizingInputs, "regime" | "confidence" | "sizeModMin" | "sizeModMax">): number {
@@ -108,6 +117,9 @@ export class BacktestEngine {
 
     let equity = config.initialBalance;
     let tradeCounter = 0;
+    let regretCount = 0;
+    let regretMagnitudeSum = 0;
+    let shadowComparisons = 0;
 
     for (let i = config.warmupCandles; i < candles.length; i += 1) {
       const candle = candles[i];
@@ -115,10 +127,25 @@ export class BacktestEngine {
       for (let t = openTrades.length - 1; t >= 0; t -= 1) {
         const state = processTradeOnCandle(openTrades[t], candle, i);
         if (state.closed) {
+          if (openTrades[t].shadowComparison) {
+            const shadowPnl = simulatePlanPnl(candles, openTrades[t].openedAtIndex, openTrades[t].shadowComparison.loserPlan, openTrades[t].quantity);
+            if (shadowPnl !== null) {
+              shadowComparisons += 1;
+              if (shadowPnl > state.closed.pnl) {
+                regretCount += 1;
+                regretMagnitudeSum += shadowPnl - state.closed.pnl;
+              }
+            }
+          }
           equity += state.closed.pnl;
           closedTrades.push(state.closed);
           openTrades.splice(t, 1);
         }
+      }
+
+      if (config.oneTradeAtTime && openTrades.length > 0) {
+        equityCurve.push({ timestamp: candle.openTime, equity });
+        continue;
       }
 
       const marketContext = buildHistoricalMarketContext(candles, i, config.timeframe, "1h", "4h", candle.source, candle.source);
@@ -242,6 +269,7 @@ export class BacktestEngine {
         mae: 0,
         hadPartialExit: false,
         entryAtr: plan.entryAtr,
+        shadowComparison: plan.shadowComparison,
         earlyExitPolicy: plan.earlyExitPolicy
       });
 
@@ -287,6 +315,8 @@ export class BacktestEngine {
         avgLoser: closedTrades.filter((t) => t.pnl < 0).reduce((s, t) => s + t.pnl, 0) / Math.max(losses, 1),
         avgPositionSize: closedTrades.reduce((sum, t) => sum + t.quantity, 0) / Math.max(closedTrades.length, 1),
         avgPositionNotional: closedTrades.reduce((sum, t) => sum + Math.abs(t.quantity * t.entry), 0) / Math.max(closedTrades.length, 1),
+        avgHoldCandles: closedTrades.reduce((sum, t) => sum + t.durationCandles, 0) / Math.max(closedTrades.length, 1),
+        avgHoldMs: closedTrades.reduce((sum, t) => sum + t.durationMs, 0) / Math.max(closedTrades.length, 1),
         tp1Percent: closedTrades.filter((t) => t.outcomeType === "tp1_only").length / Math.max(closedTrades.length, 1),
         tp2Percent: closedTrades.filter((t) => t.outcomeType === "tp2").length / Math.max(closedTrades.length, 1),
         stopPercent: closedTrades.filter((t) => t.outcomeType === "stop" || t.outcomeType === "partial_then_stop").length / Math.max(closedTrades.length, 1),
@@ -304,9 +334,78 @@ export class BacktestEngine {
         profileType: closedTrades[0]?.profileType,
         moduleFamily: closedTrades[0]?.moduleFamily
       },
-      funnel
+      funnel,
+      arbitrationDiagnostics: this.buildArbitrationDiagnostics(regretCount, regretMagnitudeSum, shadowComparisons)
     };
 
     return { result, analytics: buildAnalytics(closedTrades) };
   }
+
+  private buildArbitrationDiagnostics(
+    regretCount: number,
+    regretMagnitudeSum: number,
+    shadowComparisons: number
+  ): ArbitrationDiagnostics | undefined {
+    const strategyWithDiagnostics = this.strategy as StrategyContract & {
+      getDiagnostics?: () => {
+        overlapConflictCount: number;
+        breakoutSelectedCount: number;
+        swingSelectedCount: number;
+        nullWhenBothPresentCount: number;
+        events: ArbitrationDiagnostics["events"];
+      };
+    };
+    const diagnostics = strategyWithDiagnostics.getDiagnostics?.();
+    if (!diagnostics) return undefined;
+    return {
+      overlapConflictCount: diagnostics.overlapConflictCount,
+      breakoutSelectedCount: diagnostics.breakoutSelectedCount,
+      swingSelectedCount: diagnostics.swingSelectedCount,
+      nullWhenBothPresentCount: diagnostics.nullWhenBothPresentCount,
+      regretCount,
+      avgRegretMagnitude: regretCount > 0 ? regretMagnitudeSum / regretCount : 0,
+      shadowComparisons,
+      events: diagnostics.events
+    };
+  }
 }
+
+function simulatePlanPnl(
+  candles: Candle[],
+  startIndex: number,
+  plan: ShadowPlan,
+  quantity: number
+): number | null {
+  if (plan.side === "NONE") return null;
+  let realized = 0;
+  let remainingQty = quantity;
+  let partial = false;
+
+  for (let i = startIndex; i < candles.length; i += 1) {
+    const candle = candles[i];
+    const stopHit = plan.side === "LONG" ? candle.low <= plan.stop : candle.high >= plan.stop;
+    const tp1Hit = plan.side === "LONG" ? candle.high >= plan.tp1 : candle.low <= plan.tp1;
+    const tp2Hit = plan.side === "LONG" ? candle.high >= plan.tp2 : candle.low <= plan.tp2;
+
+    if (!partial) {
+      if (stopHit) return realized + pnlFor(plan.side, plan.entry, plan.stop, remainingQty);
+      if (tp1Hit) {
+        const qtyToClose = quantity * 0.5;
+        realized += pnlFor(plan.side, plan.entry, plan.tp1, qtyToClose);
+        remainingQty -= qtyToClose;
+        partial = true;
+        if (tp2Hit) return realized + pnlFor(plan.side, plan.entry, plan.tp2, remainingQty);
+      }
+    } else {
+      if (stopHit) return realized + pnlFor(plan.side, plan.entry, plan.stop, remainingQty);
+      if (tp2Hit) return realized + pnlFor(plan.side, plan.entry, plan.tp2, remainingQty);
+    }
+  }
+
+  const lastClose = candles[candles.length - 1]?.close;
+  if (!lastClose) return null;
+  return realized + pnlFor(plan.side, plan.entry, lastClose, remainingQty);
+}
+
+const pnlFor = (side: "LONG" | "SHORT" | "NONE", entry: number, exit: number, qty: number) =>
+  side === "LONG" ? (exit - entry) * qty : (entry - exit) * qty;

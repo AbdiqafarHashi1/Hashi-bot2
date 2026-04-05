@@ -13,9 +13,11 @@ export * from "./backtest/historical-market-loader";
 export * from "./backtest/trade-lifecycle";
 export * from "./backtest/analytics";
 export * from "./backtest/backtest-engine";
+export * from "./backtest/candidate-arbitration";
 export * from "./backtest/mock-breakout-strategy";
 
 export * from "./backtest/strategies/trend-pullback-continuation";
 export * from "./backtest/strategies/compression-breakout-retest";
 export * from "./backtest/strategies/swing-continuation";
+export * from "./backtest/strategies/combined-breakout-swing-arbitrated";
 export * from "./backtest/strategy-registry";
