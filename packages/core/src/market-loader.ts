@@ -1,8 +1,9 @@
-import type { MarketContext, Symbol, Timeframe } from "./domains";
+import type { MarketContext, MarketType, Symbol, Timeframe } from "./domains";
 import type { MarketDataProvider } from "./provider";
 
 export type MarketLoaderInput = {
   symbol: Symbol;
+  marketType: MarketType;
   executionTimeframe: Timeframe;
   htf1: Timeframe;
   htf2: Timeframe;
@@ -38,6 +39,7 @@ export class MarketContextLoader {
 
     return {
       symbol: input.symbol,
+      marketType: input.marketType,
       executionTimeframe: input.executionTimeframe,
       htf1: input.htf1,
       htf2: input.htf2,

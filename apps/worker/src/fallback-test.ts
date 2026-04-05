@@ -43,6 +43,7 @@ async function run() {
   const loader = new MarketContextLoader(new FailPrimary(), new MockBackup());
   const result = await loader.load({
     symbol: "ETHUSDT",
+    marketType: "crypto",
     executionTimeframe: "15m",
     htf1: "1h",
     htf2: "4h",

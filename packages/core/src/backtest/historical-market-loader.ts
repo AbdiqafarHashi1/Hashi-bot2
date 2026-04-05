@@ -1,4 +1,4 @@
-import type { Candle, MarketContext, Timeframe } from "../domains";
+import type { Candle, MarketContext, MarketType, Timeframe } from "../domains";
 
 const factorByTimeframe: Record<Timeframe, number> = {
   "15m": 1,
@@ -32,6 +32,7 @@ function aggregateCandles(candles: Candle[], factor: number): Candle[] {
 export function buildHistoricalMarketContext(
   baseCandles: Candle[],
   index: number,
+  marketType: MarketType,
   executionTimeframe: Timeframe,
   htf1: Timeframe,
   htf2: Timeframe,
@@ -45,6 +46,7 @@ export function buildHistoricalMarketContext(
 
   return {
     symbol: "HISTORICAL",
+    marketType,
     executionTimeframe,
     htf1,
     htf2,

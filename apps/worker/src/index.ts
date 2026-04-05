@@ -2,15 +2,21 @@ import { Redis } from "ioredis";
 import { getConfig } from "@hashi/config";
 import {
   ACTIVE_PRODUCTION_STRATEGY_IDS,
+  allocatePortfolioCapital,
   BinanceSpotProvider,
+  buildPersonalDemoDispatchPlan,
+  buildPropDemoDispatchPlan,
+  type BreakoutSignal,
+  buildSignalModePayload,
+  BreakoutMultiSymbolRuntime,
   BybitSpotProvider,
   LOCKED_CAPITAL_PROGRESSION_DEFAULTS,
   LOCKED_MODE_GOVERNANCE_DEFAULTS,
   MarketContextLoader,
-  buildExecutionIntent,
   classifyRegime,
   getProductionStrategies,
-  type MarketDataProvider
+  type MarketDataProvider,
+  type SymbolMetadata
 } from "@hashi/core";
 
 class ForcedFailureProvider implements MarketDataProvider {
@@ -35,11 +41,29 @@ function buildProvider(name: "binance" | "bybit") {
   return name === "binance" ? new BinanceSpotProvider() : new BybitSpotProvider();
 }
 
+function buildRuntimeSymbols(config: ReturnType<typeof getConfig>): SymbolMetadata[] {
+  const symbols: SymbolMetadata[] = [];
+  const seen = new Set<string>();
+  const append = (symbol: string, marketType: SymbolMetadata["marketType"]) => {
+    const normalized = symbol.trim();
+    if (!normalized) return;
+    const key = `${marketType}:${normalized}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    symbols.push({ symbol: normalized, marketType });
+  };
+
+  append(config.DEFAULT_SYMBOL, "crypto");
+  for (const symbol of config.DEFAULT_CRYPTO_SYMBOLS) append(symbol, "crypto");
+  for (const symbol of config.DEFAULT_FOREX_SYMBOLS) append(symbol, "forex");
+  return symbols;
+}
+
 async function bootstrap() {
   const config = getConfig();
   const redis = new Redis(config.REDIS_URL);
 
-  const skipInfra = process.env.SKIP_INFRA_CHECKS === "1";
+  const skipInfra = config.SKIP_INFRA_CHECKS;
   if (!skipInfra) {
     const { prisma } = await import("@hashi/db");
     await prisma.$queryRaw`SELECT 1`;
@@ -48,56 +72,145 @@ async function bootstrap() {
 
   const primary = buildProvider(config.DEFAULT_PRIMARY_PROVIDER);
   const backup = buildProvider(config.DEFAULT_BACKUP_PROVIDER);
+  const runtimeSymbols = buildRuntimeSymbols(config);
+  const runtime = new BreakoutMultiSymbolRuntime(runtimeSymbols);
 
   const loader = new MarketContextLoader(primary, backup);
-  const marketContext = await loader.load({
-    symbol: config.DEFAULT_SYMBOL,
-    executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
-    htf1: config.DEFAULT_HTF_1,
-    htf2: config.DEFAULT_HTF_2,
-    candleLimit: 200
+  const cycleCandidates: Array<{
+    symbolContext: SymbolMetadata;
+    marketContext: Awaited<ReturnType<MarketContextLoader["load"]>>;
+    regime: ReturnType<typeof classifyRegime>;
+    candidateCount: number;
+    signal: BreakoutSignal;
+  }> = [];
+  for (const symbolContext of runtimeSymbols) {
+    const marketContext = await loader.load({
+      symbol: symbolContext.symbol,
+      marketType: symbolContext.marketType,
+      executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
+      htf1: config.DEFAULT_HTF_1,
+      htf2: config.DEFAULT_HTF_2,
+      candleLimit: 200
+    });
+
+    const regime = classifyRegime(marketContext);
+    cycleCandidates.push({
+      symbolContext,
+      marketContext,
+      regime,
+      candidateCount: 1,
+      signal: {
+        strategyId: config.ACTIVE_PRODUCTION_STRATEGY,
+        symbol: marketContext.symbol,
+        marketType: marketContext.marketType,
+        timeframe: marketContext.executionTimeframe,
+        side: "LONG",
+        entryPrice: marketContext.latestPrice,
+        stopPrice: marketContext.latestPrice * 0.99,
+        tp1: marketContext.latestPrice * 1.01,
+        tp2: marketContext.latestPrice * 1.02,
+        score: 70,
+        confidence: 0.7,
+        setupGrade: "A",
+        metadata: {
+          previewOnly: true,
+          rationale: [
+            `regime=${regime.regime}`,
+            `symbol=${marketContext.symbol}`,
+            "multi_symbol_signal_scan"
+          ]
+        }
+      }
+    });
+  }
+
+  const allocation = allocatePortfolioCapital({
+    mode: config.EXECUTION_MODE,
+    accountEquityUsd: config.EQUITY_START,
+    candidates: cycleCandidates.map((entry) => ({ signal: entry.signal })),
+    currentOpenRiskPct: 0,
+    openRiskBySymbolPct: Object.fromEntries(runtimeSymbols.map((entry) => [entry.symbol, 0])),
+    governanceLocks: {
+      dailyLossLockActive: config.GLOBAL_KILL_SWITCH_ENABLED || config.GOVERNANCE_DAILY_LOSS_LOCK_ACTIVE,
+      trailingDrawdownLockActive: config.GLOBAL_KILL_SWITCH_ENABLED || config.GOVERNANCE_TRAILING_DRAWDOWN_LOCK_ACTIVE,
+      maxConsecutiveLossLockActive: config.GLOBAL_KILL_SWITCH_ENABLED || config.GOVERNANCE_MAX_CONSECUTIVE_LOSS_LOCK_ACTIVE
+    },
+    perSymbolRiskCapPct: config.EXECUTION_MODE === "live_prop"
+      ? config.PORTFOLIO_PER_SYMBOL_RISK_CAP_PROP_PCT
+      : config.PORTFOLIO_PER_SYMBOL_RISK_CAP_PERSONAL_PCT
   });
 
-  const regime = classifyRegime(marketContext);
+  const signalModeOutput = config.EXECUTION_MODE === "signal_only" && config.ENABLE_SIGNAL_MODE_OUTPUT
+    ? buildSignalModePayload({
+        rankedSetups: allocation.rankedSetups,
+        decisions: allocation.decisions
+      })
+    : null;
 
-  console.log(
-    JSON.stringify(
-      {
-        event: "engine_smoke",
-        symbol: marketContext.symbol,
-        source: marketContext.source,
-        latestPrice: marketContext.latestPrice,
-        regime
-      },
-      null,
-      2
-    )
-  );
+  const personalDemoDispatchPlan = config.EXECUTION_MODE === "live_personal" && config.ENABLE_PERSONAL_DEMO_CONNECTOR
+    ? buildPersonalDemoDispatchPlan(allocation.decisions, {
+        apiKey: config.BINANCE_DEMO_API_KEY,
+        apiSecret: config.BINANCE_DEMO_API_SECRET,
+        baseUrl: config.BINANCE_DEMO_BASE_URL,
+        symbolMap: config.BINANCE_DEMO_SYMBOL_MAP_JSON
+      })
+    : null;
+
+  const propDemoDispatchPlan = config.EXECUTION_MODE === "live_prop" && config.ENABLE_PROP_DEMO_CONNECTOR
+    ? buildPropDemoDispatchPlan(
+        allocation.decisions,
+        {
+          login: config.MT5_DEMO_LOGIN,
+          password: config.MT5_DEMO_PASSWORD,
+          server: config.MT5_DEMO_SERVER,
+          broker: config.MT5_DEMO_BROKER,
+          terminalId: config.MT5_DEMO_TERMINAL_ID,
+          symbolMap: config.MT5_DEMO_SYMBOL_MAP_JSON
+        },
+        {
+          dailyLossLockActive: config.GLOBAL_KILL_SWITCH_ENABLED || config.GOVERNANCE_DAILY_LOSS_LOCK_ACTIVE,
+          trailingDrawdownLockActive: config.GLOBAL_KILL_SWITCH_ENABLED || config.GOVERNANCE_TRAILING_DRAWDOWN_LOCK_ACTIVE,
+          maxConsecutiveLossLockActive: config.GLOBAL_KILL_SWITCH_ENABLED || config.GOVERNANCE_MAX_CONSECUTIVE_LOSS_LOCK_ACTIVE
+        }
+      )
+    : null;
+
+  for (const entry of cycleCandidates) {
+    const decision = allocation.decisions.find(
+      (candidate) => candidate.signal.symbol === entry.signal.symbol && candidate.signal.marketType === entry.signal.marketType
+    );
+    runtime.recordEvaluation(entry.symbolContext, {
+      marketContext: entry.marketContext,
+      candidateCount: entry.candidateCount,
+      signal: decision?.signal,
+      intent: decision?.intent ?? undefined,
+      now: Date.now(),
+      reason: decision?.blockedReason ?? "allocator_selected"
+    });
+
+    console.log(
+      JSON.stringify(
+        {
+          event: "engine_smoke",
+          symbol: entry.marketContext.symbol,
+          marketType: entry.marketContext.marketType,
+          source: entry.marketContext.source,
+          latestPrice: entry.marketContext.latestPrice,
+          regime: entry.regime,
+          lifecycle: runtime.getState(entry.symbolContext)?.lifecycle.stage,
+          allocatedRiskPct: decision?.allocatedRiskPct ?? 0,
+          rank: decision?.rank,
+          allocationBlockedReason: decision?.blockedReason ?? null,
+          executionAllowed: decision?.intent?.executionAllowed ?? false
+        },
+        null,
+        2
+      )
+    );
+  }
 
   const productionStrategies = getProductionStrategies({
     allowResearchStrategies: config.ENABLE_SWING_RESEARCH_MODE
-  });
-
-  const intentPreview = buildExecutionIntent({
-    mode: config.EXECUTION_MODE,
-    accountEquityUsd: config.EQUITY_START,
-    currentOpenRiskPct: 0,
-    signal: {
-      strategyId: config.ACTIVE_PRODUCTION_STRATEGY,
-      symbol: marketContext.symbol,
-      timeframe: marketContext.executionTimeframe,
-      side: "LONG",
-      entryPrice: marketContext.latestPrice,
-      stopPrice: marketContext.latestPrice * 0.99,
-      tp1: marketContext.latestPrice * 1.01,
-      tp2: marketContext.latestPrice * 1.02,
-      score: 70,
-      confidence: 0.7,
-      setupGrade: "A",
-      metadata: {
-        previewOnly: true
-      }
-    }
   });
 
   console.log(
@@ -111,16 +224,76 @@ async function bootstrap() {
         productionStrategies: productionStrategies.map((entry: { id: string }) => entry.id),
         governanceDefaults: LOCKED_MODE_GOVERNANCE_DEFAULTS,
         capitalProgressionDefaults: LOCKED_CAPITAL_PROGRESSION_DEFAULTS,
-        executionIntentPreview: intentPreview
+        symbols: runtimeSymbols,
+        allocationBudget: allocation.budget,
+        rankedSetups: allocation.rankedSetups.map((entry) => ({
+          symbol: entry.signal.symbol,
+          marketType: entry.signal.marketType,
+          rank: entry.rank,
+          qualityScore: entry.qualityScore,
+          weight: entry.weight
+        })),
+        perSymbolLifecycle: runtime.getSnapshot().map((state) => ({
+          symbol: state.context.symbol,
+          marketType: state.context.marketType,
+          lifecycle: state.lifecycle.stage
+        })),
+        signalModeOutput,
+        personalDemoDispatchPlan,
+        propDemoDispatchPlan
       },
       null,
       2
     )
   );
 
+  if (signalModeOutput) {
+    console.log(
+      JSON.stringify(
+        {
+          event: "signal_mode_payload",
+          payload: signalModeOutput.json,
+          telegramMessages: signalModeOutput.messages
+        },
+        null,
+        2
+      )
+    );
+  }
+
+  if (personalDemoDispatchPlan) {
+    console.log(
+      JSON.stringify(
+        {
+          event: "personal_demo_dispatch_plan",
+          connector: "binance_futures_demo",
+          orders: personalDemoDispatchPlan
+        },
+        null,
+        2
+      )
+    );
+  }
+
+  if (propDemoDispatchPlan) {
+    console.log(
+      JSON.stringify(
+        {
+          event: "prop_demo_dispatch_plan",
+          connector: "mt5_demo",
+          orders: propDemoDispatchPlan
+        },
+        null,
+        2
+      )
+    );
+  }
+
   const fallbackLoader = new MarketContextLoader(new ForcedFailureProvider(), backup);
+  const fallbackSymbol = runtimeSymbols[0] ?? { symbol: config.DEFAULT_SYMBOL, marketType: "crypto" as const };
   const fallbackContext = await fallbackLoader.load({
-    symbol: config.DEFAULT_SYMBOL,
+    symbol: fallbackSymbol.symbol,
+    marketType: fallbackSymbol.marketType,
     executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
     htf1: config.DEFAULT_HTF_1,
     htf2: config.DEFAULT_HTF_2,
@@ -131,6 +304,8 @@ async function bootstrap() {
     JSON.stringify(
       {
         event: "engine_fallback_smoke",
+        symbol: fallbackContext.symbol,
+        marketType: fallbackContext.marketType,
         source: fallbackContext.source
       },
       null,

@@ -1,5 +1,6 @@
 import type { CandidateScore, StrategyCandidate, TradePlan } from "../strategy-types";
 import type { BreakoutSignal, SetupGrade } from "./breakout-execution-policy";
+import type { MarketType } from "../domains";
 
 function inferSetupGrade(score: number): SetupGrade {
   if (score >= 75) return "A+";
@@ -9,9 +10,11 @@ function inferSetupGrade(score: number): SetupGrade {
 
 export function buildBreakoutSignal(candidate: StrategyCandidate, plan: TradePlan, scoring: Pick<CandidateScore, "score" | "confidence">): BreakoutSignal {
   const setupGrade = inferSetupGrade(scoring.score);
+  const marketType = (candidate.metadata?.marketType as MarketType | undefined) ?? "crypto";
   return {
     strategyId: plan.strategyId ?? candidate.strategyId ?? "compression_breakout_unknown",
     symbol: candidate.symbol,
+    marketType,
     timeframe: candidate.timeframe,
     side: plan.side === "NONE" ? (() => { throw new Error("Breakout signal adapter requires actionable side"); })() : plan.side,
     entryPrice: plan.entry,

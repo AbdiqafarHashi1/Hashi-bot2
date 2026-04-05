@@ -1,6 +1,12 @@
 export type Timeframe = "15m" | "1h" | "4h";
 
 export type Symbol = string;
+export type MarketType = "crypto" | "forex";
+
+export type SymbolMetadata = {
+  symbol: Symbol;
+  marketType: MarketType;
+};
 
 export type MarketDataSource = "binance_spot" | "bybit_spot";
 
@@ -29,6 +35,7 @@ export type Candle = {
 
 export type CandidateContext = {
   symbol: Symbol;
+  marketType: MarketType;
   timeframe: Timeframe;
   regime: RegimeClass;
   notes?: string[];
@@ -36,6 +43,7 @@ export type CandidateContext = {
 
 export type MarketContext = {
   symbol: Symbol;
+  marketType: MarketType;
   executionTimeframe: Timeframe;
   htf1: Timeframe;
   htf2: Timeframe;
