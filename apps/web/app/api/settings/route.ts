@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@hashi/db";
 
 const defaultSettings = {
   generalSettings: {
@@ -19,15 +18,35 @@ const defaultSettings = {
   telegramSettings: {}
 };
 
+async function resolvePrisma() {
+  try {
+    const { prisma } = await import("@hashi/db");
+    return prisma;
+  } catch {
+    return null;
+  }
+}
+
 export async function GET() {
-  const settings =
-    (await prisma.settings.findFirst({ orderBy: { createdAt: "desc" } })) ??
-    (await prisma.settings.create({ data: defaultSettings }));
+  const prisma = await resolvePrisma();
+  if (!prisma) {
+    return NextResponse.json({ settings: defaultSettings, source: "defaults_no_prisma_client" });
+  }
+
+  const settings = (await prisma.settings.findFirst({ orderBy: { createdAt: "desc" } })) ?? (await prisma.settings.create({ data: defaultSettings }));
 
   return NextResponse.json({ settings });
 }
 
 export async function POST(req: Request) {
+  const prisma = await resolvePrisma();
+  if (!prisma) {
+    return NextResponse.json(
+      { message: "Settings persistence unavailable: prisma client is not initialized in this environment." },
+      { status: 503 }
+    );
+  }
+
   const payload = (await req.json()) as Partial<typeof defaultSettings>;
 
   const settings = await prisma.settings.create({
