@@ -4,7 +4,7 @@ import { BacktestEngine } from "../packages/core/src/backtest/backtest-engine";
 import { loadCandlesFromCsv } from "../packages/core/src/backtest/csv-loader";
 import type { BacktestConfig } from "../packages/core/src/backtest/types";
 import type { BacktestRunOutput } from "../packages/core/src/backtest/backtest-engine";
-import { STRATEGY_REGISTRY, getStrategyById } from "../packages/core/src/backtest/strategy-registry";
+import { ACTIVE_PRODUCTION_STRATEGY_IDS, STRATEGY_REGISTRY, getStrategyById, getProductionStrategies } from "../packages/core/src/backtest/strategy-registry";
 
 const args = process.argv.slice(2);
 const arg = (name: string, fallback?: string) => {
@@ -219,7 +219,7 @@ async function main() {
   const dataset = arg("dataset", process.env.DEFAULT_DATASET_PATH ?? "data/ETHUSDT_15m.csv")!;
   const symbol = arg("symbol", "ETHUSDT")!;
   const timeframe = (arg("timeframe", "15m") ?? "15m") as "15m" | "1h" | "4h";
-  const strategyId = arg("strategy", STRATEGY_REGISTRY[0].id)!;
+  const strategyId = arg("strategy", ACTIVE_PRODUCTION_STRATEGY_IDS[0] ?? getProductionStrategies()[0]?.id ?? STRATEGY_REGISTRY[0].id)!;
   const name = arg("name", `backtest-${Date.now()}`)!;
 
   if (hasFlag("all-strategies")) {

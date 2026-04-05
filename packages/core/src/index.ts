@@ -21,3 +21,5 @@ export * from "./backtest/strategies/compression-breakout-retest";
 export * from "./backtest/strategies/swing-continuation";
 export * from "./backtest/strategies/combined-breakout-swing-arbitrated";
 export * from "./backtest/strategy-registry";
+export * from "./execution/breakout-signal-adapter";
+export * from "./execution/breakout-execution-policy";
