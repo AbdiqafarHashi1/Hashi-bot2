@@ -2,6 +2,7 @@ import { classifyRegime, type StrategyContract, type StrategyCandidate, type Tra
 import type { Candle } from "../domains";
 import { buildAnalytics } from "./analytics";
 import { processTradeOnCandle } from "./trade-lifecycle";
+import { atr } from "../indicators";
 import type {
   ArbitrationDiagnostics,
   BacktestAnalytics,
@@ -38,6 +39,7 @@ type SizingInputs = {
   sizeModMax?: number;
   maxPositionNotional?: number;
   regime: ReturnType<typeof classifyRegime>;
+  riskScale?: number;
 };
 
 type ShadowPlan = {
@@ -47,6 +49,107 @@ type ShadowPlan = {
   tp1: number;
   tp2: number;
 };
+
+type RealismSettings = {
+  enabled: boolean;
+  takerFeeRate: number;
+  slippagePct: number;
+  delayMode: "none" | "next_candle";
+};
+
+type PersonalGradeBucket = "A_PLUS" | "A" | "B";
+
+const PERSONAL_GRADE_RULES: Record<PersonalGradeBucket, { minScore: number; riskScale: number; leverageScale: number }> = {
+  A_PLUS: { minScore: 78, riskScale: 1.15, leverageScale: 1.1 },
+  A: { minScore: 66, riskScale: 1.0, leverageScale: 1.0 },
+  B: { minScore: 0, riskScale: 0.85, leverageScale: 0.9 }
+};
+
+function isPersonalThroughputExpansionEnabled(config: BacktestConfig): boolean {
+  if (config.mode !== "personal") return false;
+  return process.env.PERSONAL_THROUGHPUT_EXPANSION === "1" || process.env.PERSONAL_THROUGHPUT_EXPANSION === "true";
+}
+
+function personalGradeFromScore(score: number): PersonalGradeBucket {
+  if (score >= PERSONAL_GRADE_RULES.A_PLUS.minScore) return "A_PLUS";
+  if (score >= PERSONAL_GRADE_RULES.A.minScore) return "A";
+  return "B";
+}
+
+function resolveExecutionRealism(config: BacktestConfig): RealismSettings {
+  const envEnabled = process.env.EXEC_REALISM_ENABLED === "1" || process.env.EXEC_REALISM_ENABLED === "true";
+  const envTakerFee = Number(process.env.TAKER_FEE_RATE ?? "0.0006");
+  const envSlippage = Number(process.env.SLIPPAGE_PCT ?? "0");
+  const envDelay = process.env.EXEC_DELAY_MODE === "next_candle" ? "next_candle" : "none";
+  return {
+    enabled: config.executionRealism?.enabled ?? envEnabled,
+    takerFeeRate: config.executionRealism?.takerFeeRate ?? (Number.isFinite(envTakerFee) ? Math.max(envTakerFee, 0) : 0.0006),
+    slippagePct: config.executionRealism?.slippagePct ?? (Number.isFinite(envSlippage) ? Math.max(envSlippage, 0) : 0),
+    delayMode: config.executionRealism?.delayMode ?? envDelay
+  };
+}
+
+function applyAdverseSlippage(side: "LONG" | "SHORT", price: number, slippagePct: number): number {
+  const slip = Math.max(slippagePct, 0);
+  if (slip === 0) return price;
+  return side === "LONG" ? price * (1 + slip / 100) : price * (1 - slip / 100);
+}
+
+function applyProtectiveSlippage(side: "LONG" | "SHORT", price: number, slippagePct: number): number {
+  const slip = Math.max(slippagePct, 0);
+  if (slip === 0) return price;
+  return side === "LONG" ? price * (1 - slip / 100) : price * (1 + slip / 100);
+}
+
+function applyExecutionRealism(
+  plan: TradePlan,
+  realism: RealismSettings,
+  currentIndex: number,
+  candles: Candle[]
+): { entry: number; stop: number; tp1: number; tp2: number; entryTime: number; openedAtIndex: number } | null {
+  if (plan.side === "NONE") return null;
+  const delayMode = realism.enabled ? realism.delayMode : "none";
+  const entryBasePrice =
+    delayMode === "next_candle"
+      ? candles[currentIndex + 1]?.open
+      : plan.entry;
+  const entryTime =
+    delayMode === "next_candle"
+      ? candles[currentIndex + 1]?.openTime
+      : candles[currentIndex]?.openTime;
+  const openedAtIndex = delayMode === "next_candle" ? currentIndex + 1 : currentIndex;
+
+  if (!Number.isFinite(entryBasePrice) || entryTime == null) return null;
+
+  const stopOffset = plan.stop - plan.entry;
+  const tp1Offset = plan.tp1 - plan.entry;
+  const tp2Offset = plan.tp2 - plan.entry;
+
+  const shiftedStop = entryBasePrice + stopOffset;
+  const shiftedTp1 = entryBasePrice + tp1Offset;
+  const shiftedTp2 = entryBasePrice + tp2Offset;
+
+  if (!realism.enabled) {
+    return {
+      entry: entryBasePrice,
+      stop: shiftedStop,
+      tp1: shiftedTp1,
+      tp2: shiftedTp2,
+      entryTime,
+      openedAtIndex
+    };
+  }
+
+  const slippagePct = realism.slippagePct;
+  return {
+    entry: applyAdverseSlippage(plan.side, entryBasePrice, slippagePct),
+    stop: applyProtectiveSlippage(plan.side, shiftedStop, slippagePct),
+    tp1: applyProtectiveSlippage(plan.side, shiftedTp1, slippagePct),
+    tp2: applyProtectiveSlippage(plan.side, shiftedTp2, slippagePct),
+    entryTime,
+    openedAtIndex
+  };
+}
 
 function computeBreakoutSizeModifier({ regime, confidence, sizeModMin = 0.7, sizeModMax = 1.2 }: Pick<SizingInputs, "regime" | "confidence" | "sizeModMin" | "sizeModMax">): number {
   const diagnostics = regime.diagnostics;
@@ -66,7 +169,8 @@ function resolvePositionSizing(inputs: SizingInputs): { quantity: number; riskAm
   const defaultModeRiskPct = inputs.riskMode === "aggressive" ? 0.02 : 0.01;
   const requestedRiskPct = isBreakout || isSwing ? (inputs.baseRiskPct ?? defaultModeRiskPct) : inputs.riskPercent / 100;
   const maxRiskPctCap = inputs.maxRiskPctCap ?? 0.025;
-  const appliedRiskPct = clamp(requestedRiskPct, 0, maxRiskPctCap);
+  const scaledRiskPct = requestedRiskPct * (inputs.riskScale ?? 1);
+  const appliedRiskPct = clamp(scaledRiskPct, 0, maxRiskPctCap);
 
   const sizeModifier = isBreakout
     ? computeBreakoutSizeModifier({
@@ -203,6 +307,27 @@ function buildMarketContextFromBuffers(
   };
 }
 
+function canSpawnPersonalContinuation(trade: OpenTrade, candle: Candle, atrValue: number): boolean {
+  if (trade.parentTradeId) return false;
+  if (trade.continuationSpawned) return false;
+  if (trade.state !== "partial") return false;
+  if (trade.setupGradeBucket === "B") return false;
+  if (!Number.isFinite(atrValue) || atrValue <= 0) return false;
+
+  const continuationStrength = Math.abs(candle.close - candle.open) / atrValue;
+  const directionalContinuation =
+    trade.side === "LONG"
+      ? candle.close > trade.tp1 && candle.close >= candle.open
+      : candle.close < trade.tp1 && candle.close <= candle.open;
+  if (!directionalContinuation) return false;
+  if (continuationStrength < 0.45) return false;
+
+  const stretchFromTp1 = Math.abs(candle.close - trade.tp1) / atrValue;
+  if (stretchFromTp1 > 0.9) return false;
+
+  return true;
+}
+
 export class BacktestEngine {
   constructor(private readonly strategy: StrategyContract) {}
 
@@ -232,6 +357,8 @@ export class BacktestEngine {
     const agg1h = createAggregationState(4);
     const agg4h = createAggregationState(16);
     const contextLookbackBars = 512;
+    const realism = resolveExecutionRealism(config);
+    const personalExpansionEnabled = isPersonalThroughputExpansionEnabled(config);
 
     for (let j = 0; j < config.warmupCandles; j += 1) {
       const warm = candles[j];
@@ -248,10 +375,13 @@ export class BacktestEngine {
       updateAggregation(candles4h, agg4h, candle);
 
       for (let t = openTrades.length - 1; t >= 0; t -= 1) {
-        const state = processTradeOnCandle(openTrades[t], candle, i);
+        const openTrade = openTrades[t];
+        if (!openTrade) continue;
+        const priorState = openTrade.state;
+        const state = processTradeOnCandle(openTrade, candle, i, realism.takerFeeRate);
         if (state.closed) {
-          if (openTrades[t].shadowComparison) {
-            const shadowPnl = simulatePlanPnl(candles, openTrades[t].openedAtIndex, openTrades[t].shadowComparison.loserPlan, openTrades[t].quantity);
+          if (openTrade.shadowComparison) {
+            const shadowPnl = simulatePlanPnl(candles, openTrade.openedAtIndex, openTrade.shadowComparison.loserPlan, openTrade.quantity);
             if (shadowPnl !== null) {
               shadowComparisons += 1;
               if (shadowPnl > state.closed.pnl) {
@@ -263,6 +393,102 @@ export class BacktestEngine {
           equity += state.closed.pnl;
           closedTrades.push(state.closed);
           openTrades.splice(t, 1);
+          continue;
+        }
+
+        if (personalExpansionEnabled && priorState === "open" && openTrade.state === "partial") {
+          const atrValue = atr(candles15m, 14) ?? 0;
+          const existingContinuation = openTrades.some((candidate) => candidate.parentTradeId === openTrade.id || (candidate.rootSignalId && candidate.rootSignalId === openTrade.rootSignalId && candidate.id !== openTrade.id));
+          if (!existingContinuation && canSpawnPersonalContinuation(openTrade, candle, atrValue)) {
+            const baseStopDistance = Math.abs(openTrade.entry - openTrade.stop);
+            const continuationStopDistance = Math.max(baseStopDistance * 0.85, atrValue * 0.45);
+            const continuationEntry = candle.close;
+            const continuationStop =
+              openTrade.side === "LONG"
+                ? continuationEntry - continuationStopDistance
+                : continuationEntry + continuationStopDistance;
+            const tp1 = openTrade.side === "LONG"
+              ? continuationEntry + continuationStopDistance * 1.1
+              : continuationEntry - continuationStopDistance * 1.1;
+            const tp2 = openTrade.side === "LONG"
+              ? continuationEntry + continuationStopDistance * 2.8
+              : continuationEntry - continuationStopDistance * 2.8;
+
+            const continuationSizing = resolvePositionSizing({
+              equity,
+              entry: continuationEntry,
+              stop: continuationStop,
+              strategyId: openTrade.strategyId,
+              confidence: openTrade.confidence,
+              riskPercent: config.riskPercent,
+              riskMode: config.riskMode,
+              baseRiskPct: config.baseRiskPct,
+              maxRiskPctCap: config.maxRiskPctCap,
+              sizeModMin: config.sizeModMin,
+              sizeModMax: config.sizeModMax,
+              maxPositionNotional: config.maxPositionNotional,
+              regime: classifyRegime(
+                buildMarketContextFromBuffers(
+                  config.symbol,
+                  config.timeframe,
+                  candle.source,
+                  candle.source,
+                  candle.close,
+                  candles15m,
+                  candles1h,
+                  candles4h,
+                  contextLookbackBars
+                )
+              ),
+              riskScale: (openTrade.setupRiskScale ?? 1) * 0.5
+            });
+
+            if (continuationSizing) {
+              tradeCounter += 1;
+              funnel.executed += 1;
+              const continuationEntryFee = Math.abs(continuationEntry * continuationSizing.quantity) * realism.takerFeeRate;
+              openTrades.push({
+                id: `T${tradeCounter}`,
+                strategyId: openTrade.strategyId,
+                profileType: openTrade.profileType,
+                moduleFamily: openTrade.moduleFamily,
+                strategyModule: openTrade.strategyModule,
+                symbol: openTrade.symbol,
+                timeframe: openTrade.timeframe,
+                regime: openTrade.regime,
+                side: openTrade.side,
+                score: openTrade.score,
+                confidence: openTrade.confidence,
+                reasons: [...openTrade.reasons, "Personal continuation add-on after TP1"],
+                source: openTrade.source,
+                entry: continuationEntry,
+                stop: continuationStop,
+                tp1,
+                tp2,
+                quantity: continuationSizing.quantity,
+                riskAmount: continuationSizing.riskAmount,
+                openedAtIndex: i,
+                entryTime: candle.openTime,
+                state: "open",
+                remainingQty: continuationSizing.quantity,
+                realizedPnl: -continuationEntryFee,
+                feesPaid: continuationEntryFee,
+                mfe: 0,
+                mae: 0,
+                hadPartialExit: false,
+                rootSignalId: openTrade.rootSignalId ?? openTrade.id,
+                parentTradeId: openTrade.id,
+                continuationSpawned: true,
+                setupGradeBucket: openTrade.setupGradeBucket,
+                setupRiskScale: (openTrade.setupRiskScale ?? 1) * 0.5,
+                setupLeverageScale: openTrade.setupLeverageScale,
+                entryAtr: openTrade.entryAtr,
+                shadowComparison: openTrade.shadowComparison,
+                earlyExitPolicy: openTrade.earlyExitPolicy
+              });
+              openTrade.continuationSpawned = true;
+            }
+          }
         }
       }
 
@@ -347,10 +573,21 @@ export class BacktestEngine {
         continue;
       }
 
+      const executablePlan = applyExecutionRealism(plan, realism, i, candles);
+      if (!executablePlan) {
+        skippedSignals.push({ timestamp: candle.openTime, reason: "Execution delay unavailable", candidateScore: best.score });
+        equityCurve.push({ timestamp: candle.openTime, equity });
+        continue;
+      }
+
+      const setupGradeBucket: PersonalGradeBucket = personalGradeFromScore(best.score);
+      const setupRule = PERSONAL_GRADE_RULES[setupGradeBucket];
+      const setupRiskScale = personalExpansionEnabled ? setupRule.riskScale : 1;
+
       const sizing = resolvePositionSizing({
         equity,
-        entry: plan.entry,
-        stop: plan.stop,
+        entry: executablePlan.entry,
+        stop: executablePlan.stop,
         strategyId: plan.strategyId,
         confidence: best.confidence,
         riskPercent: config.riskPercent,
@@ -360,7 +597,8 @@ export class BacktestEngine {
         sizeModMin: config.sizeModMin,
         sizeModMax: config.sizeModMax,
         maxPositionNotional: config.maxPositionNotional,
-        regime
+        regime,
+        riskScale: setupRiskScale
       });
 
       if (!sizing) {
@@ -386,20 +624,26 @@ export class BacktestEngine {
         confidence: plan.confidence,
         reasons: plan.reasons,
         source: plan.source,
-        entry: plan.entry,
-        stop: plan.stop,
-        tp1: plan.tp1,
-        tp2: plan.tp2,
+        entry: executablePlan.entry,
+        stop: executablePlan.stop,
+        tp1: executablePlan.tp1,
+        tp2: executablePlan.tp2,
         quantity: sizing.quantity,
         riskAmount: sizing.riskAmount,
-        openedAtIndex: i,
-        entryTime: candle.openTime,
+        openedAtIndex: executablePlan.openedAtIndex,
+        entryTime: executablePlan.entryTime,
         state: "open",
         remainingQty: sizing.quantity,
-        realizedPnl: 0,
+        realizedPnl: -(Math.abs(executablePlan.entry * sizing.quantity) * realism.takerFeeRate),
+        feesPaid: Math.abs(executablePlan.entry * sizing.quantity) * realism.takerFeeRate,
         mfe: 0,
         mae: 0,
         hadPartialExit: false,
+        rootSignalId: `S${tradeCounter}`,
+        continuationSpawned: false,
+        setupGradeBucket,
+        setupRiskScale,
+        setupLeverageScale: personalExpansionEnabled ? setupRule.leverageScale : 1,
         entryAtr: plan.entryAtr,
         shadowComparison: plan.shadowComparison,
         earlyExitPolicy: plan.earlyExitPolicy
@@ -412,8 +656,8 @@ export class BacktestEngine {
     const losses = closedTrades.filter((t) => t.pnl < 0).length;
     const grossPnL = closedTrades.filter((t) => t.pnl > 0).reduce((sum, t) => sum + t.pnl, 0);
     const grossLoss = Math.abs(closedTrades.filter((t) => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0));
-    const fees = 0;
-    const netPnL = closedTrades.reduce((sum, t) => sum + t.pnl, 0) - fees;
+    const fees = closedTrades.reduce((sum, t) => sum + t.feesPaid, 0);
+    const netPnL = closedTrades.reduce((sum, t) => sum + t.pnl, 0);
 
     let peak = config.initialBalance;
     let maxDrawdown = 0;

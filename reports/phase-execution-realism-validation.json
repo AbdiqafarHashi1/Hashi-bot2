@@ -1,0 +1,290 @@
+{
+  "generatedAt": "2026-04-05T12:42:54.189Z",
+  "assumptions": {
+    "strategyScope": "breakout only",
+    "feeRate": 0.0006,
+    "realismSlippagePct": 0.05,
+    "delayMode": "none",
+    "dataset": "data/ETHUSDT_15m.csv"
+  },
+  "scenarios": [
+    {
+      "mode": "signal",
+      "variant": "baseline",
+      "metrics": {
+        "netPnL": 3075.0671207726946,
+        "profitFactor": 1.2940857008320112,
+        "winRatePct": 58.080808080808076,
+        "maxDdPct": 7.950780606487911,
+        "endingEquity": 13075.067120772686,
+        "tradesPerDay": 0.5073873873873874
+      },
+      "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-signal-baseline-1775392814136.json"
+    },
+    {
+      "mode": "signal",
+      "variant": "realism",
+      "metrics": {
+        "netPnL": -1234.7427900168448,
+        "profitFactor": 0.8127510336022811,
+        "winRatePct": 55.3030303030303,
+        "maxDdPct": 15.565311085168132,
+        "endingEquity": 8765.257209983145,
+        "tradesPerDay": 0.5073873873873874
+      },
+      "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-signal-realism-1775392824888.json"
+    },
+    {
+      "mode": "personal",
+      "variant": "baseline",
+      "metrics": {
+        "netPnL": 4302.723248694941,
+        "profitFactor": 1.2854414669542658,
+        "winRatePct": 58.080808080808076,
+        "maxDdPct": 10.429506035475521,
+        "endingEquity": 14302.72324869493,
+        "tradesPerDay": 0.5073873873873874
+      },
+      "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-personal-baseline-1775392835411.json"
+    },
+    {
+      "mode": "personal",
+      "variant": "realism",
+      "metrics": {
+        "netPnL": -1649.401649177472,
+        "profitFactor": 0.8106449198141007,
+        "winRatePct": 55.3030303030303,
+        "maxDdPct": 20.594055507651515,
+        "endingEquity": 8350.598350822527,
+        "tradesPerDay": 0.5073873873873874
+      },
+      "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-personal-realism-1775392845948.json"
+    },
+    {
+      "mode": "prop",
+      "variant": "baseline",
+      "metrics": {
+        "netPnL": 1203.1983640744704,
+        "profitFactor": 1.3101503584033694,
+        "winRatePct": 58.080808080808076,
+        "maxDdPct": 3.3891990751698056,
+        "endingEquity": 11203.19836407446,
+        "tradesPerDay": 0.5073873873873874
+      },
+      "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-prop-baseline-1775392856871.json"
+    },
+    {
+      "mode": "prop",
+      "variant": "realism",
+      "metrics": {
+        "netPnL": -529.6544754259162,
+        "profitFactor": 0.8119868187687125,
+        "winRatePct": 55.3030303030303,
+        "maxDdPct": 6.774670503886422,
+        "endingEquity": 9470.34552457409,
+        "tradesPerDay": 0.5073873873873874
+      },
+      "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-prop-realism-1775392867210.json"
+    }
+  ],
+  "comparison": [
+    {
+      "mode": "signal",
+      "baseline": {
+        "mode": "signal",
+        "variant": "baseline",
+        "metrics": {
+          "netPnL": 3075.0671207726946,
+          "profitFactor": 1.2940857008320112,
+          "winRatePct": 58.080808080808076,
+          "maxDdPct": 7.950780606487911,
+          "endingEquity": 13075.067120772686,
+          "tradesPerDay": 0.5073873873873874
+        },
+        "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-signal-baseline-1775392814136.json"
+      },
+      "realism": {
+        "mode": "signal",
+        "variant": "realism",
+        "metrics": {
+          "netPnL": -1234.7427900168448,
+          "profitFactor": 0.8127510336022811,
+          "winRatePct": 55.3030303030303,
+          "maxDdPct": 15.565311085168132,
+          "endingEquity": 8765.257209983145,
+          "tradesPerDay": 0.5073873873873874
+        },
+        "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-signal-realism-1775392824888.json"
+      },
+      "delta": {
+        "netPnLAbs": -4309.80991078954,
+        "netPnLPct": -140.1533606104371,
+        "pfAbs": -0.4813346672297302,
+        "winRatePctPoints": -2.7777777777777786,
+        "maxDdPctPoints": 7.61453047868022,
+        "endingEquityAbs": -4309.809910789541
+      }
+    },
+    {
+      "mode": "personal",
+      "baseline": {
+        "mode": "personal",
+        "variant": "baseline",
+        "metrics": {
+          "netPnL": 4302.723248694941,
+          "profitFactor": 1.2854414669542658,
+          "winRatePct": 58.080808080808076,
+          "maxDdPct": 10.429506035475521,
+          "endingEquity": 14302.72324869493,
+          "tradesPerDay": 0.5073873873873874
+        },
+        "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-personal-baseline-1775392835411.json"
+      },
+      "realism": {
+        "mode": "personal",
+        "variant": "realism",
+        "metrics": {
+          "netPnL": -1649.401649177472,
+          "profitFactor": 0.8106449198141007,
+          "winRatePct": 55.3030303030303,
+          "maxDdPct": 20.594055507651515,
+          "endingEquity": 8350.598350822527,
+          "tradesPerDay": 0.5073873873873874
+        },
+        "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-personal-realism-1775392845948.json"
+      },
+      "delta": {
+        "netPnLAbs": -5952.1248978724125,
+        "netPnLPct": -138.33390050540092,
+        "pfAbs": -0.47479654714016506,
+        "winRatePctPoints": -2.7777777777777786,
+        "maxDdPctPoints": 10.164549472175993,
+        "endingEquityAbs": -5952.124897872403
+      }
+    },
+    {
+      "mode": "prop",
+      "baseline": {
+        "mode": "prop",
+        "variant": "baseline",
+        "metrics": {
+          "netPnL": 1203.1983640744704,
+          "profitFactor": 1.3101503584033694,
+          "winRatePct": 58.080808080808076,
+          "maxDdPct": 3.3891990751698056,
+          "endingEquity": 11203.19836407446,
+          "tradesPerDay": 0.5073873873873874
+        },
+        "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-prop-baseline-1775392856871.json"
+      },
+      "realism": {
+        "mode": "prop",
+        "variant": "realism",
+        "metrics": {
+          "netPnL": -529.6544754259162,
+          "profitFactor": 0.8119868187687125,
+          "winRatePct": 55.3030303030303,
+          "maxDdPct": 6.774670503886422,
+          "endingEquity": 9470.34552457409,
+          "tradesPerDay": 0.5073873873873874
+        },
+        "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-exec-realism-prop-realism-1775392867210.json"
+      },
+      "delta": {
+        "netPnLAbs": -1732.8528395003866,
+        "netPnLPct": -144.02054484451858,
+        "pfAbs": -0.49816353963465687,
+        "winRatePctPoints": -2.7777777777777786,
+        "maxDdPctPoints": 3.3854714287166163,
+        "endingEquityAbs": -1732.8528395003705
+      }
+    }
+  ],
+  "slippageSensitivity": {
+    "signal": [
+      {
+        "slippagePct": 0.02,
+        "netPnL": 560.4168937469827,
+        "profitFactor": 1.0661307060827223,
+        "winRatePct": 57.07070707070707,
+        "maxDdPct": 11.285594442585056,
+        "endingEquity": 10560.416893746968
+      },
+      {
+        "slippagePct": 0.05,
+        "netPnL": -1234.7427900168448,
+        "profitFactor": 0.8127510336022811,
+        "winRatePct": 55.3030303030303,
+        "maxDdPct": 15.565311085168132,
+        "endingEquity": 8765.257209983145
+      },
+      {
+        "slippagePct": 0.1,
+        "netPnL": -2896.0045296777776,
+        "profitFactor": 0.45893105870827283,
+        "winRatePct": 44.44444444444444,
+        "maxDdPct": 29.36929306020656,
+        "endingEquity": 7103.99547032223
+      }
+    ],
+    "personal": [
+      {
+        "slippagePct": 0.02,
+        "netPnL": 712.9592855484741,
+        "profitFactor": 1.0611645186461878,
+        "winRatePct": 57.07070707070707,
+        "maxDdPct": 15.081838888950818,
+        "endingEquity": 10712.959285548479
+      },
+      {
+        "slippagePct": 0.05,
+        "netPnL": -1649.401649177472,
+        "profitFactor": 0.8106449198141007,
+        "winRatePct": 55.3030303030303,
+        "maxDdPct": 20.594055507651515,
+        "endingEquity": 8350.598350822527
+      },
+      {
+        "slippagePct": 0.1,
+        "netPnL": -3721.250948367043,
+        "profitFactor": 0.45263853127735754,
+        "winRatePct": 44.44444444444444,
+        "maxDdPct": 37.6820215308594,
+        "endingEquity": 6278.749051632982
+      }
+    ],
+    "prop": [
+      {
+        "slippagePct": 0.02,
+        "netPnL": 241.46897289637872,
+        "profitFactor": 1.071225877964754,
+        "winRatePct": 57.07070707070707,
+        "maxDdPct": 4.845101728549406,
+        "endingEquity": 10241.468972896393
+      },
+      {
+        "slippagePct": 0.05,
+        "netPnL": -529.6544754259162,
+        "profitFactor": 0.8119868187687125,
+        "winRatePct": 55.3030303030303,
+        "maxDdPct": 6.774670503886422,
+        "endingEquity": 9470.34552457409
+      },
+      {
+        "slippagePct": 0.1,
+        "netPnL": -1328.2031225700034,
+        "profitFactor": 0.4597338593286054,
+        "winRatePct": 44.44444444444444,
+        "maxDdPct": 13.49131453596321,
+        "endingEquity": 8671.796877429993
+      }
+    ]
+  },
+  "decisionAnswers": {
+    "breakoutProfitableAfterRealism": false,
+    "personalGrowthAcceptable": false,
+    "propSurvivesConstraints": true,
+    "slippageSensitivityNetPnlSpread": 3456.42142342476
+  },
+  "verdict": "NOT READY"
+}

@@ -79,6 +79,12 @@ type RuntimeRiskProfile = {
   maxPositionNotional?: number;
 };
 
+function envFlag(name: string, fallback = false): boolean {
+  const raw = process.env[name];
+  if (raw == null) return fallback;
+  return raw === "1" || raw.toLowerCase() === "true";
+}
+
 function resolveCapitalPolicyProfile(mode: HarnessMode): CapitalPolicyProfile {
   const requested = (arg("capital-policy", process.env.CAPITAL_POLICY_ID) ?? DEFAULT_CAPITAL_POLICY_BY_MODE[mode]) as CapitalPolicyProfileId;
   const profile = CAPITAL_POLICY_PROFILES[requested];
@@ -124,6 +130,7 @@ function resolveDatasetPath(defaultPath: string): string {
 async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h" | "4h", strategyId: string, mode: HarnessMode, name?: string) {
   const entry = getStrategyById(strategyId);
   if (!entry) throw new Error(`Unknown strategy id: ${strategyId}`);
+  process.env.BREAKOUT_ENTRY_MODE = mode;
 
   const loadedCandles = await loadCandlesFromCsv({ filePath: dataset });
   const recentCandles = Number(arg("recent-candles", "0"));
@@ -149,7 +156,13 @@ async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h
     allowCompounding: false,
     warmupCandles: 50,
     oneTradeAtTime: strategyId === "combined_breakout_swing_arbitrated",
-    minScore: entry.minScore
+    minScore: entry.minScore,
+    executionRealism: {
+      enabled: envFlag("EXEC_REALISM_ENABLED", false),
+      takerFeeRate: Number(process.env.TAKER_FEE_RATE ?? "0.0006"),
+      slippagePct: Number(process.env.SLIPPAGE_PCT ?? "0"),
+      delayMode: process.env.EXEC_DELAY_MODE === "next_candle" ? "next_candle" : "none"
+    }
   };
 
   const output = await engine.run(candles, config);
