@@ -1,0 +1,342 @@
+{
+  "generatedAt": "2026-04-05T04:14:25.719Z",
+  "dataset": {
+    "path": "data/ETHUSDT_15m.csv",
+    "rows": 74976,
+    "firstTimestamp": "2024-01-01T00:00:00.000Z",
+    "lastTimestamp": "2026-02-19T23:45:00.000Z"
+  },
+  "policies": {
+    "personal": {
+      "baseline": "0.5% base risk / 0.75% A+ risk",
+      "preservation": "if DD>=6% OR lossStreak>=3 => risk cut to 0.3%-0.4%",
+      "healthyEquityAggression": "if DD<=2% and no recent losses => 0.6% / 0.95%; throttle when DD>=4% or lossStreak>=2",
+      "milestoneDerisk": "after +15% gain risk drops to 0.4%-0.6%, after +30% gain 0.3%-0.45%"
+    },
+    "prop": {
+      "baseline": "0.25% base / 0.4% A+, dailyLock=1%, trailingDDLock=6%, maxLossStreakLock=4",
+      "preservationGovernanceSafe": "risk 0.15%-0.35% with stricter locks (0.8%/4.5%/3)",
+      "tighterDefensive": "risk 0.1%-0.25% with tight locks (0.6%/3.5%/2)"
+    }
+  },
+  "signal": {
+    "mode": "signal",
+    "variant": "baseline",
+    "trades": 396,
+    "tradesPerDay": 0.5073873873873874,
+    "winRate": 58.58585858585859,
+    "profitFactor": 3.6758936416108914,
+    "expectancy": 67.07309075829538,
+    "netPnL": 26560.94394028497,
+    "startingEquity": 10000,
+    "endingEquity": 36560.94394028497,
+    "totalReturnPct": 265.6094394028497,
+    "cagrPct": 83.36213822077208,
+    "maxDDPct": 1.9875250000000246,
+    "avgHoldHours": 1.0303030303030303,
+    "worstLosingStreak": 4
+  },
+  "personal": [
+    {
+      "mode": "personal",
+      "variant": "baseline",
+      "trades": 396,
+      "tradesPerDay": 0.5086364913501291,
+      "winRate": 78.03030303030303,
+      "profitFactor": 3.6780414741166183,
+      "expectancy": 6.71673877996908,
+      "netPnL": 2659.8285568677557,
+      "startingEquity": 1000,
+      "endingEquity": 3659.8285568677575,
+      "totalReturnPct": 265.98285568677574,
+      "cagrPct": 83.79852720132999,
+      "maxDDPct": 1.9850499375000208,
+      "avgHoldHours": 1.0303030303030303,
+      "worstLosingStreak": 4
+    },
+    {
+      "mode": "personal",
+      "variant": "preservation",
+      "trades": 396,
+      "tradesPerDay": 0.5086364913501291,
+      "winRate": 78.03030303030303,
+      "profitFactor": 3.6913619154847717,
+      "expectancy": 6.643901239554904,
+      "netPnL": 2630.9848908637423,
+      "startingEquity": 1000,
+      "endingEquity": 3630.9848908637427,
+      "totalReturnPct": 263.09848908637423,
+      "cagrPct": 83.11752971282877,
+      "maxDDPct": 1.985049937500004,
+      "avgHoldHours": 1.0303030303030303,
+      "worstLosingStreak": 4
+    },
+    {
+      "mode": "personal",
+      "variant": "healthy_equity_aggression",
+      "trades": 396,
+      "tradesPerDay": 0.5086364913501291,
+      "winRate": 78.03030303030303,
+      "profitFactor": 3.736367496811089,
+      "expectancy": 8.738197306094559,
+      "netPnL": 3460.3261332134457,
+      "startingEquity": 1000,
+      "endingEquity": 4460.326133213445,
+      "totalReturnPct": 346.0326133213445,
+      "cagrPct": 101.67121593844679,
+      "maxDDPct": 2.0345015370000015,
+      "avgHoldHours": 1.0303030303030303,
+      "worstLosingStreak": 4
+    },
+    {
+      "mode": "personal",
+      "variant": "milestone_derisk",
+      "trades": 396,
+      "tradesPerDay": 0.5086364913501291,
+      "winRate": 78.03030303030303,
+      "profitFactor": 3.8899336971472285,
+      "expectancy": 3.4878543220614504,
+      "netPnL": 1381.1903115363343,
+      "startingEquity": 1000,
+      "endingEquity": 2381.1903115363334,
+      "totalReturnPct": 138.11903115363333,
+      "cagrPct": 50.23434362311507,
+      "maxDDPct": 1.19461079190003,
+      "avgHoldHours": 1.0303030303030303,
+      "worstLosingStreak": 4
+    }
+  ],
+  "prop": [
+    {
+      "mode": "prop",
+      "variant": "baseline",
+      "trades": 393,
+      "tradesPerDay": 0.5047831845974766,
+      "winRate": 77.86259541984732,
+      "profitFactor": 3.7756580379726246,
+      "expectancy": 56.95225001846406,
+      "netPnL": 22382.234257256376,
+      "startingEquity": 25000,
+      "endingEquity": 47382.23425725635,
+      "totalReturnPct": 89.5289370290254,
+      "cagrPct": 34.97978239023949,
+      "maxDDPct": 1.4906561914648149,
+      "avgHoldHours": 1.0303030303030303,
+      "worstLosingStreak": 4,
+      "governanceEvents": {
+        "dailyLossLock": 0,
+        "trailingDrawdownLock": 0,
+        "maxConsecutiveLossLock": 2
+      },
+      "survivesFullPeriod": true
+    },
+    {
+      "mode": "prop",
+      "variant": "preservation_governance_safe",
+      "trades": 389,
+      "tradesPerDay": 0.4996454422606066,
+      "winRate": 78.40616966580977,
+      "profitFactor": 3.9578190298451745,
+      "expectancy": 48.19188120427195,
+      "netPnL": 18746.641788461788,
+      "startingEquity": 25000,
+      "endingEquity": 43746.64178846177,
+      "totalReturnPct": 74.98656715384709,
+      "cagrPct": 30.017931938967557,
+      "maxDDPct": 1.0257846064721676,
+      "avgHoldHours": 1.0303030303030303,
+      "worstLosingStreak": 3,
+      "governanceEvents": {
+        "dailyLossLock": 0,
+        "trailingDrawdownLock": 0,
+        "maxConsecutiveLossLock": 4
+      },
+      "survivesFullPeriod": true
+    },
+    {
+      "mode": "prop",
+      "variant": "tighter_defensive",
+      "trades": 363,
+      "tradesPerDay": 0.46625011707095165,
+      "winRate": 77.96143250688705,
+      "profitFactor": 3.9119664812483523,
+      "expectancy": 29.929446785241133,
+      "netPnL": 10864.389183042531,
+      "startingEquity": 25000,
+      "endingEquity": 35864.38918304255,
+      "totalReturnPct": 43.4575567321702,
+      "cagrPct": 18.44732173853958,
+      "maxDDPct": 0.7477533724695156,
+      "avgHoldHours": 1.0303030303030303,
+      "worstLosingStreak": 2,
+      "governanceEvents": {
+        "dailyLossLock": 0,
+        "trailingDrawdownLock": 0,
+        "maxConsecutiveLossLock": 17
+      },
+      "survivesFullPeriod": true
+    }
+  ],
+  "tables": {
+    "signal": [
+      {
+        "mode": "signal",
+        "variant": "baseline",
+        "trades": 396,
+        "tradesPerDay": 0.5073873873873874,
+        "winRate": 58.58585858585859,
+        "profitFactor": 3.6758936416108914,
+        "expectancy": 67.07309075829538,
+        "netPnL": 26560.94394028497,
+        "startingEquity": 10000,
+        "endingEquity": 36560.94394028497,
+        "totalReturnPct": 265.6094394028497,
+        "cagrPct": 83.36213822077208,
+        "maxDDPct": 1.9875250000000246,
+        "avgHoldHours": 1.0303030303030303,
+        "worstLosingStreak": 4
+      }
+    ],
+    "personal": [
+      {
+        "mode": "personal",
+        "variant": "baseline",
+        "trades": 396,
+        "tradesPerDay": 0.5086364913501291,
+        "winRate": 78.03030303030303,
+        "profitFactor": 3.6780414741166183,
+        "expectancy": 6.71673877996908,
+        "netPnL": 2659.8285568677557,
+        "startingEquity": 1000,
+        "endingEquity": 3659.8285568677575,
+        "totalReturnPct": 265.98285568677574,
+        "cagrPct": 83.79852720132999,
+        "maxDDPct": 1.9850499375000208,
+        "avgHoldHours": 1.0303030303030303,
+        "worstLosingStreak": 4
+      },
+      {
+        "mode": "personal",
+        "variant": "preservation",
+        "trades": 396,
+        "tradesPerDay": 0.5086364913501291,
+        "winRate": 78.03030303030303,
+        "profitFactor": 3.6913619154847717,
+        "expectancy": 6.643901239554904,
+        "netPnL": 2630.9848908637423,
+        "startingEquity": 1000,
+        "endingEquity": 3630.9848908637427,
+        "totalReturnPct": 263.09848908637423,
+        "cagrPct": 83.11752971282877,
+        "maxDDPct": 1.985049937500004,
+        "avgHoldHours": 1.0303030303030303,
+        "worstLosingStreak": 4
+      },
+      {
+        "mode": "personal",
+        "variant": "healthy_equity_aggression",
+        "trades": 396,
+        "tradesPerDay": 0.5086364913501291,
+        "winRate": 78.03030303030303,
+        "profitFactor": 3.736367496811089,
+        "expectancy": 8.738197306094559,
+        "netPnL": 3460.3261332134457,
+        "startingEquity": 1000,
+        "endingEquity": 4460.326133213445,
+        "totalReturnPct": 346.0326133213445,
+        "cagrPct": 101.67121593844679,
+        "maxDDPct": 2.0345015370000015,
+        "avgHoldHours": 1.0303030303030303,
+        "worstLosingStreak": 4
+      },
+      {
+        "mode": "personal",
+        "variant": "milestone_derisk",
+        "trades": 396,
+        "tradesPerDay": 0.5086364913501291,
+        "winRate": 78.03030303030303,
+        "profitFactor": 3.8899336971472285,
+        "expectancy": 3.4878543220614504,
+        "netPnL": 1381.1903115363343,
+        "startingEquity": 1000,
+        "endingEquity": 2381.1903115363334,
+        "totalReturnPct": 138.11903115363333,
+        "cagrPct": 50.23434362311507,
+        "maxDDPct": 1.19461079190003,
+        "avgHoldHours": 1.0303030303030303,
+        "worstLosingStreak": 4
+      }
+    ],
+    "prop": [
+      {
+        "mode": "prop",
+        "variant": "baseline",
+        "trades": 393,
+        "tradesPerDay": 0.5047831845974766,
+        "winRate": 77.86259541984732,
+        "profitFactor": 3.7756580379726246,
+        "expectancy": 56.95225001846406,
+        "netPnL": 22382.234257256376,
+        "startingEquity": 25000,
+        "endingEquity": 47382.23425725635,
+        "totalReturnPct": 89.5289370290254,
+        "cagrPct": 34.97978239023949,
+        "maxDDPct": 1.4906561914648149,
+        "avgHoldHours": 1.0303030303030303,
+        "worstLosingStreak": 4,
+        "governanceEvents": {
+          "dailyLossLock": 0,
+          "trailingDrawdownLock": 0,
+          "maxConsecutiveLossLock": 2
+        },
+        "survivesFullPeriod": true
+      },
+      {
+        "mode": "prop",
+        "variant": "preservation_governance_safe",
+        "trades": 389,
+        "tradesPerDay": 0.4996454422606066,
+        "winRate": 78.40616966580977,
+        "profitFactor": 3.9578190298451745,
+        "expectancy": 48.19188120427195,
+        "netPnL": 18746.641788461788,
+        "startingEquity": 25000,
+        "endingEquity": 43746.64178846177,
+        "totalReturnPct": 74.98656715384709,
+        "cagrPct": 30.017931938967557,
+        "maxDDPct": 1.0257846064721676,
+        "avgHoldHours": 1.0303030303030303,
+        "worstLosingStreak": 3,
+        "governanceEvents": {
+          "dailyLossLock": 0,
+          "trailingDrawdownLock": 0,
+          "maxConsecutiveLossLock": 4
+        },
+        "survivesFullPeriod": true
+      },
+      {
+        "mode": "prop",
+        "variant": "tighter_defensive",
+        "trades": 363,
+        "tradesPerDay": 0.46625011707095165,
+        "winRate": 77.96143250688705,
+        "profitFactor": 3.9119664812483523,
+        "expectancy": 29.929446785241133,
+        "netPnL": 10864.389183042531,
+        "startingEquity": 25000,
+        "endingEquity": 35864.38918304255,
+        "totalReturnPct": 43.4575567321702,
+        "cagrPct": 18.44732173853958,
+        "maxDDPct": 0.7477533724695156,
+        "avgHoldHours": 1.0303030303030303,
+        "worstLosingStreak": 2,
+        "governanceEvents": {
+          "dailyLossLock": 0,
+          "trailingDrawdownLock": 0,
+          "maxConsecutiveLossLock": 17
+        },
+        "survivesFullPeriod": true
+      }
+    ]
+  }
+}

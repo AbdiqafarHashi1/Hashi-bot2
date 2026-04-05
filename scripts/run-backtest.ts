@@ -5,7 +5,16 @@ import { loadCandlesFromCsv } from "../packages/core/src/backtest/csv-loader";
 import type { BacktestConfig } from "../packages/core/src/backtest/types";
 import type { BacktestRunOutput } from "../packages/core/src/backtest/backtest-engine";
 import { ACTIVE_PRODUCTION_STRATEGY_IDS, STRATEGY_REGISTRY, getStrategyById, getProductionStrategies } from "../packages/core/src/backtest/strategy-registry";
-import { DATASET_PRESETS, DEFAULT_BREAKOUT_HARNESS_STRATEGY_ID, MODE_POLICIES, type HarnessMode } from "./backtest-harness";
+import {
+  CAPITAL_POLICY_PROFILES,
+  DATASET_PRESETS,
+  DEFAULT_BREAKOUT_HARNESS_STRATEGY_ID,
+  DEFAULT_CAPITAL_POLICY_BY_MODE,
+  MODE_POLICIES,
+  type CapitalPolicyProfile,
+  type CapitalPolicyProfileId,
+  type HarnessMode
+} from "./backtest-harness";
 
 const args = process.argv.slice(2);
 const arg = (name: string, fallback?: string) => {
@@ -60,8 +69,6 @@ type ComparisonRow = {
 };
 
 const BREAKOUT_STRATEGY_IDS = new Set(["compression_breakout_strict", "compression_breakout_balanced"]);
-const SWING_STRATEGY_IDS = new Set(["swing_continuation_strict", "swing_continuation_balanced"]);
-type OperatingMode = "stable" | "growth" | "bounded_aggression";
 
 type RuntimeRiskProfile = {
   riskMode: "balanced" | "aggressive";
@@ -72,68 +79,26 @@ type RuntimeRiskProfile = {
   maxPositionNotional?: number;
 };
 
-function parseNumber(value?: string): number | undefined {
-  if (!value) return undefined;
-  const num = Number(value);
-  return Number.isFinite(num) ? num : undefined;
+function resolveCapitalPolicyProfile(mode: HarnessMode): CapitalPolicyProfile {
+  const requested = (arg("capital-policy", process.env.CAPITAL_POLICY_ID) ?? DEFAULT_CAPITAL_POLICY_BY_MODE[mode]) as CapitalPolicyProfileId;
+  const profile = CAPITAL_POLICY_PROFILES[requested];
+  if (!profile) {
+    throw new Error(`Unknown capital policy profile: ${requested}. Available profiles: ${Object.keys(CAPITAL_POLICY_PROFILES).join(", ")}`);
+  }
+  if (profile.mode !== mode) {
+    throw new Error(`Capital policy profile ${requested} is for mode=${profile.mode}, but requested mode=${mode}`);
+  }
+  return profile;
 }
 
-function resolveRiskProfile(strategyId: string): RuntimeRiskProfile {
-  const breakoutMode = (process.env.BREAKOUT_OPERATING_MODE as OperatingMode | undefined) ?? "stable";
-  const swingMode = (process.env.SWING_OPERATING_MODE as OperatingMode | undefined) ?? "stable";
-  const isBreakout = BREAKOUT_STRATEGY_IDS.has(strategyId);
-  const isSwing = SWING_STRATEGY_IDS.has(strategyId);
-
-  const modeDefaults: RuntimeRiskProfile | undefined = isBreakout
-    ? breakoutMode === "bounded_aggression"
-      ? {
-          riskMode: "aggressive",
-          baseRiskPct: 0.045,
-          maxRiskPctCap: 0.05,
-          sizeModMin: 0.9,
-          sizeModMax: 1.2,
-          maxPositionNotional: 60_000
-        }
-      : breakoutMode === "growth"
-        ? {
-            riskMode: "aggressive",
-            baseRiskPct: 0.03,
-            maxRiskPctCap: 0.05,
-            sizeModMin: 0.7,
-            sizeModMax: 1.2
-          }
-        : {
-            riskMode: "balanced",
-            baseRiskPct: 0.01,
-            maxRiskPctCap: 0.025,
-            sizeModMin: 0.7,
-            sizeModMax: 1.0
-          }
-    : isSwing
-      ? swingMode === "growth"
-        ? {
-            riskMode: "aggressive",
-            baseRiskPct: 0.015,
-            maxRiskPctCap: 0.03,
-            sizeModMin: 0.85,
-            sizeModMax: 1.05
-          }
-        : {
-            riskMode: "balanced",
-            baseRiskPct: 0.008,
-            maxRiskPctCap: 0.02,
-            sizeModMin: 0.85,
-            sizeModMax: 1.0
-          }
-      : undefined;
-
+function resolveRiskProfile(policyProfile: CapitalPolicyProfile): RuntimeRiskProfile {
   return {
-    riskMode: (process.env.RISK_MODE as "balanced" | "aggressive" | undefined) ?? modeDefaults?.riskMode ?? "balanced",
-    baseRiskPct: parseNumber(process.env.BASE_RISK_PCT) ?? modeDefaults?.baseRiskPct,
-    maxRiskPctCap: parseNumber(process.env.MAX_RISK_PCT_CAP) ?? modeDefaults?.maxRiskPctCap,
-    sizeModMin: parseNumber(process.env.SIZE_MOD_MIN) ?? modeDefaults?.sizeModMin,
-    sizeModMax: parseNumber(process.env.SIZE_MOD_MAX) ?? modeDefaults?.sizeModMax,
-    maxPositionNotional: parseNumber(process.env.MAX_POSITION_NOTIONAL) ?? modeDefaults?.maxPositionNotional
+    riskMode: policyProfile.runtimeRisk.riskMode,
+    baseRiskPct: policyProfile.runtimeRisk.baseRiskPct,
+    maxRiskPctCap: policyProfile.runtimeRisk.maxRiskPctCap,
+    sizeModMin: policyProfile.runtimeRisk.sizeModMin,
+    sizeModMax: policyProfile.runtimeRisk.sizeModMax,
+    maxPositionNotional: policyProfile.runtimeRisk.maxPositionNotional
   };
 }
 
@@ -164,7 +129,8 @@ async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h
   const recentCandles = Number(arg("recent-candles", "0"));
   const candles = recentCandles > 0 ? loadedCandles.slice(-recentCandles) : loadedCandles;
   const engine = new BacktestEngine(entry.create());
-  const riskProfile = resolveRiskProfile(strategyId);
+  const policyProfile = resolveCapitalPolicyProfile(mode);
+  const riskProfile = resolveRiskProfile(policyProfile);
   const modePolicy = MODE_POLICIES[mode];
   const config: BacktestConfig = {
     name: name ?? `${strategyId}-${Date.now()}`,
@@ -187,7 +153,13 @@ async function runSingle(dataset: string, symbol: string, timeframe: "15m" | "1h
   };
 
   const output = await engine.run(candles, config);
-  const outPath = await persistResult(config.name, output, { runMode: "single", strategy: entry, harnessMode: mode, modePolicy });
+  const outPath = await persistResult(config.name, output, {
+    runMode: "single",
+    strategy: entry,
+    harnessMode: mode,
+    modePolicy,
+    capitalPolicyProfile: policyProfile
+  });
   return { entry, output, outPath };
 }
 
