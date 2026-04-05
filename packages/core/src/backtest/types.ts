@@ -19,6 +19,12 @@ export type BacktestConfig = {
   warmupCandles: number;
   minScore?: number;
   oneTradeAtTime?: boolean;
+  executionRealism?: {
+    enabled: boolean;
+    takerFeeRate: number;
+    slippagePct: number;
+    delayMode: "none" | "next_candle";
+  };
 };
 
 export type TradeOutcomeType = "stop" | "tp1_only" | "tp2" | "partial_then_stop" | "time_exit";
@@ -48,9 +54,16 @@ export type OpenTrade = {
   state: "open" | "partial";
   remainingQty: number;
   realizedPnl: number;
+  feesPaid: number;
   mfe: number;
   mae: number;
   hadPartialExit: boolean;
+  rootSignalId?: string;
+  parentTradeId?: string;
+  continuationSpawned?: boolean;
+  setupGradeBucket?: "A_PLUS" | "A" | "B";
+  setupRiskScale?: number;
+  setupLeverageScale?: number;
   entryAtr?: number;
   shadowComparison?: {
     loserStrategyId: string;
@@ -104,6 +117,7 @@ export type ClosedTrade = {
   exitReason: "tp2" | "stop" | "time_exit";
   outcomeType: TradeOutcomeType;
   pnl: number;
+  feesPaid: number;
   rMultiple: number;
   mfe: number;
   mae: number;

@@ -17,7 +17,8 @@ export function updateMfeMae(trade: OpenTrade, candle: Candle) {
 export function processTradeOnCandle(
   trade: OpenTrade,
   candle: Candle,
-  index: number
+  index: number,
+  takerFeeRate = 0
 ): { stillOpen: OpenTrade | null; closed?: ClosedTrade } {
   updateMfeMae(trade, candle);
 
@@ -27,7 +28,9 @@ export function processTradeOnCandle(
 
   if (trade.state === "open") {
     if (stopHit) {
-      const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, trade.stop, trade.remainingQty);
+      const exitFee = takerFee(trade.stop, trade.remainingQty, takerFeeRate);
+      trade.feesPaid += exitFee;
+      const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, trade.stop, trade.remainingQty) - exitFee;
       return {
         stillOpen: null,
         closed: closeTrade(trade, candle.openTime, index, "stop", pnl)
@@ -36,13 +39,17 @@ export function processTradeOnCandle(
 
     if (tp1Hit) {
       const qtyToClose = trade.quantity * 0.5;
-      trade.realizedPnl += pnlFor(trade.side, trade.entry, trade.tp1, qtyToClose);
+      const tp1Fee = takerFee(trade.tp1, qtyToClose, takerFeeRate);
+      trade.feesPaid += tp1Fee;
+      trade.realizedPnl += pnlFor(trade.side, trade.entry, trade.tp1, qtyToClose) - tp1Fee;
       trade.remainingQty -= qtyToClose;
       trade.state = "partial";
       trade.hadPartialExit = true;
 
       if (tp2Hit) {
-        const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, trade.tp2, trade.remainingQty);
+        const exitFee = takerFee(trade.tp2, trade.remainingQty, takerFeeRate);
+        trade.feesPaid += exitFee;
+        const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, trade.tp2, trade.remainingQty) - exitFee;
         return {
           stillOpen: null,
           closed: closeTrade(trade, candle.openTime, index, "tp2", pnl)
@@ -53,7 +60,9 @@ export function processTradeOnCandle(
 
   if (trade.state === "partial") {
     if (stopHit) {
-      const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, trade.stop, trade.remainingQty);
+      const exitFee = takerFee(trade.stop, trade.remainingQty, takerFeeRate);
+      trade.feesPaid += exitFee;
+      const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, trade.stop, trade.remainingQty) - exitFee;
       return {
         stillOpen: null,
         closed: closeTrade(trade, candle.openTime, index, "stop", pnl)
@@ -61,7 +70,9 @@ export function processTradeOnCandle(
     }
 
     if (tp2Hit) {
-      const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, trade.tp2, trade.remainingQty);
+      const exitFee = takerFee(trade.tp2, trade.remainingQty, takerFeeRate);
+      trade.feesPaid += exitFee;
+      const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, trade.tp2, trade.remainingQty) - exitFee;
       return {
         stillOpen: null,
         closed: closeTrade(trade, candle.openTime, index, "tp2", pnl)
@@ -71,7 +82,9 @@ export function processTradeOnCandle(
 
   const earlyExit = evaluateEarlyExit(trade, candle, index);
   if (earlyExit) {
-    const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, earlyExit.exitPrice, trade.remainingQty);
+    const exitFee = takerFee(earlyExit.exitPrice, trade.remainingQty, takerFeeRate);
+    trade.feesPaid += exitFee;
+    const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, earlyExit.exitPrice, trade.remainingQty) - exitFee;
     return {
       stillOpen: null,
       closed: closeTrade(trade, candle.openTime, index, "time_exit", pnl)
@@ -119,11 +132,14 @@ function closeTrade(
     exitReason,
     outcomeType,
     pnl,
+    feesPaid: trade.feesPaid,
     rMultiple: trade.riskAmount ? pnl / trade.riskAmount : 0,
     mfe: trade.riskAmount ? trade.mfe / Math.abs(trade.entry - trade.stop) : 0,
     mae: trade.riskAmount ? trade.mae / Math.abs(trade.entry - trade.stop) : 0
   };
 }
+
+const takerFee = (price: number, qty: number, feeRate: number) => Math.abs(price * qty) * Math.max(feeRate, 0);
 
 function evaluateEarlyExit(trade: OpenTrade, candle: Candle, index: number): { exitPrice: number } | null {
   const policy = trade.earlyExitPolicy;

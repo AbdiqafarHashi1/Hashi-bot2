@@ -5,6 +5,7 @@ const providerSchema = z.enum(["binance", "bybit"]);
 const timeframeSchema = z.enum(["15m", "1h", "4h"] satisfies [Timeframe, ...Timeframe[]]);
 const breakoutOperatingModeSchema = z.enum(["stable", "growth", "bounded_aggression"]);
 const executionModeSchema = z.enum(["signal_only", "live_personal", "live_prop"]);
+const execDelayModeSchema = z.enum(["none", "next_candle"]);
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -31,7 +32,14 @@ const envSchema = z.object({
   MAX_RISK_PCT_CAP: z.coerce.number().positive().default(0.025),
   SIZE_MOD_MIN: z.coerce.number().positive().default(0.7),
   SIZE_MOD_MAX: z.coerce.number().positive().default(1.2),
-  MAX_POSITION_NOTIONAL: z.coerce.number().positive().optional()
+  MAX_POSITION_NOTIONAL: z.coerce.number().positive().optional(),
+  EXEC_REALISM_ENABLED: z
+    .union([z.literal("1"), z.literal("0"), z.boolean()])
+    .transform((value) => value === "1" || value === true)
+    .default(false),
+  SLIPPAGE_PCT: z.coerce.number().min(0).default(0),
+  EXEC_DELAY_MODE: execDelayModeSchema.default("none"),
+  TAKER_FEE_RATE: z.coerce.number().min(0).default(0.0006)
 });
 
 export type RuntimeConfig = z.infer<typeof envSchema>;

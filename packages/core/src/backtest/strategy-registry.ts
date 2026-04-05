@@ -39,7 +39,56 @@ export const ACTIVE_PRODUCTION_STRATEGY_IDS = (Object.entries(PRODUCTION_STRATEG
   .map(([id]) => id)) as StrategyRegistryEntry["id"][];
 
 const trend = (cfg: TrendProfileConfig) => () => new TrendPullbackContinuationStrategy(cfg);
-const breakout = (cfg: BreakoutProfileConfig) => () => new CompressionBreakoutRetestStrategy(cfg);
+type BreakoutEntryMode = "signal" | "personal" | "prop";
+export const PERSONAL_AGGRESSIVE_ENTRY_PROFILE = "personal_aggressive_entry";
+
+const resolveReinforcedBreakoutByMode = (cfg: BreakoutProfileConfig): BreakoutProfileConfig => {
+  const mode = (process.env.BREAKOUT_ENTRY_MODE ?? "signal") as BreakoutEntryMode;
+  if (mode === "personal") {
+    // personal_aggressive_entry: mode-specific loosening for growth-oriented participation.
+    return {
+      ...cfg,
+      minBreakoutBodyAtr: (cfg.minBreakoutBodyAtr ?? 0) * 0.7,
+      minRangeExpansionRatio: Math.max(0.9, (cfg.minRangeExpansionRatio ?? 0) - 0.25),
+      minPreBreakImpulseRatio: Math.max(0.12, (cfg.minPreBreakImpulseRatio ?? 0) - 0.14),
+      minCloseLocationRatio: Math.max(0.45, (cfg.minCloseLocationRatio ?? 0) - 0.12),
+      entryBufferAtr: Math.max(0, (cfg.entryBufferAtr ?? 0) - 0.05),
+      tp2RMultiple: Math.max(2.8, (cfg.tp2RMultiple ?? 2.35) + 0.35)
+    };
+  }
+  if (mode === "prop") {
+    return {
+      ...cfg,
+      minBreakoutBodyAtr: (cfg.minBreakoutBodyAtr ?? 0) * 0.9,
+      minRangeExpansionRatio: Math.max(1.06, (cfg.minRangeExpansionRatio ?? 0) - 0.04),
+      minPreBreakImpulseRatio: Math.max(0, (cfg.minPreBreakImpulseRatio ?? 0) - 0.03),
+      minCloseLocationRatio: Math.max(0, (cfg.minCloseLocationRatio ?? 0) - 0.02),
+      entryBufferAtr: Math.max(0, (cfg.entryBufferAtr ?? 0) - 0.01),
+      tp2RMultiple: Math.max(2.35, (cfg.tp2RMultiple ?? 2.35) - 0.05)
+    };
+  }
+  return cfg;
+};
+
+const resolveBreakoutProfile = (cfg: BreakoutProfileConfig): BreakoutProfileConfig => {
+  const profile = process.env.BREAKOUT_EDGE_PROFILE === "baseline" ? "baseline" : "reinforced";
+  if (profile === "baseline") {
+    return {
+      ...cfg,
+      minBreakoutBodyAtr: 0,
+      minBreakoutRangeAtr: 0,
+      minCloseLocationRatio: 0,
+      minRangeExpansionRatio: 0,
+      minPreBreakImpulseRatio: 0,
+      entryBufferAtr: 0,
+      tp1RMultiple: 1.0,
+      tp2RMultiple: 2.0,
+      strongTp2Boost: 1
+    };
+  }
+  return resolveReinforcedBreakoutByMode(cfg);
+};
+const breakout = (cfg: BreakoutProfileConfig) => () => new CompressionBreakoutRetestStrategy(resolveBreakoutProfile(cfg));
 const swing = (cfg: SwingProfileConfig) => () => new SwingContinuationStrategy(cfg);
 const meanReversion = (cfg: MeanReversionProfileConfig) => () => new MeanReversionSnapbackStrategy(cfg);
 const combinedBreakoutSwing = () =>
@@ -52,7 +101,17 @@ const combinedBreakoutSwing = () =>
       minBreakoutStrength: 0.5,
       minBreakoutCloseOffsetAtr: 0.15,
       maxChaseDistanceAtr: 0.8,
-      minRoomToTargetR: 1.35
+      minRoomToTargetR: 1.35,
+      minBreakoutBodyAtr: 0.24,
+      minBreakoutRangeAtr: 0.72,
+      minCloseLocationRatio: 0.6,
+      minRangeExpansionRatio: 1.15,
+      minPreBreakImpulseRatio: 0.3,
+      entryBufferAtr: 0.05,
+      tp1RMultiple: 1.1,
+      tp2RMultiple: 2.35,
+      strongBreakoutThreshold: 0.72,
+      strongTp2Boost: 1.08
     }),
     new SwingContinuationStrategy({
       strategyId: "swing_continuation_balanced",
@@ -242,7 +301,26 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
     productionEligible: true,
     experimental: false,
     minScore: 64,
-    create: breakout({ strategyId: "compression_breakout_strict", profileType: "strict", maxCompression: 0.018, maxContraction: 0.72, minBreakoutStrength: 0.62, minBreakoutCloseOffsetAtr: 0.22, maxChaseDistanceAtr: 0.50, minRoomToTargetR: 1.7 })
+    create: breakout({
+      strategyId: "compression_breakout_strict",
+      profileType: "strict",
+      maxCompression: 0.018,
+      maxContraction: 0.72,
+      minBreakoutStrength: 0.62,
+      minBreakoutCloseOffsetAtr: 0.22,
+      maxChaseDistanceAtr: 0.50,
+      minRoomToTargetR: 1.7,
+      minBreakoutBodyAtr: 0.34,
+      minBreakoutRangeAtr: 0.9,
+      minCloseLocationRatio: 0.66,
+      minRangeExpansionRatio: 1.22,
+      minPreBreakImpulseRatio: 0.34,
+      entryBufferAtr: 0.06,
+      tp1RMultiple: 1.15,
+      tp2RMultiple: 2.55,
+      strongBreakoutThreshold: 0.74,
+      strongTp2Boost: 1.1
+    })
   },
   {
     id: "compression_breakout_balanced",
@@ -254,7 +332,26 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
     productionEligible: true,
     experimental: false,
     minScore: 57,
-    create: breakout({ strategyId: "compression_breakout_balanced", profileType: "balanced", maxCompression: 0.024, maxContraction: 0.82, minBreakoutStrength: 0.5, minBreakoutCloseOffsetAtr: 0.15, maxChaseDistanceAtr: 0.80, minRoomToTargetR: 1.35 })
+    create: breakout({
+      strategyId: "compression_breakout_balanced",
+      profileType: "balanced",
+      maxCompression: 0.024,
+      maxContraction: 0.82,
+      minBreakoutStrength: 0.5,
+      minBreakoutCloseOffsetAtr: 0.15,
+      maxChaseDistanceAtr: 0.80,
+      minRoomToTargetR: 1.35,
+      minBreakoutBodyAtr: 0.24,
+      minBreakoutRangeAtr: 0.72,
+      minCloseLocationRatio: 0.6,
+      minRangeExpansionRatio: 1.15,
+      minPreBreakImpulseRatio: 0.3,
+      entryBufferAtr: 0.05,
+      tp1RMultiple: 1.1,
+      tp2RMultiple: 2.35,
+      strongBreakoutThreshold: 0.72,
+      strongTp2Boost: 1.08
+    })
   },
   {
     id: "mean_reversion_strict",

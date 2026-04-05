@@ -1,0 +1,83 @@
+{
+  "generatedAt": "2026-04-05T13:53:21.841Z",
+  "assumptions": {
+    "dataset": "data/ETHUSDT_15m.csv",
+    "realism": {
+      "EXEC_REALISM_ENABLED": "1",
+      "TAKER_FEE_RATE": "0.0006",
+      "SLIPPAGE_PCT": "0.05",
+      "EXEC_DELAY_MODE": "none"
+    }
+  },
+  "comparison": {
+    "baseline": {
+      "profile": "personal_aggressive_entry",
+      "metrics": {
+        "trades": 365,
+        "tradesPerDay": 0.46766766766766765,
+        "winRatePct": 50.136986301369866,
+        "profitFactor": 1.0973265116513737,
+        "expectancy": 2.692482388063616,
+        "netPnL": 982.7560716432198,
+        "endingEquity": 10982.756071643229,
+        "maxDdPct": 10.377716629267729,
+        "avgHoldHours": 1.6082191780821917
+      },
+      "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-edge-reinforcement-personal-personal_aggressive_entry-1775397180967.json"
+    },
+    "upgraded": {
+      "profile": "personal_throughput_expanded",
+      "metrics": {
+        "trades": 404,
+        "tradesPerDay": 0.5176376376376376,
+        "winRatePct": 48.76237623762376,
+        "profitFactor": 1.086026178357236,
+        "expectancy": 2.6886137344258034,
+        "netPnL": 1086.1999487080245,
+        "endingEquity": 11086.199948708036,
+        "maxDdPct": 12.092283156744292,
+        "avgHoldHours": 1.676980198019802
+      },
+      "outPath": "/workspace/Hashi-bot2/runtime/backtests/phase-edge-reinforcement-personal-personal_throughput_expanded-1775397191044.json"
+    },
+    "delta": {
+      "trades": 39,
+      "tradesPerDay": 0.04996996996996994,
+      "winRatePct": -1.374610063746104,
+      "profitFactor": -0.01130033329413771,
+      "expectancy": -0.0038686536378125247,
+      "netPnL": 103.44387706480472,
+      "endingEquity": 103.44387706480666,
+      "maxDdPct": 1.7145665274765634,
+      "avgHoldHours": 0.0687610199376103
+    }
+  },
+  "gradeAwareScaling": {
+    "buckets": {
+      "A_PLUS": {
+        "minScore": 78,
+        "leverageScale": 1.1,
+        "riskScale": 1.15
+      },
+      "A": {
+        "minScore": 66,
+        "leverageScale": 1,
+        "riskScale": 1
+      },
+      "B": {
+        "minScore": 0,
+        "leverageScale": 0.9,
+        "riskScale": 0.85
+      }
+    },
+    "continuationRiskScale": 0.5,
+    "capsInteraction": "All scaled risk remains bounded by existing baseRiskPct/maxRiskPctCap in resolvePositionSizing."
+  },
+  "diagnosis": {
+    "throughputImprovedEnough": false,
+    "pfStayedAboveOne": true,
+    "ddAcceptable": true,
+    "gradeAwareScalingHelpedNetPnl": true
+  },
+  "verdict": "READY WITH MINOR ADJUSTMENTS"
+}
