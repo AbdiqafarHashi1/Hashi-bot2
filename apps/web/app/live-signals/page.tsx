@@ -110,6 +110,11 @@ export default function Page() {
       {loading && <p className="rounded border border-slate-800 bg-slate-900/70 p-3 text-sm text-slate-300">Loading signal room…</p>}
       {error && <p className="rounded border border-rose-700/50 bg-rose-900/20 p-3 text-sm text-rose-200">{error}</p>}
 
+
+      {!loading && !error && !data && (
+        <p className="rounded border border-slate-800 bg-slate-900/70 p-3 text-sm text-slate-300">Signal room data unavailable.</p>
+      )}
+
       {data && (
         <>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
