@@ -184,3 +184,30 @@ Stop the full stack:
 ```bash
 docker compose down
 ```
+
+## Signal mode restart + reset policy
+
+Signal mode is paper-only and non-executing. Restart behavior is explicit via env:
+
+- `SIGNAL_RESTART_POLICY=resume_persisted` keeps persisted signal-mode state on worker boot.
+- `SIGNAL_RESTART_POLICY=reset_signal_mode_state_on_boot` clears signal-mode lifecycle state on worker boot.
+
+Additional reset controls:
+
+- `SIGNAL_RESET_CLEAR_RECENT_SIGNALS` (default `false`) clears persisted `SignalEvent` rows during boot reset.
+- `SIGNAL_RESET_CLEAR_RUNTIME_EVENTS` (default `true`) clears signal-mode runtime events during boot reset.
+
+Paper sizing model controls:
+
+- `SIGNAL_PAPER_EQUITY` (default `10000`)
+- `SIGNAL_PAPER_RISK_PCT` (default `0.01`)
+- `SIGNAL_PAPER_LEVERAGE` (default `1`)
+- `SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS` (default `10`)
+
+Manual operator reset endpoint:
+
+```bash
+curl -X POST http://localhost:3000/api/signal-room/reset \\
+  -H 'Content-Type: application/json' \\
+  -d '{\"clearRecentSignals\":false,\"clearRuntimeEvents\":true}'
+```

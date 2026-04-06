@@ -13,8 +13,17 @@ type SignalRoomPayload = {
     winCount: number;
     lossCount: number;
     partialWinCount: number;
+    latestSignalTimestamp: string | null;
   };
-  recentSignals: Array<{ generatedAt: string }>;
+  reconciliation: {
+    persistedTotals: {
+      totalOpenSignals: number;
+      totalClosedSignals: number;
+      totalResolvedSignals: number;
+      totalTelegramDispatchRecords: number;
+      totalPersistedSignals: number;
+    };
+  };
 };
 
 type PersonalRoomPayload = {
@@ -140,8 +149,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     let mounted = true;
-
-    Promise.all([
+    const load = () => Promise.all([
       fetch("/api/signal-room").then((res) => (res.ok ? (res.json() as Promise<SignalRoomPayload>) : null)),
       fetch("/api/personal-room").then((res) => (res.ok ? (res.json() as Promise<PersonalRoomPayload>) : null)),
       fetch("/api/prop-room").then((res) => (res.ok ? (res.json() as Promise<PropRoomPayload>) : null)),
@@ -177,12 +185,18 @@ export default function DashboardPage() {
         setLoading(false);
       });
 
+    void load();
+    const timer = setInterval(() => {
+      void load();
+    }, 7000);
+
     return () => {
       mounted = false;
+      clearInterval(timer);
     };
   }, []);
 
-  const latestSignalAt = useMemo(() => data.signalRoom?.recentSignals?.[0]?.generatedAt ?? null, [data.signalRoom]);
+  const latestSignalAt = useMemo(() => data.signalRoom?.summary.latestSignalTimestamp ?? null, [data.signalRoom]);
 
   async function persistSystemControl(patch: Partial<Pick<SystemControlPayload, "isRunning" | "activeMode" | "killSwitchActive" | "allowedSymbols">>) {
     setControlSaving(true);
@@ -237,8 +251,8 @@ export default function DashboardPage() {
           <Card title="Signal Mode Summary">
             {data.signalRoom ? (
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-2">
-                <Kpi label="Open trades" value={String(data.signalRoom.summary.openCount)} />
-                <Kpi label="Closed trades" value={String(data.signalRoom.summary.closedCount)} />
+                <Kpi label="Open trades (DB total)" value={String(data.signalRoom.reconciliation.persistedTotals.totalOpenSignals)} />
+                <Kpi label="Closed trades (DB total)" value={String(data.signalRoom.reconciliation.persistedTotals.totalClosedSignals)} />
                 <Kpi label="Wins" value={String(data.signalRoom.summary.winCount)} />
                 <Kpi label="Losses" value={String(data.signalRoom.summary.lossCount)} />
                 <Kpi label="Partial wins" value={String(data.signalRoom.summary.partialWinCount)} />
@@ -293,8 +307,8 @@ export default function DashboardPage() {
                 <p>Trailing drawdown lock: <span className="font-medium">{String(data.controlRoom.governance.locks.trailingDrawdown)}</span></p>
                 <p>Max consecutive loss lock: <span className="font-medium">{String(data.controlRoom.governance.locks.maxConsecutiveLoss)}</span></p>
                 <p>Telegram signal output enabled: <span className="font-medium">{String(data.controlRoom.telegram.signalOutputEnabled)}</span></p>
-                <p>Recent runtime events: <span className="font-medium">{data.runtimeEvents.length}</span></p>
-                <p>Recent incidents: <span className="font-medium">{data.incidents.length}</span></p>
+                <p>Recent runtime events (latest 100): <span className="font-medium">{data.runtimeEvents.length}</span></p>
+                <p>Recent incidents (latest 100): <span className="font-medium">{data.incidents.length}</span></p>
                 <p>Unresolved incidents: <span className="font-medium">{data.incidents.filter((incident) => !incident.resolved).length}</span></p>
               </div>
             ) : (
