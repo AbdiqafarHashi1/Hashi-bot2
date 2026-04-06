@@ -167,20 +167,20 @@ That removes `localhost` vs Docker-service hostname ambiguity without splitting 
 
 ### Daily commands
 
-Start infra (Docker):
+Start the full stack (Docker-first):
 
 ```bash
-docker compose up -d postgres redis
+docker compose up -d
 ```
 
-Start web (local pnpm):
+Inspect app logs:
 
 ```bash
-pnpm --filter @hashi/web dev
+docker compose logs -f web worker
 ```
 
-Start worker (local pnpm):
+Stop the full stack:
 
 ```bash
-pnpm --filter @hashi/worker dev
+docker compose down
 ```
