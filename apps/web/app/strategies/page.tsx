@@ -9,8 +9,8 @@ export default function Page() {
   return (
     <section className="space-y-5">
       <header>
-        <h1 className="text-3xl font-bold">Strategy + Symbol Context</h1>
-        <p className="mt-1 text-sm text-slate-400">Current strategy posture and multi-symbol runtime context.</p>
+        <h1 className="text-3xl font-bold">Strategies</h1>
+        <p className="mt-1 text-sm text-slate-400">Read-only runtime strategy posture and symbol context from current backend state.</p>
       </header>
 
       <PageState loading={loading} error={error} />

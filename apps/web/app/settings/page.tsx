@@ -36,7 +36,7 @@ export default function SettingsPage() {
     <section className="space-y-5">
       <header>
         <h1 className="text-3xl font-bold">Settings</h1>
-        <p className="mt-1 text-sm text-slate-400">DB-backed engine configuration and persisted settings snapshot.</p>
+        <p className="mt-1 text-sm text-slate-400">Persisted settings snapshot view. Runtime mutation controls are not exposed on this page yet.</p>
       </header>
 
       <div className="rounded border border-slate-800 bg-slate-900/70 p-4">

@@ -56,6 +56,235 @@ model Signal {
   createdAt DateTime @default(now())
 }
 
+model SignalEvent {
+  id          String   @id @default(cuid())
+  symbol      String
+  side        String
+  entry       Float
+  stop        Float
+  tp1         Float
+  tp2         Float
+  score       Float
+  confidence  Float?
+  strategy    String?
+  timeframe   String?
+  generatedAt DateTime @default(now())
+
+  signalTrade SignalTrade?
+
+  createdAt DateTime @default(now())
+}
+
+model SignalTrade {
+  id            String   @id @default(cuid())
+  signalEventId String   @unique
+  symbol        String
+  side          String
+  entryPrice    Float
+  stopPrice     Float
+  tp1Price      Float
+  tp2Price      Float
+  status        String
+  currentPrice  Float?
+  openedAt      DateTime
+  tp1HitAt      DateTime?
+  tp2HitAt      DateTime?
+  stopHitAt     DateTime?
+  closedAt      DateTime?
+  outcome       String?
+  unrealizedPnl Float?
+  realizedPnl   Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  signalEvent SignalEvent @relation(fields: [signalEventId], references: [id], onDelete: Cascade)
+}
+
+model SignalOutcome {
+  id              String   @id @default(cuid())
+  symbol          String
+  side            String
+  entry           Float
+  stop            Float
+  tp1             Float
+  tp2             Float
+  score           Float
+  tier            String
+  status          String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  resolvedAt      DateTime?
+  tp1HitAt        DateTime?
+  tp2HitAt        DateTime?
+  protectedStopArmedAt DateTime?
+  protectedStopPrice   Float?
+  mfe             Float?
+  mae             Float?
+  durationSeconds Int?
+  realizedR       Float?
+  partialRealizedR Float?
+  finalResolvedR  Float?
+}
+
+model PersonalConnectorStatus {
+  id          String   @id @default(cuid())
+  connector   String
+  status      String
+  authPresent Boolean
+  lastSyncAt  DateTime?
+  lastError   String?
+  mode        String   @default("personal")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PersonalAccountSnapshot {
+  id              String   @id @default(cuid())
+  connector       String
+  equity          Float?
+  balance         Float?
+  availableMargin Float?
+  usedMargin      Float?
+  unrealizedPnl   Float?
+  realizedPnl     Float?
+  capturedAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+}
+
+model PersonalPosition {
+  id                 String   @id @default(cuid())
+  connector          String
+  symbol             String
+  side               String
+  size               Float?
+  entryPrice         Float?
+  markPrice          Float?
+  unrealizedPnl      Float?
+  realizedPnl        Float?
+  status             String
+  openedAt           DateTime?
+  closedAt           DateTime?
+  externalPositionId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model PersonalRuntimeEvent {
+  id        String   @id @default(cuid())
+  eventType String
+  connector String?
+  symbol    String?
+  payload   Json?
+  occurredAt DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+
+model PropConnectorStatus {
+  id          String   @id @default(cuid())
+  connector   String
+  status      String
+  authPresent Boolean
+  lastSyncAt  DateTime?
+  lastError   String?
+  mode        String   @default("prop")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PropAccountSnapshot {
+  id                  String   @id @default(cuid())
+  connector           String
+  equity              Float?
+  balance             Float?
+  availableMargin     Float?
+  usedMargin          Float?
+  unrealizedPnl       Float?
+  realizedPnl         Float?
+  dailyLossPct        Float?
+  trailingDrawdownPct Float?
+  openRiskPct         Float?
+  capturedAt          DateTime @default(now())
+  createdAt           DateTime @default(now())
+}
+
+model PropPosition {
+  id                 String   @id @default(cuid())
+  connector          String
+  symbol             String
+  side               String
+  size               Float?
+  entryPrice         Float?
+  markPrice          Float?
+  unrealizedPnl      Float?
+  realizedPnl        Float?
+  drawdownImpact     Float?
+  status             String
+  openedAt           DateTime?
+  closedAt           DateTime?
+  externalPositionId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model PropComplianceEvent {
+  id        String   @id @default(cuid())
+  eventType String
+  lockType  String?
+  reason    String?
+  severity  String?
+  payload   Json?
+  occurredAt DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+
+model PropRuntimeEvent {
+  id        String   @id @default(cuid())
+  eventType String
+  connector String?
+  symbol    String?
+  payload   Json?
+  occurredAt DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+
+model RuntimeEvent {
+  id        String   @id @default(cuid())
+  type      String
+  mode      String
+  symbol    String?
+  message   String?
+  payload   Json?
+  createdAt DateTime @default(now())
+}
+
+model Incident {
+  id        String   @id @default(cuid())
+  severity  String
+  source    String
+  message   String
+  payload   Json?
+  resolved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model TransportEvent {
+  id        String   @id @default(cuid())
+  channel   String
+  status    String
+  message   String
+  payload   Json?
+  createdAt DateTime @default(now())
+}
+
+model SystemControl {
+  id               String   @id @default("system")
+  isRunning        Boolean  @default(false)
+  activeMode       String   @default("signal")
+  killSwitchActive Boolean  @default(false)
+  allowedSymbols   String[] @default(["ETHUSDT"])
+  updatedAt        DateTime @updatedAt
+}
+
 model StrategyConfig {
   id        String   @id @default(cuid())
   name      String   @unique

@@ -6,6 +6,9 @@ const providerSchema = z.enum(["binance", "bybit"]);
 const timeframeSchema = z.enum(["15m", "1h", "4h"] satisfies [Timeframe, ...Timeframe[]]);
 const breakoutOperatingModeSchema = z.enum(["stable", "growth", "bounded_aggression"]);
 const executionModeSchema = z.enum(["signal_only", "live_personal", "live_prop"]);
+const marketTypeSchema = z.enum(["crypto", "forex"]);
+const signalTierSchema = z.enum(["A+", "A", "B"]);
+const signalTp1ProtectModeSchema = z.enum(["break_even", "offset_r"]);
 const execDelayModeSchema = z.enum(["none", "next_candle"]);
 const booleanFlagSchema = z
   .union([z.literal("1"), z.literal("0"), z.literal("true"), z.literal("false"), z.boolean()])
@@ -41,8 +44,21 @@ const envSchema = z.object({
   NEXT_PUBLIC_APP_NAME: z.string().default("hashi-bot2"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DEFAULT_SYMBOL: z.string().default("ETHUSDT"),
+  DEFAULT_SYMBOLS: csvSymbolsSchema.default("ETHUSDT,BTCUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,MATICUSDT"),
   DEFAULT_CRYPTO_SYMBOLS: csvSymbolsSchema,
   DEFAULT_FOREX_SYMBOLS: csvSymbolsSchema,
+  MARKET_TYPE: marketTypeSchema.default("crypto"),
+  SIGNAL_MIN_TIER: signalTierSchema.default("A+"),
+  MAX_SIGNALS_PER_CYCLE: z.coerce.number().int().positive().default(3),
+  SIGNAL_OUTCOME_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(21600),
+  SIGNAL_MIN_TP2_R: z.coerce.number().positive().default(1.8),
+  SIGNAL_MAX_ENTRY_STRETCH_ATR: z.coerce.number().positive().default(0.4),
+  SIGNAL_SYMBOL_COOLDOWN_MINUTES: z.coerce.number().int().positive().default(90),
+  SIGNAL_PARTIAL_AT_TP1_ENABLED: booleanFlagSchema.default(true),
+  SIGNAL_PARTIAL_PCT: z.coerce.number().min(0).max(1).default(0.5),
+  SIGNAL_TP1_PROTECT_MODE: signalTp1ProtectModeSchema.default("break_even"),
+  SIGNAL_TP1_PROTECT_OFFSET_R: z.coerce.number().min(0).default(0),
+  SIGNAL_BREAKEVEN_BUFFER_R: z.coerce.number().min(0).default(0),
   DEFAULT_EXECUTION_TIMEFRAME: timeframeSchema.default("15m"),
   DEFAULT_HTF_1: timeframeSchema.default("1h"),
   DEFAULT_HTF_2: timeframeSchema.default("4h"),

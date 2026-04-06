@@ -2,9 +2,10 @@ import Link from "next/link";
 
 const navItems = [
   ["Dashboard", "/dashboard"],
-  ["Backtests", "/backtests"],
-  ["Replay", "/replay"],
-  ["Live Signals", "/live-signals"],
+  ["Signals", "/live-signals"],
+  ["Personal", "/personal"],
+  ["Prop", "/prop"],
+  ["Runtime", "/runtime"],
   ["Strategies", "/strategies"],
   ["Risk", "/risk"],
   ["Telegram", "/telegram"],
