@@ -137,3 +137,50 @@ pnpm --filter @hashi/worker run:backtest
 - strategy league/ranking competitions
 
 Those belong to Phase 4.
+
+## Local development environment loading
+
+Single source of truth for local runtime config:
+
+- Use one file only: `./.env` (repo root).
+- Start from `.env.example`:
+
+```bash
+cp .env.example .env
+```
+
+Both runtime entrypoints now load this same root `.env` file:
+
+- `pnpm --filter @hashi/web dev`
+- `pnpm --filter @hashi/worker dev`
+
+Schema validation (`getConfig()`) now runs only after root `.env` loading.
+
+### Docker vs local hostname behavior
+
+- Local `pnpm` runtime should keep `DATABASE_URL` and `REDIS_URL` pointed to `localhost` in root `.env`.
+- Docker Compose keeps using root `.env` via `env_file`, but explicitly overrides app container infra hosts:
+  - `DATABASE_URL=postgresql://postgres:postgres@postgres:5432/hashi_bot2`
+  - `REDIS_URL=redis://redis:6379`
+
+That removes `localhost` vs Docker-service hostname ambiguity without splitting local pnpm config.
+
+### Daily commands
+
+Start infra (Docker):
+
+```bash
+docker compose up -d postgres redis
+```
+
+Start web (local pnpm):
+
+```bash
+pnpm --filter @hashi/web dev
+```
+
+Start worker (local pnpm):
+
+```bash
+pnpm --filter @hashi/worker dev
+```
