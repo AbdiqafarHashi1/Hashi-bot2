@@ -62,6 +62,106 @@ function buildRuntimeSymbols(config: ReturnType<typeof getConfig>): SymbolMetada
   return symbols;
 }
 
+function maskSecret(value: string) {
+  if (value.length <= 4) return "****";
+  return `${value.slice(0, 2)}***${value.slice(-2)}`;
+}
+
+async function sendSignalModeTelegramMessages(params: {
+  messages: string[];
+  botToken?: string;
+  chatId?: string;
+  parseMode: "Markdown" | "MarkdownV2" | "HTML";
+}) {
+  const { messages, botToken, chatId, parseMode } = params;
+  if (messages.length === 0) return;
+
+  if (!botToken || !chatId) {
+    console.log(
+      JSON.stringify(
+        {
+          event: "telegram_send_failure",
+          reason: "missing_telegram_credentials",
+          messageCount: messages.length,
+          tokenPresent: Boolean(botToken),
+          chatIdPresent: Boolean(chatId)
+        },
+        null,
+        2
+      )
+    );
+    return;
+  }
+
+  const endpoint = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  for (const [index, text] of messages.entries()) {
+    const messageNumber = index + 1;
+    console.log(
+      JSON.stringify(
+        {
+          event: "telegram_send_attempt",
+          messageNumber,
+          messageCount: messages.length,
+          chatIdMasked: maskSecret(chatId),
+          parseMode
+        },
+        null,
+        2
+      )
+    );
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          parse_mode: parseMode,
+          disable_web_page_preview: true
+        })
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result?.ok) {
+        const failureDescription =
+          typeof result?.description === "string" ? result.description : `telegram_http_${response.status}`;
+        throw new Error(failureDescription);
+      }
+
+      console.log(
+        JSON.stringify(
+          {
+            event: "telegram_send_success",
+            messageNumber,
+            messageCount: messages.length,
+            chatIdMasked: maskSecret(chatId),
+            telegramMessageId: result?.result?.message_id ?? null
+          },
+          null,
+          2
+        )
+      );
+    } catch (error) {
+      console.log(
+        JSON.stringify(
+          {
+            event: "telegram_send_failure",
+            messageNumber,
+            messageCount: messages.length,
+            chatIdMasked: maskSecret(chatId),
+            reason: error instanceof Error ? error.message : "telegram_send_failed"
+          },
+          null,
+          2
+        )
+      );
+    }
+  }
+}
+
 async function bootstrap() {
   const config = getConfig();
   const redis = new Redis(config.REDIS_URL);
@@ -153,7 +253,7 @@ async function bootstrap() {
         confidence: 0.7,
         setupGrade: "A",
         metadata: {
-          previewOnly: true,
+          previewOnly: !(config.EXECUTION_MODE === "signal_only" && config.ENABLE_SIGNAL_MODE_OUTPUT),
           rationale: [
             `regime=${regime.regime}`,
             `symbol=${marketContext.symbol}`,
@@ -300,6 +400,13 @@ async function bootstrap() {
         2
       )
     );
+
+    await sendSignalModeTelegramMessages({
+      messages: signalModeOutput.messages,
+      botToken: config.TELEGRAM_BOT_TOKEN,
+      chatId: config.TELEGRAM_CHAT_ID,
+      parseMode: config.TELEGRAM_PARSE_MODE
+    });
   }
 
   if (personalDemoDispatchPlan) {
