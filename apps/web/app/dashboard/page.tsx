@@ -1,116 +1,416 @@
 "use client";
 
-import { Card, KeyValue, PageState, StatusBadge } from "../../components/control-room-ui";
-import { useControlRoomState } from "../../lib/control-room/client";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
+import type { ControlRoomStatePayload } from "../../lib/control-room/contracts";
 
-function readinessTone(ready: boolean) {
-  return ready ? "ready" : "warn" as const;
+type SignalRoomPayload = {
+  summary: {
+    openCount: number;
+    closedCount: number;
+    winCount: number;
+    lossCount: number;
+    partialWinCount: number;
+  };
+  recentSignals: Array<{ generatedAt: string }>;
+};
+
+type PersonalRoomPayload = {
+  connectorStatus: { status: string; authPresent: boolean; lastSyncAt: string | null } | null;
+  latestAccountSnapshot: { capturedAt: string } | null;
+  openPositions: Array<unknown>;
+  recentEvents: Array<unknown>;
+};
+
+type PropRoomPayload = {
+  connectorStatus: { status: string; authPresent: boolean; lastSyncAt: string | null } | null;
+  latestAccountSnapshot: { capturedAt: string } | null;
+  openPositions: Array<unknown>;
+  complianceEvents: Array<unknown>;
+};
+
+type DashboardPayload = {
+  signalRoom: SignalRoomPayload | null;
+  personalRoom: PersonalRoomPayload | null;
+  propRoom: PropRoomPayload | null;
+  controlRoom: ControlRoomStatePayload | null;
+  runtimeEvents: Array<{ id: string }>;
+  incidents: Array<{ id: string; resolved: boolean }>;
+  signalPerformance: {
+    summary: {
+      avgR: number;
+      totalSignalsToday: number;
+    };
+    perTier: Record<"A+" | "A" | "B", {
+      total: number;
+      resolved: number;
+      wins: number;
+      losses: number;
+      partialWins: number;
+      breakevens: number;
+      expired: number;
+      winRate: number;
+      avgR: number;
+      expectancy: number;
+    }>;
+    filters: {
+      minTier: "A+" | "A" | "B";
+      minTp2R: number;
+      maxEntryStretchAtr: number;
+      symbolCooldownMinutes: number;
+      bTierEnabled: boolean;
+      partialAtTp1Enabled: boolean;
+      partialPct: number;
+      tp1ProtectMode: "break_even" | "offset_r";
+      tp1ProtectOffsetR: number;
+      breakevenBufferR: number;
+    };
+  } | null;
+  signalIntegrity: {
+    totalSignals: number;
+    distributionSum: number;
+    mismatch: boolean;
+    breakdown: Record<"OPEN" | "TP1_HIT" | "TP2_HIT" | "STOP_HIT" | "EXPIRED" | "PARTIAL_WIN" | "BE_AFTER_TP1", number>;
+  } | null;
+};
+
+type SystemControlPayload = {
+  id: string;
+  isRunning: boolean;
+  activeMode: "signal" | "personal" | "prop";
+  killSwitchActive: boolean;
+  allowedSymbols: string[];
+  updatedAt: string;
+};
+
+function Card({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="rounded border border-slate-800 bg-slate-900/70 p-4">
+      <h2 className="mb-3 text-lg font-semibold text-slate-100">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+function Kpi({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded border border-slate-800 bg-slate-950/40 p-3">
+      <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="mt-1 text-xl font-semibold text-slate-100">{value}</p>
+    </div>
+  );
 }
 
 export default function DashboardPage() {
-  const { data, loading, error } = useControlRoomState();
+  const [data, setData] = useState<DashboardPayload>({
+    signalRoom: null,
+    personalRoom: null,
+    propRoom: null,
+    controlRoom: null,
+    runtimeEvents: [],
+    incidents: [],
+    signalPerformance: null,
+    signalIntegrity: null
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [control, setControl] = useState<SystemControlPayload | null>(null);
+  const [controlSymbolsInput, setControlSymbolsInput] = useState("");
+  const [controlSaving, setControlSaving] = useState(false);
+  const [controlError, setControlError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    Promise.all([
+      fetch("/api/signal-room").then((res) => (res.ok ? (res.json() as Promise<SignalRoomPayload>) : null)),
+      fetch("/api/personal-room").then((res) => (res.ok ? (res.json() as Promise<PersonalRoomPayload>) : null)),
+      fetch("/api/prop-room").then((res) => (res.ok ? (res.json() as Promise<PropRoomPayload>) : null)),
+      fetch("/api/control-room/state").then((res) => (res.ok ? (res.json() as Promise<ControlRoomStatePayload>) : null)),
+      fetch("/api/runtime-events").then((res) => (res.ok ? (res.json() as Promise<{ events: Array<{ id: string }> }>) : null)),
+      fetch("/api/incidents").then((res) => (res.ok ? (res.json() as Promise<{ incidents: Array<{ id: string; resolved: boolean }> }>) : null)),
+      fetch("/api/signal-performance").then((res) => (res.ok ? (res.json() as Promise<DashboardPayload["signalPerformance"]>) : null)),
+      fetch("/api/signal-integrity-check").then((res) => (res.ok ? (res.json() as Promise<DashboardPayload["signalIntegrity"]>) : null)),
+      fetch("/api/system-control").then((res) => (res.ok ? (res.json() as Promise<{ control: SystemControlPayload }>) : null))
+    ])
+      .then(([signalRoom, personalRoom, propRoom, controlRoom, runtimeRes, incidentsRes, performanceRes, integrityRes, controlRes]) => {
+        if (!mounted) return;
+        setData({
+          signalRoom,
+          personalRoom,
+          propRoom,
+          controlRoom,
+          runtimeEvents: runtimeRes?.events ?? [],
+          incidents: incidentsRes?.incidents ?? [],
+          signalPerformance: performanceRes ?? null,
+          signalIntegrity: integrityRes ?? null
+        });
+        setControl(controlRes?.control ?? null);
+        setControlSymbolsInput((controlRes?.control?.allowedSymbols ?? []).join(", "));
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        if (!mounted) return;
+        setError(err instanceof Error ? err.message : "Unable to load dashboard summaries");
+      })
+      .finally(() => {
+        if (!mounted) return;
+        setLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const latestSignalAt = useMemo(() => data.signalRoom?.recentSignals?.[0]?.generatedAt ?? null, [data.signalRoom]);
+
+  async function persistSystemControl(patch: Partial<Pick<SystemControlPayload, "isRunning" | "activeMode" | "killSwitchActive" | "allowedSymbols">>) {
+    setControlSaving(true);
+    setControlError(null);
+    try {
+      const response = await fetch("/api/system-control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch)
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(payload?.message ?? "System control update failed");
+      }
+      const payload = (await response.json()) as { control: SystemControlPayload };
+      setControl(payload.control);
+      setControlSymbolsInput(payload.control.allowedSymbols.join(", "));
+    } catch (err: unknown) {
+      setControlError(err instanceof Error ? err.message : "System control update failed");
+    } finally {
+      setControlSaving(false);
+    }
+  }
+
+  const parsedSymbols = controlSymbolsInput
+    .split(",")
+    .map((entry) => entry.trim().toUpperCase())
+    .filter(Boolean);
 
   return (
     <section className="space-y-5">
       <header>
-        <h1 className="text-3xl font-bold">Control Room</h1>
-        <p className="mt-1 text-sm text-slate-400">Operational overview sourced from backend control-room state.</p>
+        <h1 className="text-3xl font-bold">Dashboard</h1>
+        <p className="mt-1 text-sm text-slate-400">Mode-separated operational summary from persisted Signal, Personal, and Prop rooms.</p>
       </header>
 
-      <PageState loading={loading} error={error} />
+      {loading && <p className="rounded border border-slate-800 bg-slate-900/70 p-3 text-sm text-slate-300">Loading dashboard…</p>}
+      {error && <p className="rounded border border-rose-700/50 bg-rose-900/20 p-3 text-sm text-rose-200">{error}</p>}
+      {data.signalIntegrity?.mismatch && (
+        <p className="rounded border border-amber-700/50 bg-amber-900/20 p-3 text-sm text-amber-100">
+          Signal accounting mismatch — metrics not reliable
+        </p>
+      )}
 
-      {data && (
-        <>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <Card title="Execution Mode" right={<StatusBadge tone="neutral" label={data.mode.executionMode} />}>
-              <p className="text-sm text-slate-300">
-                Entry mode <span className="font-semibold text-slate-100">{data.mode.breakoutEntryMode}</span> · Edge profile{" "}
-                <span className="font-semibold text-slate-100">{data.mode.breakoutEdgeProfile ?? "unavailable"}</span>
-              </p>
-            </Card>
+      {!loading && !error && (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Card title="Signal Mode Summary">
+            {data.signalRoom ? (
+              <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-2">
+                <Kpi label="Open trades" value={String(data.signalRoom.summary.openCount)} />
+                <Kpi label="Closed trades" value={String(data.signalRoom.summary.closedCount)} />
+                <Kpi label="Wins" value={String(data.signalRoom.summary.winCount)} />
+                <Kpi label="Losses" value={String(data.signalRoom.summary.lossCount)} />
+                <Kpi label="Partial wins" value={String(data.signalRoom.summary.partialWinCount)} />
+                <Kpi label="Latest signal" value={latestSignalAt ? new Date(latestSignalAt).toISOString() : "No signals yet"} />
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">Signal room data unavailable.</p>
+            )}
+          </Card>
 
-            <Card
-              title="Signal Path"
-              right={<StatusBadge tone={readinessTone(data.signalMode.enabled)} label={data.signalMode.enabled ? "enabled" : "disabled"} />}
-            >
-              <p className="text-sm text-slate-300">{data.signalMode.notes}</p>
-            </Card>
-
-            <Card
-              title="Personal Demo"
-              right={
-                <StatusBadge
-                  tone={readinessTone(data.connectors.personalDemo.enabled && data.connectors.personalDemo.credentials.configured)}
-                  label={data.connectors.personalDemo.credentials.configured ? "ready" : "pending config"}
+          <Card title="Personal Mode Summary">
+            {data.personalRoom ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                <Kpi label="Connector status" value={data.personalRoom.connectorStatus?.status ?? "No status yet"} />
+                <Kpi label="Auth present" value={data.personalRoom.connectorStatus ? (data.personalRoom.connectorStatus.authPresent ? "yes" : "no") : "unknown"} />
+                <Kpi
+                  label="Latest snapshot"
+                  value={data.personalRoom.latestAccountSnapshot ? new Date(data.personalRoom.latestAccountSnapshot.capturedAt).toISOString() : "No snapshot yet"}
                 />
-              }
-            >
-              <p className="text-sm text-slate-300">Missing: {data.connectors.personalDemo.credentials.missing.join(", ") || "none"}</p>
-            </Card>
+                <Kpi label="Open positions" value={String(data.personalRoom.openPositions.length)} />
+                <Kpi label="Recent events" value={String(data.personalRoom.recentEvents.length)} />
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">Personal room data unavailable.</p>
+            )}
+          </Card>
 
-            <Card
-              title="Prop Demo"
-              right={
-                <StatusBadge
-                  tone={readinessTone(data.connectors.propDemo.enabled && data.connectors.propDemo.credentials.configured)}
-                  label={data.connectors.propDemo.credentials.configured ? "ready" : "pending config"}
+          <Card title="Prop Mode Summary">
+            {data.propRoom ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                <Kpi label="Connector status" value={data.propRoom.connectorStatus?.status ?? "No status yet"} />
+                <Kpi label="Auth present" value={data.propRoom.connectorStatus ? (data.propRoom.connectorStatus.authPresent ? "yes" : "no") : "unknown"} />
+                <Kpi
+                  label="Latest snapshot"
+                  value={data.propRoom.latestAccountSnapshot ? new Date(data.propRoom.latestAccountSnapshot.capturedAt).toISOString() : "No snapshot yet"}
                 />
-              }
-            >
-              <p className="text-sm text-slate-300">Missing: {data.connectors.propDemo.credentials.missing.join(", ") || "none"}</p>
-            </Card>
-          </div>
+                <Kpi label="Open positions" value={String(data.propRoom.openPositions.length)} />
+                <Kpi label="Recent compliance" value={String(data.propRoom.complianceEvents.length)} />
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">Prop room data unavailable.</p>
+            )}
+          </Card>
 
-          <div className="grid gap-3 xl:grid-cols-3">
-            <Card title="Strategy Context">
-              <KeyValue label="Selected strategy" value={data.strategies.selectedActiveStrategy} />
-              <KeyValue label="Production strategy IDs" value={data.strategies.activeProductionStrategyIds.join(", ")} />
-              <KeyValue
-                label="Research mode"
-                value={<StatusBadge tone={data.strategies.swingResearchModeEnabled ? "warn" : "neutral"} label={data.strategies.swingResearchModeEnabled ? "enabled" : "disabled"} />}
-              />
-            </Card>
+          <Card title="Runtime & Governance Summary">
+            {data.controlRoom ? (
+              <div className="space-y-2 text-sm text-slate-200">
+                <p>Execution mode: <span className="font-medium">{data.controlRoom.mode.executionMode}</span></p>
+                <p>Selected strategy: <span className="font-medium">{data.controlRoom.strategies.selectedActiveStrategy}</span></p>
+                <p>Active strategy IDs: <span className="font-medium">{data.controlRoom.strategies.activeProductionStrategyIds.join(", ")}</span></p>
+                <p>Daily loss lock: <span className="font-medium">{String(data.controlRoom.governance.locks.dailyLoss)}</span></p>
+                <p>Trailing drawdown lock: <span className="font-medium">{String(data.controlRoom.governance.locks.trailingDrawdown)}</span></p>
+                <p>Max consecutive loss lock: <span className="font-medium">{String(data.controlRoom.governance.locks.maxConsecutiveLoss)}</span></p>
+                  <p>Telegram signal output enabled: <span className="font-medium">{String(data.controlRoom.telegram.signalOutputEnabled)}</span></p>
+                  <p>Recent runtime events: <span className="font-medium">{data.runtimeEvents.length}</span></p>
+                  <p>Recent incidents: <span className="font-medium">{data.incidents.length}</span></p>
+                  <p>Unresolved incidents: <span className="font-medium">{data.incidents.filter((incident) => !incident.resolved).length}</span></p>
+                </div>
+              ) : (
+              <p className="text-sm text-slate-400">Runtime/governance metadata unavailable.</p>
+            )}
+          </Card>
 
-            <Card title="Symbols">
-              <KeyValue label="Default" value={data.symbols.defaultSymbol} />
-              <KeyValue label="Crypto" value={data.symbols.crypto.join(", ") || "none"} />
-              <KeyValue label="Forex" value={data.symbols.forex.join(", ") || "none"} />
-            </Card>
+          <Card title="Signal Performance">
+            {data.signalPerformance ? (
+              <div className="space-y-3 text-sm">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Kpi label="A+ win rate" value={`${(data.signalPerformance.perTier["A+"].winRate * 100).toFixed(1)}%`} />
+                  <Kpi label="A win rate" value={`${(data.signalPerformance.perTier["A"].winRate * 100).toFixed(1)}%`} />
+                  <Kpi label="B win rate" value={`${(data.signalPerformance.perTier["B"].winRate * 100).toFixed(1)}%`} />
+                  <Kpi label="Avg R" value={data.signalPerformance.summary.avgR.toFixed(2)} />
+                  <Kpi label="Signals today" value={String(data.signalPerformance.summary.totalSignalsToday)} />
+                </div>
+                <div className="rounded border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-300">
+                  <p>Filter settings</p>
+                  <p>min tier: <span className="font-medium">{data.signalPerformance.filters.minTier}</span></p>
+                  <p>min TP2 R: <span className="font-medium">{data.signalPerformance.filters.minTp2R}</span></p>
+                  <p>max entry stretch (ATR): <span className="font-medium">{data.signalPerformance.filters.maxEntryStretchAtr}</span></p>
+                  <p>symbol cooldown minutes: <span className="font-medium">{data.signalPerformance.filters.symbolCooldownMinutes}</span></p>
+                  <p>partial at TP1 enabled: <span className="font-medium">{String(data.signalPerformance.filters.partialAtTp1Enabled)}</span></p>
+                  <p>partial pct: <span className="font-medium">{data.signalPerformance.filters.partialPct}</span></p>
+                  <p>TP1 protect mode: <span className="font-medium">{data.signalPerformance.filters.tp1ProtectMode}</span></p>
+                  <p>TP1 protect offset R: <span className="font-medium">{data.signalPerformance.filters.tp1ProtectOffsetR}</span></p>
+                  <p>breakeven buffer R: <span className="font-medium">{data.signalPerformance.filters.breakevenBufferR}</span></p>
+                </div>
+                {data.signalPerformance.filters.bTierEnabled && (
+                  <p className="rounded border border-amber-700/50 bg-amber-900/20 p-2 text-xs text-amber-100">
+                    Warning: B tier is enabled.
+                  </p>
+                )}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-slate-300">
+                    <thead className="text-slate-400">
+                      <tr>
+                        <th className="text-left">Tier</th>
+                        <th className="text-left">Total</th>
+                        <th className="text-left">Resolved</th>
+                        <th className="text-left">Wins</th>
+                        <th className="text-left">Losses</th>
+                        <th className="text-left">Partial</th>
+                        <th className="text-left">BE@TP1</th>
+                        <th className="text-left">Expired</th>
+                        <th className="text-left">WinRate</th>
+                        <th className="text-left">AvgR</th>
+                        <th className="text-left">Expectancy</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(["A+", "A", "B"] as const).map((tier) => (
+                        <tr key={tier} className="border-t border-slate-800">
+                          <td>{tier}</td>
+                          <td>{data.signalPerformance.perTier[tier].total}</td>
+                          <td>{data.signalPerformance.perTier[tier].resolved}</td>
+                          <td>{data.signalPerformance.perTier[tier].wins}</td>
+                          <td>{data.signalPerformance.perTier[tier].losses}</td>
+                          <td>{data.signalPerformance.perTier[tier].partialWins}</td>
+                          <td>{data.signalPerformance.perTier[tier].breakevens}</td>
+                          <td>{data.signalPerformance.perTier[tier].expired}</td>
+                          <td>{(data.signalPerformance.perTier[tier].winRate * 100).toFixed(1)}%</td>
+                          <td>{data.signalPerformance.perTier[tier].avgR.toFixed(2)}</td>
+                          <td>{data.signalPerformance.perTier[tier].expectancy.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">Signal performance unavailable.</p>
+            )}
+          </Card>
 
-            <Card title="Governance & Status">
-              <KeyValue
-                label="Global kill switch"
-                value={<StatusBadge tone={data.governance.globalKillSwitchEnabled ? "warn" : "ready"} label={data.governance.globalKillSwitchEnabled ? "on" : "off"} />}
-              />
-              <KeyValue label="Daily loss lock" value={String(data.governance.locks.dailyLoss)} />
-              <KeyValue label="Trailing DD lock" value={String(data.governance.locks.trailingDrawdown)} />
-              <KeyValue label="Max loss streak lock" value={String(data.governance.locks.maxConsecutiveLoss)} />
-            </Card>
-          </div>
+          <Card title="System Control">
+            {control ? (
+              <div className="space-y-3 text-sm text-slate-200">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    className="rounded border border-slate-700 px-3 py-1 text-xs hover:bg-slate-800 disabled:opacity-50"
+                    onClick={() => persistSystemControl({ isRunning: !control.isRunning })}
+                    disabled={controlSaving}
+                  >
+                    {control.isRunning ? "Stop System" : "Start System"}
+                  </button>
+                  <select
+                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs"
+                    value={control.activeMode}
+                    onChange={(event) => {
+                      void persistSystemControl({ activeMode: event.target.value as SystemControlPayload["activeMode"] });
+                    }}
+                    disabled={controlSaving}
+                  >
+                    <option value="signal">Signal</option>
+                    <option value="personal">Personal</option>
+                    <option value="prop">Prop</option>
+                  </select>
+                  <button
+                    className="rounded border border-rose-700/60 px-3 py-1 text-xs text-rose-200 hover:bg-rose-900/30 disabled:opacity-50"
+                    onClick={() => persistSystemControl({ killSwitchActive: !control.killSwitchActive })}
+                    disabled={controlSaving}
+                  >
+                    {control.killSwitchActive ? "Disable Kill Switch" : "Enable Kill Switch"}
+                  </button>
+                </div>
 
-          <div className="grid gap-3 xl:grid-cols-2">
-            <Card title="Latest Backtest Summary" right={<StatusBadge tone={data.artifacts.backtestLatestAvailable ? "ready" : "warn"} label={data.artifacts.backtestLatestAvailable ? "available" : "missing"} />}>
-              <pre className="overflow-auto rounded bg-slate-950/70 p-3 text-xs text-slate-300">
-                {JSON.stringify(data.artifacts.backtestLatestSummary, null, 2)}
-              </pre>
-            </Card>
+                <div className="space-y-2">
+                  <label className="block text-xs text-slate-400" htmlFor="allowed-symbols-input">Allowed symbols (comma-separated)</label>
+                  <input
+                    id="allowed-symbols-input"
+                    className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs"
+                    value={controlSymbolsInput}
+                    onChange={(event) => setControlSymbolsInput(event.target.value)}
+                    placeholder="ETHUSDT, BTCUSDT"
+                    disabled={controlSaving}
+                  />
+                  <button
+                    className="rounded border border-slate-700 px-3 py-1 text-xs hover:bg-slate-800 disabled:opacity-50"
+                    onClick={() => persistSystemControl({ allowedSymbols: parsedSymbols })}
+                    disabled={controlSaving || parsedSymbols.length === 0}
+                  >
+                    Save allowed symbols
+                  </button>
+                </div>
 
-            <Card
-              title="Latest Validation/Report"
-              right={<StatusBadge tone={data.artifacts.validationReports.length > 0 ? "ready" : "warn"} label={`${data.artifacts.validationReports.length} artifacts`} />}
-            >
-              <ul className="space-y-2 text-sm text-slate-300">
-                {data.artifacts.validationReports.slice(0, 6).map((report) => (
-                  <li key={report.file} className="rounded border border-slate-800 bg-slate-950/50 p-2">
-                    <p className="font-medium text-slate-200">{report.file}</p>
-                    <p className="text-xs text-slate-400">{report.generatedAt ?? "generatedAt unavailable"}</p>
-                    <p className="text-xs">{report.summary}</p>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          </div>
-        </>
+                <div className="space-y-1 text-xs text-slate-300">
+                  <p>isRunning: <span className="font-medium">{String(control.isRunning)}</span></p>
+                  <p>activeMode: <span className="font-medium">{control.activeMode}</span></p>
+                  <p>killSwitchActive: <span className="font-medium">{String(control.killSwitchActive)}</span></p>
+                  <p>allowedSymbols: <span className="font-medium">{control.allowedSymbols.join(", ")}</span></p>
+                  <p>updatedAt: <span className="font-medium">{new Date(control.updatedAt).toISOString()}</span></p>
+                </div>
+                {controlError && <p className="rounded border border-rose-700/50 bg-rose-900/20 p-2 text-xs text-rose-200">{controlError}</p>}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">System control unavailable.</p>
+            )}
+          </Card>
+        </div>
       )}
     </section>
   );

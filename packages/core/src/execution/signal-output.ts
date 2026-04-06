@@ -10,8 +10,9 @@ export type TelegramReadySignal = {
   tp1: number;
   tp2: number;
   setupGrade: BreakoutSignal["setupGrade"];
+  tier: BreakoutSignal["setupGrade"];
+  signalScore: number;
   score: number;
-  confidence: number;
   rank: number;
   rationale: string[];
   metadata?: Record<string, unknown>;
@@ -43,12 +44,19 @@ function toTelegramReadySignal(signal: BreakoutSignal, rank: number): TelegramRe
     tp1: signal.tp1,
     tp2: signal.tp2,
     setupGrade: signal.setupGrade,
+    tier: signal.setupGrade,
+    signalScore: signal.score,
     score: signal.score,
-    confidence: signal.confidence,
     rank,
     rationale: toRationale(signal),
     metadata: signal.metadata
   };
+}
+
+function minScoreForTier(tier: "A+" | "A" | "B") {
+  if (tier === "A+") return 85;
+  if (tier === "A") return 70;
+  return 60;
 }
 
 export function buildSignalModePayload(input: {
@@ -56,14 +64,22 @@ export function buildSignalModePayload(input: {
   decisions: AllocationDecision[];
   now?: Date;
   cycleId?: string;
+  minTier?: "A+" | "A" | "B";
+  maxSignals?: number;
 }): { json: SignalModeOutputPayload; messages: string[] } {
   const now = input.now ?? new Date();
   const cycleId = input.cycleId ?? `signal-cycle-${now.getTime()}`;
 
+  const tierThreshold = minScoreForTier(input.minTier ?? "A");
+  const maxSignals = Math.max(1, input.maxSignals ?? 3);
+
   const signals = input.rankedSetups.map((setup) => {
     const decision = input.decisions.find((entry) => entry.signal.symbol === setup.signal.symbol && entry.signal.marketType === setup.signal.marketType);
     return toTelegramReadySignal(decision?.signal ?? setup.signal, setup.rank);
-  });
+  })
+    .filter((signal) => signal.signalScore >= tierThreshold)
+    .sort((a, b) => b.signalScore - a.signalScore)
+    .slice(0, maxSignals);
 
   const json: SignalModeOutputPayload = {
     mode: "signal_only",
@@ -74,17 +90,24 @@ export function buildSignalModePayload(input: {
   };
 
   const messages = signals.map((signal) => {
-    const rationale = signal.rationale.length > 0 ? `\nRationale: ${signal.rationale.join(" | ")}` : "";
+    const reasons = signal.rationale.slice(0, 3);
+    const reasonSection = reasons.length > 0
+      ? `Reason:\n${reasons.map((reason) => `- ${reason}`).join("\n")}`
+      : "Reason:\n- Tier-qualified breakout signal";
+
     return [
-      `🚨 Breakout Signal #${signal.rank}`,
-      `${signal.symbol} (${signal.marketType.toUpperCase()})`,
+      "🔥 TRADE SIGNAL [A+]",
+      "",
+      `Symbol: ${signal.symbol}`,
       `Side: ${signal.side}`,
       `Entry: ${signal.entry.toFixed(6)}`,
       `Stop: ${signal.stop.toFixed(6)}`,
       `TP1: ${signal.tp1.toFixed(6)}`,
       `TP2: ${signal.tp2.toFixed(6)}`,
-      `Setup: ${signal.setupGrade} | Score: ${signal.score.toFixed(1)} | Confidence: ${(signal.confidence * 100).toFixed(1)}%`
-    ].join("\n") + rationale;
+      "",
+      `Score: ${signal.signalScore}`,
+      reasonSection
+    ].join("\n");
   });
 
   return { json, messages };

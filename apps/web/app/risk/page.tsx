@@ -9,8 +9,8 @@ export default function Page() {
   return (
     <section className="space-y-5">
       <header>
-        <h1 className="text-3xl font-bold">Allocator + Governance</h1>
-        <p className="mt-1 text-sm text-slate-400">Risk controls, caps, and lock-state visibility.</p>
+        <h1 className="text-3xl font-bold">Risk & Governance</h1>
+        <p className="mt-1 text-sm text-slate-400">Read-only governance/compliance visibility from runtime metadata. No risk controls are mutable from this page yet.</p>
       </header>
 
       <PageState loading={loading} error={error} />

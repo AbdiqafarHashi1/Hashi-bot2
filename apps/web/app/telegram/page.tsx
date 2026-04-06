@@ -9,8 +9,8 @@ export default function Page() {
   return (
     <section className="space-y-5">
       <header>
-        <h1 className="text-3xl font-bold">Signal Delivery Readiness</h1>
-        <p className="mt-1 text-sm text-slate-400">Telegram connector status only. No secret values are exposed.</p>
+        <h1 className="text-3xl font-bold">Telegram Delivery</h1>
+        <p className="mt-1 text-sm text-slate-400">Read-only Telegram transport visibility for signal messages. No secret values are exposed.</p>
       </header>
 
       <PageState loading={loading} error={error} />
@@ -33,7 +33,7 @@ export default function Page() {
             <KeyValue label="Parse mode" value={data.telegram.parseMode} />
           </Card>
 
-          <Card title="Template + Mode Notes">
+          <Card title="Transport + Mode Notes">
             <KeyValue
               label="Message template"
               value={<StatusBadge tone={data.telegram.templateReady ? "ready" : "warn"} label={data.telegram.templateReady ? "ready" : "pending"} />}
