@@ -40,6 +40,10 @@ type SignalTrade = {
     unrealizedPnlQuote: number;
     rResultClosed: number;
     rResultOpen: number;
+    priceMovePct: number;
+    distanceToStopPct: number;
+    distanceToTp1Pct: number;
+    distanceToTp2Pct: number;
   };
 };
 
@@ -95,6 +99,13 @@ type SignalRoomPayload = {
     closedSignalsThisCycle: number;
     maxConcurrentBlockedThisCycle: boolean;
     maxConcurrentBlockedCount: number;
+    cycleRankingAllocation?: Array<{
+      symbol: string;
+      score: number;
+      rank: number;
+      selected: boolean;
+      rejectionReason: string | null;
+    }>;
   } | null;
   controlPlane: {
     allowedSymbolsConfiguredDefaults: string[];
@@ -104,10 +115,15 @@ type SignalRoomPayload = {
     isRunning: boolean;
   };
   capitalAllocation: {
+    paperEquity: number;
+    configuredLeverageCap: number;
+    totalOpenNotional: number;
+    effectivePortfolioLeverage: number;
+    usedOpenRiskBudget: number;
+    availableNotionalCapacity: number;
+    availableRiskBudget: number;
     paperMaxConcurrentPositions: number;
     currentOpenPositionsCount: number;
-    currentAvailablePaperCapital: number;
-    availableRiskBudget: number;
     blockedByMaxConcurrentRulesThisCycle: boolean;
   };
   liveView: {
@@ -131,6 +147,8 @@ type SignalRoomPayload = {
     equity: number;
     riskPct: number;
     leverage: number;
+    maxTotalNotionalMult: number;
+    maxOpenRiskPct: number;
     maxConcurrentPositions: number;
     minTier: string;
     minTp2R: number;
@@ -276,11 +294,16 @@ export default function Page() {
               <p>Paper equity: <span className="font-medium">{data.paperModel.equity}</span></p>
               <p>Paper risk %: <span className="font-medium">{(data.paperModel.riskPct * 100).toFixed(2)}%</span></p>
               <p>Paper leverage: <span className="font-medium">{data.paperModel.leverage}x</span></p>
+              <p>Max total notional mult: <span className="font-medium">{data.paperModel.maxTotalNotionalMult}x</span></p>
+              <p>Max open risk %: <span className="font-medium">{(data.paperModel.maxOpenRiskPct * 100).toFixed(2)}%</span></p>
               <p>Leverage meaning: <span className="font-medium">Configured cap only; effective leverage = notional / equity</span></p>
               <p>Max concurrent positions: <span className="font-medium">{data.paperModel.maxConcurrentPositions}</span></p>
               <p>Open positions now: <span className="font-medium">{data.capitalAllocation.currentOpenPositionsCount}</span></p>
-              <p>Available paper capital: <span className="font-medium">{data.capitalAllocation.currentAvailablePaperCapital.toFixed(2)}</span></p>
-              <p>Available risk budget: <span className="font-medium">{data.capitalAllocation.availableRiskBudget.toFixed(2)}</span></p>
+              <p>Total open notional: <span className="font-medium">{data.capitalAllocation.totalOpenNotional.toFixed(2)}</span></p>
+              <p>Effective portfolio leverage: <span className="font-medium">{data.capitalAllocation.effectivePortfolioLeverage.toFixed(4)}x</span></p>
+              <p>Used open risk budget: <span className="font-medium">{data.capitalAllocation.usedOpenRiskBudget.toFixed(2)}</span></p>
+              <p>Remaining risk budget: <span className="font-medium">{data.capitalAllocation.availableRiskBudget.toFixed(2)}</span></p>
+              <p>Remaining notional capacity: <span className="font-medium">{data.capitalAllocation.availableNotionalCapacity.toFixed(2)}</span></p>
               <p>Blocked by max concurrent this cycle: <span className="font-medium">{String(data.capitalAllocation.blockedByMaxConcurrentRulesThisCycle)}</span></p>
               <p>Runtime allowed symbols: <span className="font-medium">{data.controlPlane.allowedSymbolsRuntime.join(", ") || "-"}</span></p>
               <p>Configured default symbols: <span className="font-medium">{data.controlPlane.allowedSymbolsConfiguredDefaults.join(", ") || "-"}</span></p>
@@ -303,8 +326,8 @@ export default function Page() {
                 <thead>
                   <tr className="text-slate-400">
                     <th className="px-2 py-1">Symbol</th><th className="px-2 py-1">Entry</th><th className="px-2 py-1">Stop</th><th className="px-2 py-1">TP1/TP2</th>
-                    <th className="px-2 py-1">Qty</th><th className="px-2 py-1">Notional</th><th className="px-2 py-1">Risk</th><th className="px-2 py-1">Lev</th>
-                    <th className="px-2 py-1">PnL / R</th><th className="px-2 py-1">Telegram</th><th className="px-2 py-1">Opened</th>
+                    <th className="px-2 py-1">Stop dist</th><th className="px-2 py-1">Qty</th><th className="px-2 py-1">Notional</th><th className="px-2 py-1">Risk</th><th className="px-2 py-1">Lev</th>
+                    <th className="px-2 py-1">Price move / distances</th><th className="px-2 py-1">PnL / R</th><th className="px-2 py-1">Telegram</th><th className="px-2 py-1">Opened</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -314,11 +337,15 @@ export default function Page() {
                       <td className="px-2 py-1">{trade.entryPrice.toFixed(6)}</td>
                       <td className="px-2 py-1">{trade.stopPrice.toFixed(6)}</td>
                       <td className="px-2 py-1">{trade.tp1Price.toFixed(6)} / {trade.tp2Price.toFixed(6)}</td>
+                      <td className="px-2 py-1">{(trade.paperComputed?.stopDistance ?? Math.abs(trade.entryPrice - trade.stopPrice)).toFixed(6)}</td>
                       <td className="px-2 py-1">{(trade.quantity ?? 0).toFixed(6)}</td>
                       <td className="px-2 py-1">{(trade.paperComputed?.notionalQuote ?? trade.notional ?? 0).toFixed(2)}</td>
                       <td className="px-2 py-1">{((trade.paperComputed?.positionRiskPct ?? trade.riskPct ?? 0) * 100).toFixed(2)}% ({(trade.paperComputed?.riskAmountQuote ?? trade.riskAmount ?? 0).toFixed(2)})</td>
                       <td className="px-2 py-1">
                         cap {(trade.paperComputed?.configuredLeverageCap ?? trade.leverage ?? 0).toFixed(2)}x / eff {(trade.paperComputed?.effectiveLeverage ?? 0).toFixed(2)}x
+                      </td>
+                      <td className="px-2 py-1">
+                        move {(trade.paperComputed?.priceMovePct ?? 0).toFixed(4)}% / stop {(trade.paperComputed?.distanceToStopPct ?? 0).toFixed(4)}% / tp1 {(trade.paperComputed?.distanceToTp1Pct ?? 0).toFixed(4)}% / tp2 {(trade.paperComputed?.distanceToTp2Pct ?? 0).toFixed(4)}%
                       </td>
                       <td className="px-2 py-1">{(trade.paperComputed?.unrealizedPnlQuote ?? trade.unrealizedPnl ?? 0).toFixed(6)} / {(trade.paperComputed?.rResultOpen ?? 0).toFixed(2)}R</td>
                       <td className="px-2 py-1">{trade.telegramDispatchStatus} ({trade.telegramDispatchReason ?? "-"})</td>
@@ -383,6 +410,37 @@ export default function Page() {
                   <li key={reason}>{reason}: {count}</li>
                 ))}
               </ul>
+            </section>
+          )}
+
+          {data.cycleTruth && (
+            <section className="rounded border border-slate-800 bg-slate-900/70 p-4">
+              <h2 className="text-lg font-semibold">Cycle Ranking + Allocation</h2>
+              <p className="mt-2 text-xs text-slate-400">Global candidate ranking and whether each candidate was selected for portfolio capital.</p>
+              <div className="overflow-auto mt-3">
+                <table className="min-w-full text-left text-sm">
+                  <thead>
+                    <tr className="text-slate-400">
+                      <th className="px-2 py-1">Rank</th>
+                      <th className="px-2 py-1">Symbol</th>
+                      <th className="px-2 py-1">Score</th>
+                      <th className="px-2 py-1">Selected</th>
+                      <th className="px-2 py-1">Rejection reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(data.cycleTruth.cycleRankingAllocation ?? []).map((entry) => (
+                      <tr key={`${entry.symbol}-${entry.rank}`} className="border-t border-slate-800">
+                        <td className="px-2 py-1">{entry.rank}</td>
+                        <td className="px-2 py-1">{entry.symbol}</td>
+                        <td className="px-2 py-1">{entry.score.toFixed(2)}</td>
+                        <td className="px-2 py-1">{String(entry.selected)}</td>
+                        <td className="px-2 py-1">{entry.rejectionReason ?? "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </section>
           )}
         </>
