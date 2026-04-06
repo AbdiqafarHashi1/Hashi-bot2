@@ -28,6 +28,19 @@ type SignalTrade = {
   telegramDispatchStatus: string;
   telegramDispatchedAt: string | null;
   telegramDispatchReason: string | null;
+  paperComputed?: {
+    stopDistance: number;
+    effectiveLeverage: number;
+    configuredLeverageCap: number;
+    positionRiskPct: number;
+    riskAmountQuote: number;
+    quantity: number;
+    notionalQuote: number;
+    realizedPnlQuote: number;
+    unrealizedPnlQuote: number;
+    rResultClosed: number;
+    rResultOpen: number;
+  };
 };
 
 type SignalEvent = {
@@ -73,6 +86,29 @@ type SignalRoomPayload = {
       totalTelegramDispatchRecords: number;
       totalPersistedSignals: number;
     };
+  };
+  cycleTruth: {
+    allowedSymbolsConfigured: string[];
+    symbolsActuallyScanned: string[];
+    symbolsSkippedBeforeEvaluation: string[];
+    candidatesRejectedBy: Record<string, number>;
+    closedSignalsThisCycle: number;
+    maxConcurrentBlockedThisCycle: boolean;
+    maxConcurrentBlockedCount: number;
+  } | null;
+  controlPlane: {
+    allowedSymbolsConfiguredDefaults: string[];
+    allowedSymbolsRuntime: string[];
+    allowedSymbolsRuntimeCount: number;
+    activeMode: string;
+    isRunning: boolean;
+  };
+  capitalAllocation: {
+    paperMaxConcurrentPositions: number;
+    currentOpenPositionsCount: number;
+    currentAvailablePaperCapital: number;
+    availableRiskBudget: number;
+    blockedByMaxConcurrentRulesThisCycle: boolean;
   };
   liveView: {
     openSignalsVisibleInSignalRoom: number;
@@ -217,6 +253,12 @@ export default function Page() {
             <SummaryCard label="Current cycle Telegram dispatched" value={data.reconciliation.currentCycle.telegramSignalsDispatchedThisCycle} />
             <SummaryCard label="Current cycle skipped" value={data.reconciliation.currentCycle.signalsSkippedThisCycle} />
           </section>
+          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <SummaryCard label="Allowed symbols active" value={data.controlPlane.allowedSymbolsRuntimeCount} />
+            <SummaryCard label="Scanned this cycle" value={data.cycleTruth?.symbolsActuallyScanned.length ?? 0} />
+            <SummaryCard label="Closed this cycle" value={data.cycleTruth?.closedSignalsThisCycle ?? 0} />
+            <SummaryCard label="Max concurrent blocked" value={data.cycleTruth?.maxConcurrentBlockedCount ?? 0} />
+          </section>
 
           <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <SummaryCard label="Persisted open" value={data.reconciliation.persistedTotals.totalOpenSignals} />
@@ -234,7 +276,14 @@ export default function Page() {
               <p>Paper equity: <span className="font-medium">{data.paperModel.equity}</span></p>
               <p>Paper risk %: <span className="font-medium">{(data.paperModel.riskPct * 100).toFixed(2)}%</span></p>
               <p>Paper leverage: <span className="font-medium">{data.paperModel.leverage}x</span></p>
+              <p>Leverage meaning: <span className="font-medium">Configured cap only; effective leverage = notional / equity</span></p>
               <p>Max concurrent positions: <span className="font-medium">{data.paperModel.maxConcurrentPositions}</span></p>
+              <p>Open positions now: <span className="font-medium">{data.capitalAllocation.currentOpenPositionsCount}</span></p>
+              <p>Available paper capital: <span className="font-medium">{data.capitalAllocation.currentAvailablePaperCapital.toFixed(2)}</span></p>
+              <p>Available risk budget: <span className="font-medium">{data.capitalAllocation.availableRiskBudget.toFixed(2)}</span></p>
+              <p>Blocked by max concurrent this cycle: <span className="font-medium">{String(data.capitalAllocation.blockedByMaxConcurrentRulesThisCycle)}</span></p>
+              <p>Runtime allowed symbols: <span className="font-medium">{data.controlPlane.allowedSymbolsRuntime.join(", ") || "-"}</span></p>
+              <p>Configured default symbols: <span className="font-medium">{data.controlPlane.allowedSymbolsConfiguredDefaults.join(", ") || "-"}</span></p>
               <p>Min tier: <span className="font-medium">{data.paperModel.minTier}</span></p>
               <p>Min TP2 R: <span className="font-medium">{data.paperModel.minTp2R}</span></p>
               <p>Cooldown (min): <span className="font-medium">{data.paperModel.symbolCooldownMinutes}</span></p>
@@ -255,7 +304,7 @@ export default function Page() {
                   <tr className="text-slate-400">
                     <th className="px-2 py-1">Symbol</th><th className="px-2 py-1">Entry</th><th className="px-2 py-1">Stop</th><th className="px-2 py-1">TP1/TP2</th>
                     <th className="px-2 py-1">Qty</th><th className="px-2 py-1">Notional</th><th className="px-2 py-1">Risk</th><th className="px-2 py-1">Lev</th>
-                    <th className="px-2 py-1">PnL</th><th className="px-2 py-1">Telegram</th><th className="px-2 py-1">Opened</th>
+                    <th className="px-2 py-1">PnL / R</th><th className="px-2 py-1">Telegram</th><th className="px-2 py-1">Opened</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -266,11 +315,13 @@ export default function Page() {
                       <td className="px-2 py-1">{trade.stopPrice.toFixed(6)}</td>
                       <td className="px-2 py-1">{trade.tp1Price.toFixed(6)} / {trade.tp2Price.toFixed(6)}</td>
                       <td className="px-2 py-1">{(trade.quantity ?? 0).toFixed(6)}</td>
-                      <td className="px-2 py-1">{(trade.notional ?? 0).toFixed(2)}</td>
-                      <td className="px-2 py-1">{((trade.riskPct ?? 0) * 100).toFixed(2)}% ({(trade.riskAmount ?? 0).toFixed(2)})</td>
-                      <td className="px-2 py-1">{(trade.leverage ?? 0).toFixed(2)}x</td>
-                      <td className="px-2 py-1">{(trade.unrealizedPnl ?? 0).toFixed(6)}</td>
-                      <td className="px-2 py-1">{trade.telegramDispatchStatus}</td>
+                      <td className="px-2 py-1">{(trade.paperComputed?.notionalQuote ?? trade.notional ?? 0).toFixed(2)}</td>
+                      <td className="px-2 py-1">{((trade.paperComputed?.positionRiskPct ?? trade.riskPct ?? 0) * 100).toFixed(2)}% ({(trade.paperComputed?.riskAmountQuote ?? trade.riskAmount ?? 0).toFixed(2)})</td>
+                      <td className="px-2 py-1">
+                        cap {(trade.paperComputed?.configuredLeverageCap ?? trade.leverage ?? 0).toFixed(2)}x / eff {(trade.paperComputed?.effectiveLeverage ?? 0).toFixed(2)}x
+                      </td>
+                      <td className="px-2 py-1">{(trade.paperComputed?.unrealizedPnlQuote ?? trade.unrealizedPnl ?? 0).toFixed(6)} / {(trade.paperComputed?.rResultOpen ?? 0).toFixed(2)}R</td>
+                      <td className="px-2 py-1">{trade.telegramDispatchStatus} ({trade.telegramDispatchReason ?? "-"})</td>
                       <td className="px-2 py-1">{new Date(trade.openedAt).toISOString()}</td>
                     </tr>
                   ))}
@@ -283,13 +334,14 @@ export default function Page() {
             <h2 className="text-lg font-semibold">Closed Paper Trades</h2>
             <div className="overflow-auto mt-3">
               <table className="min-w-full text-left text-sm">
-                <thead><tr className="text-slate-400"><th className="px-2 py-1">Symbol</th><th className="px-2 py-1">Outcome</th><th className="px-2 py-1">Realized PnL</th><th className="px-2 py-1">Closed At</th></tr></thead>
+                <thead><tr className="text-slate-400"><th className="px-2 py-1">Symbol</th><th className="px-2 py-1">Outcome</th><th className="px-2 py-1">Realized PnL / R</th><th className="px-2 py-1">Lev cap/eff</th><th className="px-2 py-1">Closed At</th></tr></thead>
                 <tbody>
                   {data.closedTrades.map((trade) => (
                     <tr key={trade.id} className="border-t border-slate-800">
                       <td className="px-2 py-1">{trade.symbol} {trade.side}</td>
                       <td className={`px-2 py-1 ${toneForOutcome(trade.outcome)}`}>{trade.outcome ?? "-"}</td>
-                      <td className="px-2 py-1">{(trade.realizedPnl ?? 0).toFixed(6)}</td>
+                      <td className="px-2 py-1">{(trade.paperComputed?.realizedPnlQuote ?? trade.realizedPnl ?? 0).toFixed(6)} / {(trade.paperComputed?.rResultClosed ?? 0).toFixed(2)}R</td>
+                      <td className="px-2 py-1">cap {(trade.paperComputed?.configuredLeverageCap ?? 0).toFixed(2)}x / eff {(trade.paperComputed?.effectiveLeverage ?? 0).toFixed(2)}x</td>
                       <td className="px-2 py-1">{trade.closedAt ? new Date(trade.closedAt).toISOString() : "-"}</td>
                     </tr>
                   ))}
@@ -318,6 +370,21 @@ export default function Page() {
               </table>
             </div>
           </section>
+
+          {data.cycleTruth && (
+            <section className="rounded border border-slate-800 bg-slate-900/70 p-4">
+              <h2 className="text-lg font-semibold">Cycle Truth / Rejection Breakdown</h2>
+              <p className="mt-2 text-xs text-slate-400">Why only one signal fired is explained here: runtime allowlist, scanned symbols, and exact filter counts.</p>
+              <p className="mt-2 text-sm">Allowed symbols configured: {data.cycleTruth.allowedSymbolsConfigured.join(", ") || "-"}</p>
+              <p className="text-sm">Symbols scanned: {data.cycleTruth.symbolsActuallyScanned.join(", ") || "-"}</p>
+              <p className="text-sm">Skipped before evaluation: {data.cycleTruth.symbolsSkippedBeforeEvaluation.join(", ") || "-"}</p>
+              <ul className="mt-3 space-y-1 text-sm text-slate-300">
+                {Object.entries(data.cycleTruth.candidatesRejectedBy).map(([reason, count]) => (
+                  <li key={reason}>{reason}: {count}</li>
+                ))}
+              </ul>
+            </section>
+          )}
         </>
       )}
     </section>

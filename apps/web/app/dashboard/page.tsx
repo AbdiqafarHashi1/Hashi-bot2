@@ -257,6 +257,8 @@ export default function DashboardPage() {
                 <Kpi label="Losses" value={String(data.signalRoom.summary.lossCount)} />
                 <Kpi label="Partial wins" value={String(data.signalRoom.summary.partialWinCount)} />
                 <Kpi label="Latest signal" value={latestSignalAt ? new Date(latestSignalAt).toISOString() : "No signals yet"} />
+                <Kpi label="Allowed symbols active" value={String(control?.allowedSymbols.length ?? 0)} />
+                <Kpi label="Allowed symbols list" value={(control?.allowedSymbols ?? []).join(", ") || "None"} />
               </div>
             ) : (
               <p className="text-sm text-slate-400">Signal room data unavailable.</p>
