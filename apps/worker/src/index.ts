@@ -155,17 +155,54 @@ type SignalCycleReconciliation = {
     maxConcurrentBlockedCount: number;
     cycleRankingAllocation: Array<{
       symbol: string;
+      side: string;
       score: number;
       rank: number;
+      tier: SignalTier;
       selected: boolean;
+      diversificationGroup: string;
+      selectedReason: string | null;
       rejectionReason: string | null;
     }>;
+    actionableSelectedThisCycle: Array<{
+      symbol: string;
+      side: string;
+      score: number;
+      rank: number;
+      tier: SignalTier;
+      selected: true;
+      diversificationGroup: string;
+      selectedReason: string;
+      telegramDispatchStatus: string;
+      paperTradeStatus: "opened" | "not_opened";
+    }>;
+    auditCandidatesThisCycle: Array<{
+      symbol: string;
+      side: string;
+      score: number;
+      rank: number;
+      tier: SignalTier;
+      selected: boolean;
+      diversificationGroup: string;
+      selectedReason: string | null;
+      rejectionReason: string | null;
+    }>;
+    selectedActionableCountThisCycle: number;
+    rejectedCountThisCycle: number;
+    portfolioCapacityUsage: {
+      selectedCount: number;
+      selectedCap: number;
+      telegramCap: number;
+    };
+    diversificationNotes: string[];
   };
   currentCycle: {
     candidatesEvaluatedThisCycle: number;
     signalsPersistedThisCycle: number;
     telegramSignalsDispatchedThisCycle: number;
     signalsSkippedThisCycle: number;
+    selectedActionableCountThisCycle?: number;
+    rejectedCountThisCycle?: number;
   };
   persistedTotals: {
     totalOpenSignals: number;
@@ -184,9 +221,8 @@ type SymbolCycleSummary = {
   telegramDispatchStatus:
     | "sent"
     | "failed"
-    | "not_selected_for_telegram_cycle_subset"
     | "not_attempted_no_message_payload"
-    | "not_attempted_filtered_before_dispatch";
+    | "not_attempted_not_in_final_selected_set";
   skipReason: string | null;
 };
 
@@ -360,6 +396,63 @@ function rankingTieBreakers(params: {
   const trendAlignmentStrength = params.regime.regime.startsWith("TREND") ? 1 : 0;
   const volatilitySuitability = params.regime.regime === "SHOCK_UNSTABLE" ? 0 : 1;
   return { rr, trendAlignmentStrength, volatilitySuitability };
+}
+
+type DiversificationGroup = "majors" | "large_alts" | "high_beta_alt_or_meme" | "other";
+
+function cryptoDiversificationGroup(symbol: string): DiversificationGroup {
+  if (["BTCUSDT", "ETHUSDT"].includes(symbol)) return "majors";
+  if (["SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT"].includes(symbol)) return "large_alts";
+  if (["DOGEUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT"].includes(symbol)) return "high_beta_alt_or_meme";
+  return "other";
+}
+
+function applySimpleCryptoDiversification(params: {
+  rankedEligibleCandidates: Array<{
+    symbolContext: SymbolMetadata;
+    marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
+    regime: ReturnType<typeof classifyRegime>;
+    candidateCount: number;
+    signal: BreakoutSignal;
+  }>;
+  enabled: boolean;
+  mode: ReturnType<typeof getConfig>["SIGNAL_CRYPTO_DIVERSIFICATION_MODE"];
+}): {
+  rankedForSelection: typeof params.rankedEligibleCandidates;
+  notes: string[];
+} {
+  if (!params.enabled || params.mode !== "simple_groups" || params.rankedEligibleCandidates.length <= 1) {
+    return { rankedForSelection: params.rankedEligibleCandidates, notes: [] };
+  }
+
+  const notes: string[] = [];
+  const reordered = [...params.rankedEligibleCandidates];
+  for (let i = 0; i < reordered.length - 1; i += 1) {
+    const current = reordered[i];
+    const next = reordered[i + 1];
+    const currentGroup = cryptoDiversificationGroup(current.signal.symbol);
+    const nextGroup = cryptoDiversificationGroup(next.signal.symbol);
+    const nearTie = Math.abs(current.signal.score - next.signal.score) <= 2;
+    if (
+      nearTie
+      && current.signal.marketType === "crypto"
+      && next.signal.marketType === "crypto"
+      && current.signal.side === next.signal.side
+      && currentGroup === nextGroup
+    ) {
+      const alternativeIndex = reordered.findIndex((entry, idx) => idx > i + 1
+        && Math.abs(current.signal.score - entry.signal.score) <= 2
+        && entry.signal.marketType === "crypto"
+        && entry.signal.side === current.signal.side
+        && cryptoDiversificationGroup(entry.signal.symbol) !== currentGroup);
+      if (alternativeIndex > i + 1) {
+        const [alternative] = reordered.splice(alternativeIndex, 1);
+        reordered.splice(i + 1, 0, alternative);
+        notes.push(`Diversification preferred ${alternative.signal.symbol} over near-tied ${next.signal.symbol} (same-side ${currentGroup}).`);
+      }
+    }
+  }
+  return { rankedForSelection: reordered, notes };
 }
 
 function atrFromContext(marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>) {
@@ -708,12 +801,14 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     rr_threshold: 0,
     entry_stretch: 0,
     max_concurrent_paper_positions: 0,
-    not_selected_portfolio_priority: 0,
-    dropped_due_to_lower_rank: 0,
+    not_selected_lower_rank: 0,
+    not_selected_portfolio_capacity: 0,
+    not_selected_diversification_preference: 0,
+    not_selected_selected_set_cap: 0,
+    not_actionable_not_in_final_selected_set: 0,
     blocked_remaining_notional_capacity: 0,
     blocked_remaining_open_risk_budget: 0,
     blocked_invalid_qty_after_caps: 0,
-    ranking_telegram_subset: 0,
     no_message_payload: 0
   };
   const symbolSummaries = new Map<string, SymbolCycleSummary>();
@@ -722,9 +817,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let maxConcurrentBlockedThisCycle = false;
   let cycleRankingAllocation: Array<{
     symbol: string;
+    side: string;
     score: number;
     rank: number;
+    tier: SignalTier;
     selected: boolean;
+    diversificationGroup: string;
+    selectedReason: string | null;
     rejectionReason: string | null;
   }> = [];
 
@@ -896,7 +995,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       scanned: runtimeSymbols.some((symbolMeta) => symbolMeta.symbol === entry.symbol),
       candidateFound: false,
       persisted: false,
-      telegramDispatchStatus: "not_attempted_filtered_before_dispatch",
+      telegramDispatchStatus: "not_attempted_not_in_final_selected_set",
       skipReason: runtimeSymbols.some((symbolMeta) => symbolMeta.symbol === entry.symbol) ? null : "not_allowed_by_system_control"
     });
   }
@@ -1085,7 +1184,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     latestPriceBySymbol.set(candidate.signal.symbol, candidate.marketContext.latestPrice);
   }
 
-  let cycleCandidatesForPersistence = cycleCandidates;
+  let finalSelectedCandidates: typeof cycleCandidates = [];
+  const selectedReasonBySymbol = new Map<string, string>();
+  let diversificationNotes: string[] = [];
   if (prismaClient && runtimeMode === "signal" && cycleCandidates.length > 0) {
     const candidateSymbols = Array.from(new Set(cycleCandidates.map((entry) => entry.signal.symbol)));
     const dedupeWindowStart = new Date(Date.now() - 60_000);
@@ -1265,6 +1366,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         }
         return (b.signal.confidence ?? 0) - (a.signal.confidence ?? 0);
       });
+      const diversifiedRanking = applySimpleCryptoDiversification({
+        rankedEligibleCandidates,
+        enabled: config.SIGNAL_DIVERSIFICATION_ENABLED,
+        mode: config.SIGNAL_CRYPTO_DIVERSIFICATION_MODE
+      });
+      diversificationNotes = diversifiedRanking.notes;
+      const rankedForSelection = diversifiedRanking.rankedForSelection;
 
       const snapshot = buildPaperPortfolioSnapshot({
         openTrades: openSignalTrades,
@@ -1277,43 +1385,54 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       let remainingNotionalCapacity = Math.max((snapshot.paperEquity * snapshot.maxTotalNotionalMultiplier) - snapshot.usedNotional, 0);
       let remainingOpenRiskBudget = Math.max((snapshot.paperEquity * snapshot.maxOpenRiskPct) - snapshot.usedRiskBudget, 0);
       let remainingSlots = Math.max(config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS - currentOpenTradeCount, 0);
-      const allocatorAccepted: typeof cycleCandidates = [];
+      const selectedCap = config.SIGNAL_MAX_SELECTED_PER_CYCLE;
 
-      cycleRankingAllocation = rankedEligibleCandidates.map((candidate, index) => ({
+      cycleRankingAllocation = rankedForSelection.map((candidate, index) => ({
         symbol: candidate.signal.symbol,
+        side: candidate.signal.side,
         score: candidate.signal.score,
         rank: index + 1,
+        tier: candidate.signal.setupGrade,
         selected: false,
+        diversificationGroup: candidate.signal.marketType === "crypto" ? cryptoDiversificationGroup(candidate.signal.symbol) : "other",
+        selectedReason: null,
         rejectionReason: null
       }));
 
-      for (const [index, candidate] of rankedEligibleCandidates.entries()) {
+      for (const [index, candidate] of rankedForSelection.entries()) {
         const rankingEntry = cycleRankingAllocation[index];
+        if (finalSelectedCandidates.length >= selectedCap) {
+          skippedCount += 1;
+          rejectionCounts.not_selected_selected_set_cap += 1;
+          if (rankingEntry) {
+            rankingEntry.selected = false;
+            rankingEntry.rejectionReason = "not_selected_selected_set_cap";
+          }
+          continue;
+        }
         if (remainingSlots <= 0) {
           skippedCount += 1;
           rejectionCounts.max_concurrent_paper_positions += 1;
-          rejectionCounts.not_selected_portfolio_priority += 1;
-          rejectionCounts.dropped_due_to_lower_rank += 1;
+          rejectionCounts.not_selected_portfolio_capacity += 1;
           maxConcurrentBlockedCount += 1;
           maxConcurrentBlockedThisCycle = true;
           const summary = symbolSummaries.get(candidate.signal.symbol);
-          if (summary) summary.skipReason = "not_selected_portfolio_priority";
+          if (summary) summary.skipReason = "not_selected_portfolio_capacity";
           if (rankingEntry) {
             rankingEntry.selected = false;
-            rankingEntry.rejectionReason = "not_selected_portfolio_priority";
+            rankingEntry.rejectionReason = "not_selected_portfolio_capacity";
           }
           continue;
         }
 
         if (remainingNotionalCapacity <= 0 || remainingOpenRiskBudget <= 0) {
           skippedCount += 1;
-          rejectionCounts.not_selected_portfolio_priority += 1;
-          rejectionCounts.dropped_due_to_lower_rank += 1;
+          rejectionCounts.not_selected_portfolio_capacity += 1;
           const summary = symbolSummaries.get(candidate.signal.symbol);
-          if (summary) summary.skipReason = "not_selected_portfolio_priority";
+          if (summary) summary.skipReason = "not_selected_portfolio_capacity";
           if (rankingEntry) {
             rankingEntry.selected = false;
-            rankingEntry.rejectionReason = "not_selected_portfolio_priority";
+            rankingEntry.rejectionReason = "not_selected_portfolio_capacity";
           }
           continue;
         }
@@ -1359,34 +1478,43 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         remainingNotionalCapacity = sized.remainingNotionalCapacity;
         remainingOpenRiskBudget = sized.remainingOpenRiskBudget;
         remainingSlots = Math.max(remainingSlots - 1, 0);
-        allocatorAccepted.push(candidate);
+        finalSelectedCandidates.push(candidate);
         if (rankingEntry) {
           rankingEntry.selected = true;
+          rankingEntry.selectedReason = "selected_by_global_rank_and_portfolio_fit";
           rankingEntry.rejectionReason = null;
         }
+        selectedReasonBySymbol.set(candidate.signal.symbol, "selected_by_global_rank_and_portfolio_fit");
       }
-
-      cycleCandidatesForPersistence = allocatorAccepted;
-
-      const notSelectedByPriority = cycleRankingAllocation.filter(
-        (entry) => !entry.selected && entry.rejectionReason === "not_selected_portfolio_priority"
-      );
-      if (notSelectedByPriority.length > 0) {
-        await prismaClient.runtimeEvent.createMany({
-          data: notSelectedByPriority.map((entry) => ({
-            type: "signal_skipped_portfolio_priority",
-            mode: "signal",
-            symbol: entry.symbol,
-            message: "Skipped due to portfolio ranking priority",
-            payload: {
-              blockedReason: entry.rejectionReason,
-              rank: entry.rank
-            }
-          }))
-        });
+      const selectedSymbols = new Set(finalSelectedCandidates.map((entry) => entry.signal.symbol));
+      for (const entry of cycleRankingAllocation) {
+        if (!entry.selected && !entry.rejectionReason) {
+          const higherSelectedCount = cycleRankingAllocation.filter((e) => e.rank < entry.rank && selectedSymbols.has(e.symbol)).length;
+          entry.rejectionReason = higherSelectedCount >= selectedCap ? "not_selected_selected_set_cap" : "not_selected_lower_rank";
+        }
+        if (!entry.selected && diversificationNotes.length > 0 && entry.rejectionReason === "not_selected_lower_rank") {
+          const group = entry.diversificationGroup;
+          const sameSideSelected = cycleRankingAllocation.some((e) => e.selected && e.side === entry.side && e.diversificationGroup === group);
+          if (sameSideSelected) {
+            entry.rejectionReason = "not_selected_diversification_preference";
+            rejectionCounts.not_selected_diversification_preference += 1;
+          }
+        }
+        if (entry.rejectionReason) {
+          rejectionCounts[entry.rejectionReason] = (rejectionCounts[entry.rejectionReason] ?? 0) + 1;
+        }
       }
     }
 
+  }
+  if (runtimeMode === "signal") {
+    for (const candidate of cycleCandidates) {
+      if (!finalSelectedCandidates.some((selected) => selected.signal.symbol === candidate.signal.symbol)) {
+        rejectionCounts.not_actionable_not_in_final_selected_set += 1;
+      }
+    }
+  } else {
+    finalSelectedCandidates = cycleCandidates;
   }
 
   if (prismaClient) {
@@ -1407,10 +1535,10 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
   const cycleNow = new Date();
 
-  if (prismaClient && cycleCandidatesForPersistence.length > 0) {
-    persistedSignalCount = cycleCandidatesForPersistence.length;
+  if (prismaClient && finalSelectedCandidates.length > 0) {
+    persistedSignalCount = finalSelectedCandidates.length;
     const persistedSignalEvents = await Promise.all(
-      cycleCandidatesForPersistence.map((entry) =>
+      finalSelectedCandidates.map((entry) =>
         prismaClient.signalEvent.create({
           data: {
             symbol: entry.signal.symbol,
@@ -1457,7 +1585,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     });
 
     await prismaClient.signalOutcome.createMany({
-      data: cycleCandidatesForPersistence.map((entry) => ({
+      data: finalSelectedCandidates.map((entry) => ({
         symbol: entry.signal.symbol,
         side: entry.signal.side,
         entry: entry.signal.entryPrice,
@@ -1492,7 +1620,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       let remainingOpenRiskBudget = Math.max((snapshot.paperEquity * snapshot.maxOpenRiskPct) - snapshot.usedRiskBudget, 0);
 
       for (const event of persistedSignalEvents) {
-        const matching = cycleCandidatesForPersistence.find((entry) => entry.signal.symbol === event.symbol);
+        const matching = finalSelectedCandidates.find((entry) => entry.signal.symbol === event.symbol);
         const sized = matching
           ? computePaperPosition({
             entryPrice: matching.signal.entryPrice,
@@ -1825,7 +1953,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const allocation = allocatePortfolioCapital({
     mode: executionModeForAllocation,
     accountEquityUsd: config.EQUITY_START,
-    candidates: cycleCandidatesForPersistence.map((entry) => ({ signal: entry.signal })),
+    candidates: finalSelectedCandidates.map((entry) => ({ signal: entry.signal })),
     currentOpenRiskPct: 0,
     openRiskBySymbolPct: Object.fromEntries(runtimeSymbols.map((entry) => [entry.symbol, 0])),
     governanceLocks: {
@@ -1839,12 +1967,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   });
 
   const signalModeOutput = runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT
-    ? buildSignalModePayload({
+      ? buildSignalModePayload({
         rankedSetups: allocation.rankedSetups,
         decisions: allocation.decisions,
+        selectedSignals: finalSelectedCandidates.map((entry) => entry.signal),
         cycleId,
-        minTier: config.SIGNAL_MIN_TIER,
-        maxSignals: config.MAX_SIGNALS_PER_CYCLE
+        minTier: "B",
+        maxSignals: config.SIGNAL_MAX_TELEGRAM_PER_CYCLE
       })
     : null;
 
@@ -2426,15 +2555,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           telegramDispatchStatus: "not_dispatched"
         },
         data: {
-          telegramDispatchStatus: "not_selected_for_telegram_cycle_subset",
-          telegramDispatchReason: "not_selected_for_telegram_cycle_subset"
+          telegramDispatchStatus: "not_dispatched",
+          telegramDispatchReason: "not_selected_telegram_cap"
         }
       });
       for (const summary of symbolSummaries.values()) {
-        if (summary.persisted && summary.telegramDispatchStatus === "not_attempted_filtered_before_dispatch") {
-          summary.telegramDispatchStatus = "not_selected_for_telegram_cycle_subset";
-          summary.skipReason = "ranking_telegram_subset";
-          rejectionCounts.ranking_telegram_subset += 1;
+        if (summary.persisted && summary.telegramDispatchStatus === "not_attempted_not_in_final_selected_set") {
+          summary.telegramDispatchStatus = "not_attempted_not_in_final_selected_set";
         }
       }
 
@@ -2656,6 +2783,36 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
   let reconciliation: SignalCycleReconciliation | null = null;
   if (prismaClient && runtimeMode === "signal") {
+    const rankingBySymbol = new Map(cycleRankingAllocation.map((entry) => [entry.symbol, entry]));
+    const actionableSelectedThisCycle = finalSelectedCandidates.map((entry) => {
+      const ranking = rankingBySymbol.get(entry.signal.symbol);
+      const summary = symbolSummaries.get(entry.signal.symbol);
+      return {
+        symbol: entry.signal.symbol,
+        side: entry.signal.side,
+        score: entry.signal.score,
+        rank: ranking?.rank ?? 0,
+        tier: entry.signal.setupGrade,
+        selected: true as const,
+        diversificationGroup: ranking?.diversificationGroup ?? (entry.signal.marketType === "crypto" ? cryptoDiversificationGroup(entry.signal.symbol) : "other"),
+        selectedReason: ranking?.selectedReason ?? selectedReasonBySymbol.get(entry.signal.symbol) ?? "selected_by_global_rank_and_portfolio_fit",
+        telegramDispatchStatus: summary?.telegramDispatchStatus ?? "unknown",
+        paperTradeStatus: "opened" as const
+      };
+    });
+    const auditCandidatesThisCycle = cycleRankingAllocation.map((entry) => ({
+      symbol: entry.symbol,
+      side: entry.side,
+      score: entry.score,
+      rank: entry.rank,
+      tier: entry.tier,
+      selected: entry.selected,
+      diversificationGroup: entry.diversificationGroup,
+      selectedReason: entry.selectedReason,
+      rejectionReason: entry.rejectionReason
+    }));
+    const rejectedCountThisCycle = auditCandidatesThisCycle.filter((entry) => !entry.selected).length;
+
     const [
       totalOpenSignals,
       totalClosedSignals,
@@ -2713,13 +2870,25 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         maxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT,
         maxConcurrentBlockedThisCycle,
         maxConcurrentBlockedCount,
-        cycleRankingAllocation
+        cycleRankingAllocation,
+        actionableSelectedThisCycle,
+        auditCandidatesThisCycle,
+        selectedActionableCountThisCycle: actionableSelectedThisCycle.length,
+        rejectedCountThisCycle,
+        portfolioCapacityUsage: {
+          selectedCount: actionableSelectedThisCycle.length,
+          selectedCap: config.SIGNAL_MAX_SELECTED_PER_CYCLE,
+          telegramCap: config.SIGNAL_MAX_TELEGRAM_PER_CYCLE
+        },
+        diversificationNotes
       },
       currentCycle: {
         candidatesEvaluatedThisCycle: candidateCount,
         signalsPersistedThisCycle: persistedSignalCount,
         telegramSignalsDispatchedThisCycle: dispatchedTelegramCount,
-        signalsSkippedThisCycle: skippedCount
+        signalsSkippedThisCycle: skippedCount,
+        selectedActionableCountThisCycle: actionableSelectedThisCycle.length,
+        rejectedCountThisCycle
       },
       persistedTotals: {
         totalOpenSignals,

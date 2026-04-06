@@ -16,6 +16,11 @@ type SignalRoomPayload = {
     latestSignalTimestamp: string | null;
   };
   reconciliation: {
+    currentCycle: {
+      selectedActionableCountThisCycle?: number;
+      rejectedCountThisCycle?: number;
+      telegramSignalsDispatchedThisCycle: number;
+    };
     persistedTotals: {
       totalOpenSignals: number;
       totalClosedSignals: number;
@@ -71,6 +76,9 @@ type SignalPerformancePayload = {
     tp1ProtectOffsetR: number;
     breakevenBufferR: number;
   };
+  controlPlane?: {
+    allowedSymbolsRuntimeCount?: number;
+  };
 };
 
 type DashboardPayload = {
@@ -113,8 +121,8 @@ const EMPTY_TIER_METRICS: SignalTierMetrics = {
 
 function Card({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded border border-slate-800 bg-slate-900/70 p-4">
-      <h2 className="mb-3 text-lg font-semibold text-slate-100">{title}</h2>
+    <section className="rounded-lg border border-slate-800/90 bg-slate-900/70 p-4 sm:p-5">
+      <h2 className="mb-3 text-base font-semibold tracking-tight text-slate-100 sm:text-lg">{title}</h2>
       {children}
     </section>
   );
@@ -122,9 +130,9 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded border border-slate-800 bg-slate-950/40 p-3">
+    <div className="rounded-md border border-slate-800 bg-slate-950/40 p-3">
       <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
-      <p className="mt-1 text-xl font-semibold text-slate-100">{value}</p>
+      <p className="mt-1 break-words text-lg font-semibold text-slate-100 sm:text-xl">{value}</p>
     </div>
   );
 }
@@ -247,7 +255,7 @@ export default function DashboardPage() {
       )}
 
       {!loading && !error && (
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-4 2xl:grid-cols-2">
           <Card title="Signal Mode Summary">
             {data.signalRoom ? (
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-2">
@@ -257,7 +265,10 @@ export default function DashboardPage() {
                 <Kpi label="Losses" value={String(data.signalRoom.summary.lossCount)} />
                 <Kpi label="Partial wins" value={String(data.signalRoom.summary.partialWinCount)} />
                 <Kpi label="Latest signal" value={latestSignalAt ? new Date(latestSignalAt).toISOString() : "No signals yet"} />
-                <Kpi label="Allowed symbols active" value={String(control?.allowedSymbols.length ?? 0)} />
+                <Kpi label="Allowed symbols active" value={String(data.signalRoom.controlPlane?.allowedSymbolsRuntimeCount ?? control?.allowedSymbols.length ?? 0)} />
+                <Kpi label="Selected this cycle" value={String(data.signalRoom.reconciliation.currentCycle.selectedActionableCountThisCycle ?? 0)} />
+                <Kpi label="Rejected this cycle" value={String(data.signalRoom.reconciliation.currentCycle.rejectedCountThisCycle ?? 0)} />
+                <Kpi label="Telegram dispatched this cycle" value={String(data.signalRoom.reconciliation.currentCycle.telegramSignalsDispatchedThisCycle)} />
                 <Kpi label="Allowed symbols list" value={(control?.allowedSymbols ?? []).join(", ") || "None"} />
               </div>
             ) : (

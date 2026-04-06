@@ -37,17 +37,54 @@ type ReconciliationPayload = {
     maxConcurrentBlockedCount?: number;
     cycleRankingAllocation?: Array<{
       symbol: string;
+      side: string;
       score: number;
       rank: number;
+      tier: string;
       selected: boolean;
+      diversificationGroup: string;
+      selectedReason: string | null;
       rejectionReason: string | null;
     }>;
+    actionableSelectedThisCycle?: Array<{
+      symbol: string;
+      side: string;
+      score: number;
+      rank: number;
+      tier: string;
+      selected: boolean;
+      diversificationGroup: string;
+      selectedReason: string;
+      telegramDispatchStatus: string;
+      paperTradeStatus: string;
+    }>;
+    auditCandidatesThisCycle?: Array<{
+      symbol: string;
+      side: string;
+      score: number;
+      rank: number;
+      tier: string;
+      selected: boolean;
+      diversificationGroup: string;
+      selectedReason: string | null;
+      rejectionReason: string | null;
+    }>;
+    selectedActionableCountThisCycle?: number;
+    rejectedCountThisCycle?: number;
+    portfolioCapacityUsage?: {
+      selectedCount: number;
+      selectedCap: number;
+      telegramCap: number;
+    };
+    diversificationNotes?: string[];
   };
   currentCycle?: {
     candidatesEvaluatedThisCycle: number;
     signalsPersistedThisCycle: number;
     telegramSignalsDispatchedThisCycle: number;
     signalsSkippedThisCycle: number;
+    selectedActionableCountThisCycle?: number;
+    rejectedCountThisCycle?: number;
   };
   persistedTotals?: {
     totalOpenSignals: number;
@@ -149,18 +186,18 @@ export async function GET() {
         closedAt: null
       },
       orderBy: { openedAt: "desc" },
-      take: 100
+      take: 20
     }),
     prisma.signalTrade.findMany({
       where: {
         OR: [{ status: "tp2_hit" }, { status: "stop_hit" }, { status: "closed" }]
       },
       orderBy: { closedAt: "desc" },
-      take: 100
+      take: 20
     }),
     prisma.signalEvent.findMany({
       orderBy: { generatedAt: "desc" },
-      take: 100
+      take: 20
     }),
     prisma.runtimeEvent.findFirst({
       where: { type: "signal_cycle_reconciliation", mode: "signal" },
@@ -201,6 +238,11 @@ export async function GET() {
     signalsPersistedThisCycle: 0,
     telegramSignalsDispatchedThisCycle: 0,
     signalsSkippedThisCycle: 0
+  };
+  const currentCycleWithSelection = {
+    ...currentCycle,
+    selectedActionableCountThisCycle: reconciliation?.cycleTruth?.selectedActionableCountThisCycle ?? currentCycle.signalsPersistedThisCycle,
+    rejectedCountThisCycle: reconciliation?.cycleTruth?.rejectedCountThisCycle ?? Math.max(currentCycle.candidatesEvaluatedThisCycle - currentCycle.signalsPersistedThisCycle, 0)
   };
 
   const persistedTotals = reconciliation?.persistedTotals ?? {
@@ -256,7 +298,7 @@ export async function GET() {
     summary,
     reconciliation: {
       cycleId: reconciliation?.cycleId ?? latestReconciliation?.id ?? null,
-      currentCycle,
+      currentCycle: currentCycleWithSelection,
       persistedTotals
     },
     liveView,
@@ -284,6 +326,12 @@ export async function GET() {
       tp1ProtectOffsetR: config.SIGNAL_TP1_PROTECT_OFFSET_R,
       breakevenBufferR: config.SIGNAL_BREAKEVEN_BUFFER_R
     },
+    signalSelectionPolicy: {
+      selectedCapPerCycle: config.SIGNAL_MAX_SELECTED_PER_CYCLE,
+      telegramCapPerCycle: config.SIGNAL_MAX_TELEGRAM_PER_CYCLE,
+      diversificationEnabled: config.SIGNAL_DIVERSIFICATION_ENABLED,
+      diversificationMode: config.SIGNAL_CRYPTO_DIVERSIFICATION_MODE
+    },
     controlPlane: {
       allowedSymbolsConfiguredDefaults: config.DEFAULT_SYMBOLS.length > 0 ? config.DEFAULT_SYMBOLS : config.DEFAULT_CRYPTO_SYMBOLS,
       allowedSymbolsRuntime: systemControl?.allowedSymbols ?? [],
@@ -303,10 +351,24 @@ export async function GET() {
       currentOpenPositionsCount: openTradesWithDispatch.length,
       blockedByMaxConcurrentRulesThisCycle: cycleTruth?.maxConcurrentBlockedThisCycle ?? false
     },
+    currentCycleSummary: {
+      candidatesEvaluated: cycleTruth?.candidatesEvaluatedThisCycle ?? currentCycle.candidatesEvaluatedThisCycle,
+      selectedActionableCount: cycleTruth?.selectedActionableCountThisCycle ?? currentCycle.signalsPersistedThisCycle,
+      telegramDispatchedCount: currentCycle.telegramSignalsDispatchedThisCycle,
+      rejectedCount: cycleTruth?.rejectedCountThisCycle ?? Math.max(currentCycle.candidatesEvaluatedThisCycle - currentCycle.signalsPersistedThisCycle, 0),
+      portfolioCapacityUsage: cycleTruth?.portfolioCapacityUsage ?? {
+        selectedCount: currentCycle.signalsPersistedThisCycle,
+        selectedCap: config.SIGNAL_MAX_SELECTED_PER_CYCLE,
+        telegramCap: config.SIGNAL_MAX_TELEGRAM_PER_CYCLE
+      },
+      diversificationNotes: cycleTruth?.diversificationNotes ?? []
+    },
     cycleTruth,
     dispatchBreakdown,
+    selectedThisCycle: cycleTruth?.actionableSelectedThisCycle ?? [],
+    rejectedThisCycle: (cycleTruth?.auditCandidatesThisCycle ?? []).filter((entry) => !entry.selected),
     openTrades: openTradesWithDispatch,
     closedTrades: closedTradesWithPaper,
-    recentSignals
+    recentActionableSignals: recentSignals
   });
 }
