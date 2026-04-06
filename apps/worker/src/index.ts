@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { Redis } from "ioredis";
 import { getConfig } from "@hashi/config";
 import {
@@ -119,7 +120,11 @@ function activeSignalTradeWhereClause() {
   return {
     OR: [{ status: "open" }, { status: "tp1_hit" }],
     closedAt: null
-  } as const;
+  };
+}
+
+function toInputJson(value: unknown): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
 }
 
 function toRuntimeMode(executionMode: ReturnType<typeof getConfig>["EXECUTION_MODE"]): RuntimeMode {
@@ -173,9 +178,9 @@ function computeSignalQuality(params: {
   components: Record<ScoreComponentName, number>;
 } {
   const { signal, regime, marketContext } = params;
-  const trendScore = boundedScore(regime.regime === "breakout" ? 22 : 14, 0, 25);
+  const trendScore = boundedScore(regime.regime.startsWith("TREND") ? 22 : 14, 0, 25);
   const breakoutScore = boundedScore(Math.round((signal.score / 100) * 25), 0, 25);
-  const volatilityScore = boundedScore(regime.regime === "high_volatility" ? 18 : 12, 0, 20);
+  const volatilityScore = boundedScore(regime.regime === "SHOCK_UNSTABLE" ? 18 : 12, 0, 20);
   const structureScore = boundedScore(signal.setupGrade === "A+" ? 19 : signal.setupGrade === "A" ? 16 : 12, 0, 20);
   const extensionRatio = Math.abs(signal.entryPrice - marketContext.latestPrice) / Math.max(marketContext.latestPrice, 1e-6);
   const entryScore = boundedScore(Math.round((1 - Math.min(extensionRatio, 0.01) / 0.01) * 10), 0, 10);
@@ -1349,7 +1354,7 @@ async function bootstrap() {
             {
               eventType: "personal_connector_sync",
               connector,
-              payload: reconciliation.details
+              payload: toInputJson(reconciliation.details)
             },
             {
               eventType: "personal_account_snapshot_unavailable",
@@ -1366,7 +1371,7 @@ async function bootstrap() {
             type: "connector_sync",
             mode: "personal",
             message: "Personal connector sync completed",
-            payload: reconciliation.details
+            payload: toInputJson(reconciliation.details)
           }
         });
       } catch (error) {
@@ -1509,7 +1514,7 @@ async function bootstrap() {
             {
               eventType: "prop_connector_sync",
               connector,
-              payload: reconciliation.details
+              payload: toInputJson(reconciliation.details)
             },
             {
               eventType: "prop_account_snapshot_unavailable",
@@ -1526,7 +1531,7 @@ async function bootstrap() {
             type: "connector_sync",
             mode: "prop",
             message: "Prop connector sync completed",
-            payload: reconciliation.details
+            payload: toInputJson(reconciliation.details)
           }
         });
       } catch (error) {
@@ -1575,7 +1580,7 @@ async function bootstrap() {
       lockType: string | null;
       reason: string | null;
       severity: string;
-      payload: Record<string, unknown>;
+      payload: Prisma.InputJsonValue;
     }> = [];
 
     const lockStates = {

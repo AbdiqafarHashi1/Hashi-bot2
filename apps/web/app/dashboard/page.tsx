@@ -3,6 +3,9 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { ControlRoomStatePayload } from "../../lib/control-room/contracts";
 
+type SignalTier = "A+" | "A" | "B";
+type OutcomeStatus = "OPEN" | "TP1_HIT" | "TP2_HIT" | "STOP_HIT" | "EXPIRED" | "PARTIAL_WIN" | "BE_AFTER_TP1";
+
 type SignalRoomPayload = {
   summary: {
     openCount: number;
@@ -28,6 +31,39 @@ type PropRoomPayload = {
   complianceEvents: Array<unknown>;
 };
 
+type SignalTierMetrics = {
+  total: number;
+  resolved: number;
+  wins: number;
+  losses: number;
+  partialWins: number;
+  breakevens: number;
+  expired: number;
+  winRate: number;
+  avgR: number;
+  expectancy: number;
+};
+
+type SignalPerformancePayload = {
+  summary: {
+    avgR: number;
+    totalSignalsToday: number;
+  };
+  perTier: Partial<Record<SignalTier, SignalTierMetrics>>;
+  filters: {
+    minTier: SignalTier;
+    minTp2R: number;
+    maxEntryStretchAtr: number;
+    symbolCooldownMinutes: number;
+    bTierEnabled: boolean;
+    partialAtTp1Enabled: boolean;
+    partialPct: number;
+    tp1ProtectMode: "break_even" | "offset_r";
+    tp1ProtectOffsetR: number;
+    breakevenBufferR: number;
+  };
+};
+
 type DashboardPayload = {
   signalRoom: SignalRoomPayload | null;
   personalRoom: PersonalRoomPayload | null;
@@ -35,41 +71,12 @@ type DashboardPayload = {
   controlRoom: ControlRoomStatePayload | null;
   runtimeEvents: Array<{ id: string }>;
   incidents: Array<{ id: string; resolved: boolean }>;
-  signalPerformance: {
-    summary: {
-      avgR: number;
-      totalSignalsToday: number;
-    };
-    perTier: Record<"A+" | "A" | "B", {
-      total: number;
-      resolved: number;
-      wins: number;
-      losses: number;
-      partialWins: number;
-      breakevens: number;
-      expired: number;
-      winRate: number;
-      avgR: number;
-      expectancy: number;
-    }>;
-    filters: {
-      minTier: "A+" | "A" | "B";
-      minTp2R: number;
-      maxEntryStretchAtr: number;
-      symbolCooldownMinutes: number;
-      bTierEnabled: boolean;
-      partialAtTp1Enabled: boolean;
-      partialPct: number;
-      tp1ProtectMode: "break_even" | "offset_r";
-      tp1ProtectOffsetR: number;
-      breakevenBufferR: number;
-    };
-  } | null;
+  signalPerformance: SignalPerformancePayload | null;
   signalIntegrity: {
     totalSignals: number;
     distributionSum: number;
     mismatch: boolean;
-    breakdown: Record<"OPEN" | "TP1_HIT" | "TP2_HIT" | "STOP_HIT" | "EXPIRED" | "PARTIAL_WIN" | "BE_AFTER_TP1", number>;
+    breakdown: Record<OutcomeStatus, number>;
   } | null;
 };
 
@@ -80,6 +87,19 @@ type SystemControlPayload = {
   killSwitchActive: boolean;
   allowedSymbols: string[];
   updatedAt: string;
+};
+
+const EMPTY_TIER_METRICS: SignalTierMetrics = {
+  total: 0,
+  resolved: 0,
+  wins: 0,
+  losses: 0,
+  partialWins: 0,
+  breakevens: 0,
+  expired: 0,
+  winRate: 0,
+  avgR: 0,
+  expectancy: 0
 };
 
 function Card({ title, children }: { title: string; children: ReactNode }) {
@@ -128,7 +148,7 @@ export default function DashboardPage() {
       fetch("/api/control-room/state").then((res) => (res.ok ? (res.json() as Promise<ControlRoomStatePayload>) : null)),
       fetch("/api/runtime-events").then((res) => (res.ok ? (res.json() as Promise<{ events: Array<{ id: string }> }>) : null)),
       fetch("/api/incidents").then((res) => (res.ok ? (res.json() as Promise<{ incidents: Array<{ id: string; resolved: boolean }> }>) : null)),
-      fetch("/api/signal-performance").then((res) => (res.ok ? (res.json() as Promise<DashboardPayload["signalPerformance"]>) : null)),
+      fetch("/api/signal-performance").then((res) => (res.ok ? (res.json() as Promise<SignalPerformancePayload>) : null)),
       fetch("/api/signal-integrity-check").then((res) => (res.ok ? (res.json() as Promise<DashboardPayload["signalIntegrity"]>) : null)),
       fetch("/api/system-control").then((res) => (res.ok ? (res.json() as Promise<{ control: SystemControlPayload }>) : null))
     ])
@@ -141,7 +161,7 @@ export default function DashboardPage() {
           controlRoom,
           runtimeEvents: runtimeRes?.events ?? [],
           incidents: incidentsRes?.incidents ?? [],
-          signalPerformance: performanceRes ?? null,
+          signalPerformance: performanceRes,
           signalIntegrity: integrityRes ?? null
         });
         setControl(controlRes?.control ?? null);
@@ -191,6 +211,11 @@ export default function DashboardPage() {
     .split(",")
     .map((entry) => entry.trim().toUpperCase())
     .filter(Boolean);
+
+  const signalPerformance = data.signalPerformance;
+  const aPlusMetrics = signalPerformance?.perTier["A+"] ?? EMPTY_TIER_METRICS;
+  const aMetrics = signalPerformance?.perTier.A ?? EMPTY_TIER_METRICS;
+  const bMetrics = signalPerformance?.perTier.B ?? EMPTY_TIER_METRICS;
 
   return (
     <section className="space-y-5">
@@ -267,39 +292,39 @@ export default function DashboardPage() {
                 <p>Daily loss lock: <span className="font-medium">{String(data.controlRoom.governance.locks.dailyLoss)}</span></p>
                 <p>Trailing drawdown lock: <span className="font-medium">{String(data.controlRoom.governance.locks.trailingDrawdown)}</span></p>
                 <p>Max consecutive loss lock: <span className="font-medium">{String(data.controlRoom.governance.locks.maxConsecutiveLoss)}</span></p>
-                  <p>Telegram signal output enabled: <span className="font-medium">{String(data.controlRoom.telegram.signalOutputEnabled)}</span></p>
-                  <p>Recent runtime events: <span className="font-medium">{data.runtimeEvents.length}</span></p>
-                  <p>Recent incidents: <span className="font-medium">{data.incidents.length}</span></p>
-                  <p>Unresolved incidents: <span className="font-medium">{data.incidents.filter((incident) => !incident.resolved).length}</span></p>
-                </div>
-              ) : (
+                <p>Telegram signal output enabled: <span className="font-medium">{String(data.controlRoom.telegram.signalOutputEnabled)}</span></p>
+                <p>Recent runtime events: <span className="font-medium">{data.runtimeEvents.length}</span></p>
+                <p>Recent incidents: <span className="font-medium">{data.incidents.length}</span></p>
+                <p>Unresolved incidents: <span className="font-medium">{data.incidents.filter((incident) => !incident.resolved).length}</span></p>
+              </div>
+            ) : (
               <p className="text-sm text-slate-400">Runtime/governance metadata unavailable.</p>
             )}
           </Card>
 
           <Card title="Signal Performance">
-            {data.signalPerformance ? (
+            {signalPerformance ? (
               <div className="space-y-3 text-sm">
                 <div className="grid gap-3 md:grid-cols-2">
-                  <Kpi label="A+ win rate" value={`${(data.signalPerformance.perTier["A+"].winRate * 100).toFixed(1)}%`} />
-                  <Kpi label="A win rate" value={`${(data.signalPerformance.perTier["A"].winRate * 100).toFixed(1)}%`} />
-                  <Kpi label="B win rate" value={`${(data.signalPerformance.perTier["B"].winRate * 100).toFixed(1)}%`} />
-                  <Kpi label="Avg R" value={data.signalPerformance.summary.avgR.toFixed(2)} />
-                  <Kpi label="Signals today" value={String(data.signalPerformance.summary.totalSignalsToday)} />
+                  <Kpi label="A+ win rate" value={`${(aPlusMetrics.winRate * 100).toFixed(1)}%`} />
+                  <Kpi label="A win rate" value={`${(aMetrics.winRate * 100).toFixed(1)}%`} />
+                  <Kpi label="B win rate" value={`${(bMetrics.winRate * 100).toFixed(1)}%`} />
+                  <Kpi label="Avg R" value={signalPerformance.summary.avgR.toFixed(2)} />
+                  <Kpi label="Signals today" value={String(signalPerformance.summary.totalSignalsToday)} />
                 </div>
                 <div className="rounded border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-300">
                   <p>Filter settings</p>
-                  <p>min tier: <span className="font-medium">{data.signalPerformance.filters.minTier}</span></p>
-                  <p>min TP2 R: <span className="font-medium">{data.signalPerformance.filters.minTp2R}</span></p>
-                  <p>max entry stretch (ATR): <span className="font-medium">{data.signalPerformance.filters.maxEntryStretchAtr}</span></p>
-                  <p>symbol cooldown minutes: <span className="font-medium">{data.signalPerformance.filters.symbolCooldownMinutes}</span></p>
-                  <p>partial at TP1 enabled: <span className="font-medium">{String(data.signalPerformance.filters.partialAtTp1Enabled)}</span></p>
-                  <p>partial pct: <span className="font-medium">{data.signalPerformance.filters.partialPct}</span></p>
-                  <p>TP1 protect mode: <span className="font-medium">{data.signalPerformance.filters.tp1ProtectMode}</span></p>
-                  <p>TP1 protect offset R: <span className="font-medium">{data.signalPerformance.filters.tp1ProtectOffsetR}</span></p>
-                  <p>breakeven buffer R: <span className="font-medium">{data.signalPerformance.filters.breakevenBufferR}</span></p>
+                  <p>min tier: <span className="font-medium">{signalPerformance.filters.minTier}</span></p>
+                  <p>min TP2 R: <span className="font-medium">{signalPerformance.filters.minTp2R}</span></p>
+                  <p>max entry stretch (ATR): <span className="font-medium">{signalPerformance.filters.maxEntryStretchAtr}</span></p>
+                  <p>symbol cooldown minutes: <span className="font-medium">{signalPerformance.filters.symbolCooldownMinutes}</span></p>
+                  <p>partial at TP1 enabled: <span className="font-medium">{String(signalPerformance.filters.partialAtTp1Enabled)}</span></p>
+                  <p>partial pct: <span className="font-medium">{signalPerformance.filters.partialPct}</span></p>
+                  <p>TP1 protect mode: <span className="font-medium">{signalPerformance.filters.tp1ProtectMode}</span></p>
+                  <p>TP1 protect offset R: <span className="font-medium">{signalPerformance.filters.tp1ProtectOffsetR}</span></p>
+                  <p>breakeven buffer R: <span className="font-medium">{signalPerformance.filters.breakevenBufferR}</span></p>
                 </div>
-                {data.signalPerformance.filters.bTierEnabled && (
+                {signalPerformance.filters.bTierEnabled && (
                   <p className="rounded border border-amber-700/50 bg-amber-900/20 p-2 text-xs text-amber-100">
                     Warning: B tier is enabled.
                   </p>
@@ -322,27 +347,30 @@ export default function DashboardPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(["A+", "A", "B"] as const).map((tier) => (
-                        <tr key={tier} className="border-t border-slate-800">
-                          <td>{tier}</td>
-                          <td>{data.signalPerformance.perTier[tier].total}</td>
-                          <td>{data.signalPerformance.perTier[tier].resolved}</td>
-                          <td>{data.signalPerformance.perTier[tier].wins}</td>
-                          <td>{data.signalPerformance.perTier[tier].losses}</td>
-                          <td>{data.signalPerformance.perTier[tier].partialWins}</td>
-                          <td>{data.signalPerformance.perTier[tier].breakevens}</td>
-                          <td>{data.signalPerformance.perTier[tier].expired}</td>
-                          <td>{(data.signalPerformance.perTier[tier].winRate * 100).toFixed(1)}%</td>
-                          <td>{data.signalPerformance.perTier[tier].avgR.toFixed(2)}</td>
-                          <td>{data.signalPerformance.perTier[tier].expectancy.toFixed(2)}</td>
-                        </tr>
-                      ))}
+                      {(["A+", "A", "B"] as const).map((tier) => {
+                        const row = signalPerformance.perTier[tier] ?? EMPTY_TIER_METRICS;
+                        return (
+                          <tr key={tier} className="border-t border-slate-800">
+                            <td>{tier}</td>
+                            <td>{row.total}</td>
+                            <td>{row.resolved}</td>
+                            <td>{row.wins}</td>
+                            <td>{row.losses}</td>
+                            <td>{row.partialWins}</td>
+                            <td>{row.breakevens}</td>
+                            <td>{row.expired}</td>
+                            <td>{(row.winRate * 100).toFixed(1)}%</td>
+                            <td>{row.avgR.toFixed(2)}</td>
+                            <td>{row.expectancy.toFixed(2)}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-slate-400">Signal performance unavailable.</p>
+              <p className="text-sm text-slate-400">No signal performance data yet.</p>
             )}
           </Card>
 
