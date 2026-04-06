@@ -54,6 +54,10 @@ For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
 | DEFAULT_DATASET_PATH | OPTIONAL_RUNTIME_WITH_DEFAULT, LOCAL_DEV_ONLY | `data/ETHUSDT_15m.csv` | Yes | Backtest harness dataset fallback. |
 | SIGNAL_MIN_TIER | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `A+` | Yes | Signal quality gate threshold. |
 | MAX_SIGNALS_PER_CYCLE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `3` | Yes | Signal emission cap per cycle. |
+| SIGNAL_MAX_SELECTED_PER_CYCLE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `3` | Yes | Hard cap for final actionable selected set per cycle. |
+| SIGNAL_MAX_TELEGRAM_PER_CYCLE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `3` | Yes | Telegram dispatch cap per cycle (may be lower than selected cap). |
+| SIGNAL_DIVERSIFICATION_ENABLED | OPTIONAL_FEATURE_FLAG, SIGNAL_ONLY | `1` | Yes | Enables simple crypto diversification overlay in final selection. |
+| SIGNAL_CRYPTO_DIVERSIFICATION_MODE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `simple_groups` | Yes | Diversification grouping policy (`majors`, `large_alts`, `high_beta_alt_or_meme`). |
 | SIGNAL_OUTCOME_MAX_AGE_SECONDS | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `21600` | Yes | Timeout for unresolved signal outcomes. |
 | SIGNAL_MIN_TP2_R | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `1.8` | Yes | Signal R:R TP2 gate. |
 | SIGNAL_MAX_ENTRY_STRETCH_ATR | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0.4` | Yes | Entry stretch quality filter. |

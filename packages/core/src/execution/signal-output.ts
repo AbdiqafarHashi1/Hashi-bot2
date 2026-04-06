@@ -62,6 +62,7 @@ function minScoreForTier(tier: "A+" | "A" | "B") {
 export function buildSignalModePayload(input: {
   rankedSetups: RankedSetup[];
   decisions: AllocationDecision[];
+  selectedSignals?: BreakoutSignal[];
   now?: Date;
   cycleId?: string;
   minTier?: "A+" | "A" | "B";
@@ -73,10 +74,13 @@ export function buildSignalModePayload(input: {
   const tierThreshold = minScoreForTier(input.minTier ?? "A");
   const maxSignals = Math.max(1, input.maxSignals ?? 3);
 
-  const signals = input.rankedSetups.map((setup) => {
+  const selectedSignals = input.selectedSignals?.length
+    ? input.selectedSignals.map((signal, index) => toTelegramReadySignal(signal, index + 1))
+    : input.rankedSetups.map((setup) => {
     const decision = input.decisions.find((entry) => entry.signal.symbol === setup.signal.symbol && entry.signal.marketType === setup.signal.marketType);
     return toTelegramReadySignal(decision?.signal ?? setup.signal, setup.rank);
-  })
+  });
+  const signals = selectedSignals
     .filter((signal) => signal.signalScore >= tierThreshold)
     .sort((a, b) => b.signalScore - a.signalScore)
     .slice(0, maxSignals);

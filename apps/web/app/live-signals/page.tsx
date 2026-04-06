@@ -91,6 +91,46 @@ type SignalRoomPayload = {
       totalPersistedSignals: number;
     };
   };
+  currentCycleSummary: {
+    candidatesEvaluated: number;
+    selectedActionableCount: number;
+    telegramDispatchedCount: number;
+    rejectedCount: number;
+    portfolioCapacityUsage: {
+      selectedCount: number;
+      selectedCap: number;
+      telegramCap: number;
+    };
+    diversificationNotes: string[];
+  };
+  signalSelectionPolicy: {
+    selectedCapPerCycle: number;
+    telegramCapPerCycle: number;
+    diversificationEnabled: boolean;
+    diversificationMode: string;
+  };
+  selectedThisCycle: Array<{
+    symbol: string;
+    side: string;
+    score: number;
+    rank: number;
+    tier: string;
+    selected: boolean;
+    diversificationGroup: string;
+    selectedReason: string;
+    telegramDispatchStatus: string;
+    paperTradeStatus: string;
+  }>;
+  rejectedThisCycle: Array<{
+    symbol: string;
+    side: string;
+    score: number;
+    rank: number;
+    tier: string;
+    selected: boolean;
+    diversificationGroup: string;
+    rejectionReason: string | null;
+  }>;
   cycleTruth: {
     allowedSymbolsConfigured: string[];
     symbolsActuallyScanned: string[];
@@ -162,14 +202,14 @@ type SignalRoomPayload = {
   };
   openTrades: SignalTrade[];
   closedTrades: SignalTrade[];
-  recentSignals: SignalEvent[];
+  recentActionableSignals: SignalEvent[];
 };
 
 function SummaryCard({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded border border-slate-800 bg-slate-900/70 p-4">
+    <div className="rounded-md border border-slate-800 bg-slate-900/70 p-3 sm:p-4">
       <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
-      <p className="mt-2 text-xl font-semibold text-slate-100">{value}</p>
+      <p className="mt-1 text-lg font-semibold text-slate-100 sm:text-xl">{value}</p>
     </div>
   );
 }
@@ -179,6 +219,33 @@ function toneForOutcome(outcome: string | null) {
   if (outcome === "loss") return "text-rose-300";
   if (outcome === "partial_win") return "text-amber-300";
   return "text-slate-300";
+}
+
+const tableWrapperClass = "overflow-x-auto rounded-md border border-slate-800/80";
+const tableClass = "min-w-[980px] w-full text-left text-sm";
+const headerCellClass = "px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300 bg-slate-950/70";
+const textCellClass = "px-3 py-2 align-top text-slate-200";
+const numericCellClass = "px-3 py-2 align-top text-right tabular-nums text-slate-100 whitespace-nowrap";
+
+function formatPrice(value: number) {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 6, minimumFractionDigits: 2 });
+}
+
+function formatQty(value: number) {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function formatMoney(value: number) {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
+}
+
+function formatPct(value: number) {
+  return `${(value * 100).toFixed(2)}%`;
+}
+
+function formatIso(value: string | null) {
+  if (!value) return "-";
+  return new Date(value).toISOString().replace("T", " ").slice(0, 19);
 }
 
 export default function Page() {
@@ -245,10 +312,10 @@ export default function Page() {
   }
 
   return (
-    <section className="space-y-5">
-      <header className="flex items-center justify-between gap-3">
+    <section className="space-y-4 sm:space-y-5">
+      <header className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div>
-          <h1 className="text-3xl font-bold">Signal Room</h1>
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Signal Room</h1>
           <p className="mt-1 text-sm text-slate-400">Signal-mode lifecycle truth: cycle activity, persisted totals, and Telegram reconciliation.</p>
         </div>
         <button
@@ -265,20 +332,20 @@ export default function Page() {
 
       {data && (
         <>
-          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <SummaryCard label="Current cycle candidates" value={data.reconciliation.currentCycle.candidatesEvaluatedThisCycle} />
-            <SummaryCard label="Current cycle persisted" value={data.reconciliation.currentCycle.signalsPersistedThisCycle} />
-            <SummaryCard label="Current cycle Telegram dispatched" value={data.reconciliation.currentCycle.telegramSignalsDispatchedThisCycle} />
-            <SummaryCard label="Current cycle skipped" value={data.reconciliation.currentCycle.signalsSkippedThisCycle} />
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <SummaryCard label="Current cycle candidates" value={data.currentCycleSummary.candidatesEvaluated} />
+            <SummaryCard label="Selected actionable count" value={data.currentCycleSummary.selectedActionableCount} />
+            <SummaryCard label="Telegram dispatched" value={data.currentCycleSummary.telegramDispatchedCount} />
+            <SummaryCard label="Rejected" value={data.currentCycleSummary.rejectedCount} />
           </section>
-          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <SummaryCard label="Allowed symbols active" value={data.controlPlane.allowedSymbolsRuntimeCount} />
             <SummaryCard label="Scanned this cycle" value={data.cycleTruth?.symbolsActuallyScanned.length ?? 0} />
             <SummaryCard label="Closed this cycle" value={data.cycleTruth?.closedSignalsThisCycle ?? 0} />
             <SummaryCard label="Max concurrent blocked" value={data.cycleTruth?.maxConcurrentBlockedCount ?? 0} />
           </section>
 
-          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <SummaryCard label="Persisted open" value={data.reconciliation.persistedTotals.totalOpenSignals} />
             <SummaryCard label="Persisted closed" value={data.reconciliation.persistedTotals.totalClosedSignals} />
             <SummaryCard label="Persisted resolved outcomes" value={data.reconciliation.persistedTotals.totalResolvedSignals} />
@@ -286,9 +353,9 @@ export default function Page() {
             <SummaryCard label="Total persisted signals" value={data.reconciliation.persistedTotals.totalPersistedSignals} />
           </section>
 
-          <section className="rounded border border-slate-800 bg-slate-900/70 p-4 text-sm text-slate-300">
+          <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 text-sm text-slate-300 sm:p-5">
             <h2 className="text-lg font-semibold text-slate-100">Signal Mode Settings / Paper Model</h2>
-            <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            <div className="mt-2 grid gap-x-4 gap-y-2 sm:grid-cols-2 xl:grid-cols-3">
               <p>Restart policy: <span className="font-medium">{data.restartPolicy.configuredPolicy}</span></p>
               <p>Resumed from persisted DB: <span className="font-medium">{String(data.restartPolicy.resumedFromPersistedDb)}</span></p>
               <p>Paper equity: <span className="font-medium">{data.paperModel.equity}</span></p>
@@ -313,43 +380,80 @@ export default function Page() {
               <p>Entry stretch ATR cap: <span className="font-medium">{data.paperModel.maxEntryStretchAtr}</span></p>
               <p>Partial TP1 enabled: <span className="font-medium">{String(data.paperModel.partialAtTp1Enabled)}</span></p>
               <p>Partial at TP1 %: <span className="font-medium">{(data.paperModel.partialPct * 100).toFixed(0)}%</span></p>
+              <p>Selected cap / cycle: <span className="font-medium">{data.signalSelectionPolicy.selectedCapPerCycle}</span></p>
+              <p>Telegram cap / cycle: <span className="font-medium">{data.signalSelectionPolicy.telegramCapPerCycle}</span></p>
+              <p>Diversification mode: <span className="font-medium">{data.signalSelectionPolicy.diversificationEnabled ? data.signalSelectionPolicy.diversificationMode : "disabled"}</span></p>
+              <p>Portfolio capacity usage: <span className="font-medium">{data.currentCycleSummary.portfolioCapacityUsage.selectedCount}/{data.currentCycleSummary.portfolioCapacityUsage.selectedCap}</span></p>
+              <p>Diversification notes: <span className="font-medium">{data.currentCycleSummary.diversificationNotes.join(" | ") || "none"}</span></p>
             </div>
           </section>
 
-          <section className="rounded border border-slate-800 bg-slate-900/70 p-4">
+          <section className="rounded-lg border border-emerald-700/40 bg-emerald-950/10 p-4 sm:p-5">
+            <h2 className="text-lg font-semibold">Selected This Cycle</h2>
+            <div className={`mt-3 ${tableWrapperClass}`}>
+              <table className={tableClass}>
+                <thead><tr><th className={headerCellClass}>Rank</th><th className={headerCellClass}>Symbol</th><th className={headerCellClass}>Score</th><th className={headerCellClass}>Tier</th><th className={headerCellClass}>Group</th><th className={headerCellClass}>Reason</th><th className={headerCellClass}>Telegram</th><th className={headerCellClass}>Paper</th></tr></thead>
+                <tbody>
+                  {data.selectedThisCycle.map((entry) => (
+                    <tr key={`${entry.symbol}-${entry.rank}`} className="border-t border-emerald-900/40">
+                      <td className={numericCellClass}>{entry.rank}</td><td className={textCellClass}><span className="font-medium">{entry.symbol}</span> <span className="text-slate-400">{entry.side}</span></td><td className={numericCellClass}>{entry.score.toFixed(2)}</td><td className={textCellClass}>{entry.tier}</td><td className={textCellClass}>{entry.diversificationGroup}</td><td className={`${textCellClass} max-w-[340px] whitespace-normal break-words`}>{entry.selectedReason}</td><td className={textCellClass}>{entry.telegramDispatchStatus}</td><td className={textCellClass}>{entry.paperTradeStatus}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-amber-700/30 bg-amber-950/10 p-4 sm:p-5">
+            <h2 className="text-lg font-semibold">Rejected This Cycle</h2>
+            <div className={`mt-3 ${tableWrapperClass}`}>
+              <table className={tableClass}>
+                <thead><tr><th className={headerCellClass}>Rank</th><th className={headerCellClass}>Symbol</th><th className={headerCellClass}>Score</th><th className={headerCellClass}>Tier</th><th className={headerCellClass}>Group</th><th className={headerCellClass}>Reason</th></tr></thead>
+                <tbody>
+                  {data.rejectedThisCycle.map((entry) => (
+                    <tr key={`${entry.symbol}-${entry.rank}`} className="border-t border-amber-900/40">
+                      <td className={numericCellClass}>{entry.rank}</td><td className={textCellClass}><span className="font-medium">{entry.symbol}</span> <span className="text-slate-400">{entry.side}</span></td><td className={numericCellClass}>{entry.score.toFixed(2)}</td><td className={textCellClass}>{entry.tier}</td><td className={textCellClass}>{entry.diversificationGroup}</td><td className={`${textCellClass} max-w-[400px] whitespace-normal break-words text-amber-100/90`}>{entry.rejectionReason ?? "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-sky-700/30 bg-sky-950/10 p-4 sm:p-5">
             <header className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-semibold">Open Paper Trades</h2>
               <p className="text-xs text-slate-400">Persisted open positions with sizing + Telegram dispatch truth</p>
             </header>
-            <div className="overflow-auto">
-              <table className="min-w-full text-left text-sm">
+            <div className={tableWrapperClass}>
+              <table className={tableClass}>
                 <thead>
-                  <tr className="text-slate-400">
-                    <th className="px-2 py-1">Symbol</th><th className="px-2 py-1">Entry</th><th className="px-2 py-1">Stop</th><th className="px-2 py-1">TP1/TP2</th>
-                    <th className="px-2 py-1">Stop dist</th><th className="px-2 py-1">Qty</th><th className="px-2 py-1">Notional</th><th className="px-2 py-1">Risk</th><th className="px-2 py-1">Lev</th>
-                    <th className="px-2 py-1">Price move / distances</th><th className="px-2 py-1">PnL / R</th><th className="px-2 py-1">Telegram</th><th className="px-2 py-1">Opened</th>
+                  <tr>
+                    <th className={headerCellClass}>Symbol</th><th className={headerCellClass}>Entry</th><th className={headerCellClass}>Stop</th><th className={headerCellClass}>TP1 / TP2</th>
+                    <th className={headerCellClass}>Stop dist</th><th className={headerCellClass}>Qty</th><th className={headerCellClass}>Notional</th><th className={headerCellClass}>Risk</th><th className={headerCellClass}>Leverage</th>
+                    <th className={headerCellClass}>Move / dist</th><th className={headerCellClass}>PnL / R</th><th className={headerCellClass}>Telegram</th><th className={headerCellClass}>Opened</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.openTrades.map((trade) => (
-                    <tr key={trade.id} className="border-t border-slate-800">
-                      <td className="px-2 py-1">{trade.symbol} {trade.side}</td>
-                      <td className="px-2 py-1">{trade.entryPrice.toFixed(6)}</td>
-                      <td className="px-2 py-1">{trade.stopPrice.toFixed(6)}</td>
-                      <td className="px-2 py-1">{trade.tp1Price.toFixed(6)} / {trade.tp2Price.toFixed(6)}</td>
-                      <td className="px-2 py-1">{(trade.paperComputed?.stopDistance ?? Math.abs(trade.entryPrice - trade.stopPrice)).toFixed(6)}</td>
-                      <td className="px-2 py-1">{(trade.quantity ?? 0).toFixed(6)}</td>
-                      <td className="px-2 py-1">{(trade.paperComputed?.notionalQuote ?? trade.notional ?? 0).toFixed(2)}</td>
-                      <td className="px-2 py-1">{((trade.paperComputed?.positionRiskPct ?? trade.riskPct ?? 0) * 100).toFixed(2)}% ({(trade.paperComputed?.riskAmountQuote ?? trade.riskAmount ?? 0).toFixed(2)})</td>
-                      <td className="px-2 py-1">
+                    <tr key={trade.id} className="border-t border-sky-900/40">
+                      <td className={textCellClass}><span className="font-medium">{trade.symbol}</span> <span className="text-slate-400">{trade.side}</span></td>
+                      <td className={numericCellClass}>{formatPrice(trade.entryPrice)}</td>
+                      <td className={numericCellClass}>{formatPrice(trade.stopPrice)}</td>
+                      <td className={numericCellClass}>{formatPrice(trade.tp1Price)} / {formatPrice(trade.tp2Price)}</td>
+                      <td className={numericCellClass}>{formatPrice(trade.paperComputed?.stopDistance ?? Math.abs(trade.entryPrice - trade.stopPrice))}</td>
+                      <td className={numericCellClass}>{formatQty(trade.quantity ?? 0)}</td>
+                      <td className={numericCellClass}>{formatMoney(trade.paperComputed?.notionalQuote ?? trade.notional ?? 0)}</td>
+                      <td className={numericCellClass}>{formatPct(trade.paperComputed?.positionRiskPct ?? trade.riskPct ?? 0)} ({formatMoney(trade.paperComputed?.riskAmountQuote ?? trade.riskAmount ?? 0)})</td>
+                      <td className={numericCellClass}>
                         cap {(trade.paperComputed?.configuredLeverageCap ?? trade.leverage ?? 0).toFixed(2)}x / eff {(trade.paperComputed?.effectiveLeverage ?? 0).toFixed(2)}x
                       </td>
-                      <td className="px-2 py-1">
+                      <td className={numericCellClass}>
                         move {(trade.paperComputed?.priceMovePct ?? 0).toFixed(4)}% / stop {(trade.paperComputed?.distanceToStopPct ?? 0).toFixed(4)}% / tp1 {(trade.paperComputed?.distanceToTp1Pct ?? 0).toFixed(4)}% / tp2 {(trade.paperComputed?.distanceToTp2Pct ?? 0).toFixed(4)}%
                       </td>
-                      <td className="px-2 py-1">{(trade.paperComputed?.unrealizedPnlQuote ?? trade.unrealizedPnl ?? 0).toFixed(6)} / {(trade.paperComputed?.rResultOpen ?? 0).toFixed(2)}R</td>
-                      <td className="px-2 py-1">{trade.telegramDispatchStatus} ({trade.telegramDispatchReason ?? "-"})</td>
-                      <td className="px-2 py-1">{new Date(trade.openedAt).toISOString()}</td>
+                      <td className={numericCellClass}>{formatMoney(trade.paperComputed?.unrealizedPnlQuote ?? trade.unrealizedPnl ?? 0)} / {(trade.paperComputed?.rResultOpen ?? 0).toFixed(2)}R</td>
+                      <td className={`${textCellClass} max-w-[280px] whitespace-normal break-words`}>{trade.telegramDispatchStatus} ({trade.telegramDispatchReason ?? "-"})</td>
+                      <td className={textCellClass}>{formatIso(trade.openedAt)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -357,19 +461,19 @@ export default function Page() {
             </div>
           </section>
 
-          <section className="rounded border border-slate-800 bg-slate-900/70 p-4">
+          <section className="rounded-lg border border-indigo-700/30 bg-indigo-950/10 p-4 sm:p-5">
             <h2 className="text-lg font-semibold">Closed Paper Trades</h2>
-            <div className="overflow-auto mt-3">
-              <table className="min-w-full text-left text-sm">
-                <thead><tr className="text-slate-400"><th className="px-2 py-1">Symbol</th><th className="px-2 py-1">Outcome</th><th className="px-2 py-1">Realized PnL / R</th><th className="px-2 py-1">Lev cap/eff</th><th className="px-2 py-1">Closed At</th></tr></thead>
+            <div className={`mt-3 ${tableWrapperClass}`}>
+              <table className={tableClass}>
+                <thead><tr><th className={headerCellClass}>Symbol</th><th className={headerCellClass}>Outcome</th><th className={headerCellClass}>Realized PnL / R</th><th className={headerCellClass}>Leverage cap / eff</th><th className={headerCellClass}>Closed at</th></tr></thead>
                 <tbody>
                   {data.closedTrades.map((trade) => (
-                    <tr key={trade.id} className="border-t border-slate-800">
-                      <td className="px-2 py-1">{trade.symbol} {trade.side}</td>
-                      <td className={`px-2 py-1 ${toneForOutcome(trade.outcome)}`}>{trade.outcome ?? "-"}</td>
-                      <td className="px-2 py-1">{(trade.paperComputed?.realizedPnlQuote ?? trade.realizedPnl ?? 0).toFixed(6)} / {(trade.paperComputed?.rResultClosed ?? 0).toFixed(2)}R</td>
-                      <td className="px-2 py-1">cap {(trade.paperComputed?.configuredLeverageCap ?? 0).toFixed(2)}x / eff {(trade.paperComputed?.effectiveLeverage ?? 0).toFixed(2)}x</td>
-                      <td className="px-2 py-1">{trade.closedAt ? new Date(trade.closedAt).toISOString() : "-"}</td>
+                    <tr key={trade.id} className="border-t border-indigo-900/40">
+                      <td className={textCellClass}><span className="font-medium">{trade.symbol}</span> <span className="text-slate-400">{trade.side}</span></td>
+                      <td className={`px-3 py-2 ${toneForOutcome(trade.outcome)}`}>{trade.outcome ?? "-"}</td>
+                      <td className={numericCellClass}>{formatMoney(trade.paperComputed?.realizedPnlQuote ?? trade.realizedPnl ?? 0)} / {(trade.paperComputed?.rResultClosed ?? 0).toFixed(2)}R</td>
+                      <td className={numericCellClass}>cap {(trade.paperComputed?.configuredLeverageCap ?? 0).toFixed(2)}x / eff {(trade.paperComputed?.effectiveLeverage ?? 0).toFixed(2)}x</td>
+                      <td className={textCellClass}>{formatIso(trade.closedAt)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -377,20 +481,20 @@ export default function Page() {
             </div>
           </section>
 
-          <section className="rounded border border-slate-800 bg-slate-900/70 p-4">
-            <h2 className="text-lg font-semibold">Recent Generated Signals</h2>
-            <p className="text-xs text-slate-400">Persisted signals; Telegram dispatch shown per signal.</p>
-            <div className="overflow-auto mt-3">
-              <table className="min-w-full text-left text-sm">
-                <thead><tr className="text-slate-400"><th className="px-2 py-1">Symbol</th><th className="px-2 py-1">Score</th><th className="px-2 py-1">Telegram</th><th className="px-2 py-1">Reason</th><th className="px-2 py-1">Generated At</th></tr></thead>
+          <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 sm:p-5">
+            <h2 className="text-lg font-semibold">Recent Actionable Signals</h2>
+            <p className="text-xs text-slate-400">Persisted actionable rows only (latest 20).</p>
+            <div className={`mt-3 ${tableWrapperClass}`}>
+              <table className={tableClass}>
+                <thead><tr><th className={headerCellClass}>Symbol</th><th className={headerCellClass}>Score</th><th className={headerCellClass}>Telegram</th><th className={headerCellClass}>Reason</th><th className={headerCellClass}>Generated at</th></tr></thead>
                 <tbody>
-                  {data.recentSignals.map((signal) => (
+                  {data.recentActionableSignals.map((signal) => (
                     <tr key={signal.id} className="border-t border-slate-800">
-                      <td className="px-2 py-1">{signal.symbol} {signal.side}</td>
-                      <td className="px-2 py-1">{signal.score.toFixed(2)}</td>
-                      <td className="px-2 py-1">{signal.telegramDispatchStatus ?? "n/a"}</td>
-                      <td className="px-2 py-1">{signal.telegramDispatchReason ?? "-"}</td>
-                      <td className="px-2 py-1">{new Date(signal.generatedAt).toISOString()}</td>
+                      <td className={textCellClass}><span className="font-medium">{signal.symbol}</span> <span className="text-slate-400">{signal.side}</span></td>
+                      <td className={numericCellClass}>{signal.score.toFixed(2)}</td>
+                      <td className={textCellClass}>{signal.telegramDispatchStatus ?? "n/a"}</td>
+                      <td className={`${textCellClass} max-w-[360px] whitespace-normal break-words`}>{signal.telegramDispatchReason ?? "-"}</td>
+                      <td className={textCellClass}>{formatIso(signal.generatedAt)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -413,36 +517,7 @@ export default function Page() {
             </section>
           )}
 
-          {data.cycleTruth && (
-            <section className="rounded border border-slate-800 bg-slate-900/70 p-4">
-              <h2 className="text-lg font-semibold">Cycle Ranking + Allocation</h2>
-              <p className="mt-2 text-xs text-slate-400">Global candidate ranking and whether each candidate was selected for portfolio capital.</p>
-              <div className="overflow-auto mt-3">
-                <table className="min-w-full text-left text-sm">
-                  <thead>
-                    <tr className="text-slate-400">
-                      <th className="px-2 py-1">Rank</th>
-                      <th className="px-2 py-1">Symbol</th>
-                      <th className="px-2 py-1">Score</th>
-                      <th className="px-2 py-1">Selected</th>
-                      <th className="px-2 py-1">Rejection reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(data.cycleTruth.cycleRankingAllocation ?? []).map((entry) => (
-                      <tr key={`${entry.symbol}-${entry.rank}`} className="border-t border-slate-800">
-                        <td className="px-2 py-1">{entry.rank}</td>
-                        <td className="px-2 py-1">{entry.symbol}</td>
-                        <td className="px-2 py-1">{entry.score.toFixed(2)}</td>
-                        <td className="px-2 py-1">{String(entry.selected)}</td>
-                        <td className="px-2 py-1">{entry.rejectionReason ?? "-"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
+          
         </>
       )}
     </section>
