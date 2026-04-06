@@ -1,3 +1,4 @@
+import { loadLocalRuntimeEnv } from "./env";
 import { z } from "zod";
 import type { Timeframe } from "@hashi/core";
 
@@ -95,7 +96,13 @@ const envSchema = z.object({
 
 export type RuntimeConfig = z.infer<typeof envSchema>;
 
-export const getConfig = (): RuntimeConfig => envSchema.parse(process.env);
+export const getConfig = (): RuntimeConfig => {
+  loadLocalRuntimeEnv();
+  return envSchema.parse(process.env);
+};
 
 
 export const DEFAULT_DATASET_PATH = "data/ETHUSDT_15m.csv";
+
+
+export { loadLocalRuntimeEnv };
