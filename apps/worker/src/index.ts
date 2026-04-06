@@ -111,6 +111,28 @@ type TelegramDispatchResult = {
   reason?: string;
   parseMode: TelegramParseMode | "none";
 };
+type CycleOutcome = "completed" | "skipped" | "error";
+type WorkerCycleSummary = {
+  cycleStartedAt: string;
+  mode: RuntimeMode;
+  isRunning: boolean;
+  killSwitchActive: boolean;
+  allowedSymbolsCount: number;
+  symbolsScanned: number;
+  candidateCount: number;
+  skippedCount: number;
+  persistedSignalCount: number;
+  dispatchedTelegramCount: number;
+  outcome: CycleOutcome;
+  skipReason?: string;
+  durationMs: number;
+};
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 function pnlForSide(side: string, entryPrice: number, exitPrice: number) {
   return side.toUpperCase() === "SHORT" ? entryPrice - exitPrice : exitPrice - entryPrice;
@@ -473,7 +495,9 @@ function priceForR(side: string, entry: number, riskDistance: number, rValue: nu
     : entry + riskDistance * rValue;
 }
 
-async function bootstrap() {
+async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> {
+  const cycleStartedAtMs = Date.now();
+  const cycleStartedAtIso = new Date(cycleStartedAtMs).toISOString();
   const config = getConfig();
   const redis = new Redis(config.REDIS_URL);
   let prismaClient: (typeof import("@hashi/db"))["prisma"] | null = null;
@@ -485,6 +509,13 @@ async function bootstrap() {
     allowedSymbols: normalizeAllowedSymbols(buildRuntimeSymbols(config).map((entry) => entry.symbol))
   };
   let runtimeMode: RuntimeMode = systemControl.activeMode;
+  let symbolsScanned = 0;
+  let candidateCount = 0;
+  let skippedCount = 0;
+  let persistedSignalCount = 0;
+  let dispatchedTelegramCount = 0;
+  let cycleOutcome: CycleOutcome = "completed";
+  let skipReason: string | undefined;
 
   const skipInfra = config.SKIP_INFRA_CHECKS;
   if (!skipInfra) {
@@ -513,30 +544,66 @@ async function bootstrap() {
     runtimeMode = systemControl.activeMode;
   }
 
+  console.log(
+    JSON.stringify(
+      {
+        event: "worker_cycle_start",
+        cycleNumber,
+        cycleStartedAt: cycleStartedAtIso,
+        activeMode: runtimeMode,
+        isRunning: systemControl.isRunning,
+        killSwitchActive: systemControl.killSwitchActive,
+        allowedSymbolsCount: systemControl.allowedSymbols.length
+      },
+      null,
+      2
+    )
+  );
+
   if (!prismaClient) {
+    cycleOutcome = "skipped";
+    skipReason = "system_control_unavailable";
     console.log(
       JSON.stringify(
         {
           event: "cycle_skipped",
-          reason: "system_control_unavailable",
+          cycleNumber,
+          reason: skipReason,
           message: "Prisma unavailable; control plane cannot be enforced"
         },
         null,
         2
       )
     );
-    return;
+    const durationMs = Date.now() - cycleStartedAtMs;
+    return {
+      cycleStartedAt: cycleStartedAtIso,
+      mode: runtimeMode,
+      isRunning: systemControl.isRunning,
+      killSwitchActive: systemControl.killSwitchActive,
+      allowedSymbolsCount: systemControl.allowedSymbols.length,
+      symbolsScanned,
+      candidateCount,
+      skippedCount,
+      persistedSignalCount,
+      dispatchedTelegramCount,
+      outcome: cycleOutcome,
+      skipReason,
+      durationMs
+    };
   }
 
   await prismaClient.runtimeEvent.create({
     data: {
-      type: "cycle_start",
+      type: "cycle_started",
       mode: runtimeMode,
       message: "Worker cycle started"
     }
   });
 
   if (!systemControl.isRunning) {
+    cycleOutcome = "skipped";
+    skipReason = "system_stopped";
     await prismaClient.runtimeEvent.create({
       data: {
         type: "cycle_skipped",
@@ -547,13 +614,27 @@ async function bootstrap() {
         }
       }
     });
-    return;
+    console.log(
+      JSON.stringify(
+        { event: "worker_cycle_skipped", cycleNumber, reason: skipReason, activeMode: runtimeMode, isRunning: false },
+        null,
+        2
+      )
+    );
+    const durationMs = Date.now() - cycleStartedAtMs;
+    return {
+      cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
+      allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
+      dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
+    };
   }
 
   if (systemControl.killSwitchActive) {
+    cycleOutcome = "skipped";
+    skipReason = "kill_switch_active";
     await prismaClient.runtimeEvent.create({
       data: {
-        type: "kill_switch_active",
+        type: "cycle_skipped",
         mode: runtimeMode,
         message: "System control kill switch is active; cycle blocked",
         payload: {
@@ -571,7 +652,19 @@ async function bootstrap() {
         }
       }
     });
-    return;
+    console.log(
+      JSON.stringify(
+        { event: "worker_cycle_skipped", cycleNumber, reason: skipReason, activeMode: runtimeMode, killSwitchActive: true },
+        null,
+        2
+      )
+    );
+    const durationMs = Date.now() - cycleStartedAtMs;
+    return {
+      cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
+      allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
+      dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
+    };
   }
 
   const primary = buildProvider(config.DEFAULT_PRIMARY_PROVIDER);
@@ -583,6 +676,8 @@ async function bootstrap() {
   );
   const runtimeSymbols = configuredSymbols.filter((entry) => allowedSymbolSet.has(entry.symbol.toUpperCase()));
   if (runtimeSymbols.length === 0) {
+    cycleOutcome = "skipped";
+    skipReason = "no_allowed_symbols";
     await prismaClient.runtimeEvent.create({
       data: {
         type: "cycle_skipped",
@@ -593,9 +688,23 @@ async function bootstrap() {
         }
       }
     });
-    return;
+    console.log(
+      JSON.stringify(
+        { event: "worker_cycle_skipped", cycleNumber, reason: skipReason, activeMode: runtimeMode, allowedSymbolsCount: allowedSymbolSet.size },
+        null,
+        2
+      )
+    );
+    const durationMs = Date.now() - cycleStartedAtMs;
+    return {
+      cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
+      allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
+      dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
+    };
   }
   if (config.MARKET_TYPE === "forex") {
+    cycleOutcome = "skipped";
+    skipReason = "mode_not_signal";
     await prismaClient.runtimeEvent.create({
       data: {
         type: "cycle_skipped",
@@ -606,8 +715,21 @@ async function bootstrap() {
         }
       }
     });
-    return;
+    console.log(
+      JSON.stringify(
+        { event: "worker_cycle_skipped", cycleNumber, reason: skipReason, activeMode: runtimeMode, marketType: config.MARKET_TYPE },
+        null,
+        2
+      )
+    );
+    const durationMs = Date.now() - cycleStartedAtMs;
+    return {
+      cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
+      allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
+      dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
+    };
   }
+  symbolsScanned = runtimeSymbols.length;
   const runtime = new BreakoutMultiSymbolRuntime(runtimeSymbols);
 
   const marketTypeLoader = new MarketTypeAwareAnalysisLoader({
@@ -657,6 +779,7 @@ async function bootstrap() {
         candleLimit: 200
       });
     } catch (error) {
+      skippedCount += 1;
       unavailableFeeds.push({
         symbol: symbolContext.symbol,
         marketType: symbolContext.marketType,
@@ -686,6 +809,7 @@ async function bootstrap() {
       marketContext
     });
     if (!quality.tier) {
+      skippedCount += 1;
       continue;
     }
 
@@ -713,6 +837,7 @@ async function bootstrap() {
       }
     });
   }
+  candidateCount = cycleCandidates.length;
 
   const latestPriceBySymbol = new Map<string, number>();
   for (const candidate of cycleCandidates) {
@@ -762,29 +887,35 @@ async function bootstrap() {
     for (const candidate of cycleCandidates) {
       const symbol = candidate.signal.symbol;
       if (seenSymbols.has(symbol)) {
+        skippedCount += 1;
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         continue;
       }
       seenSymbols.add(symbol);
       if (activeSymbolSet.has(symbol)) {
+        skippedCount += 1;
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         continue;
       }
       if (recentSymbolSet.has(symbol)) {
+        skippedCount += 1;
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         continue;
       }
       if (cooldownSymbolSet.has(symbol)) {
+        skippedCount += 1;
         skippedByReason.signal_skipped_symbol_cooldown.add(symbol);
         continue;
       }
       if (candidate.signal.score < minTierScore) {
+        skippedCount += 1;
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         continue;
       }
 
       const rrTp2 = tp2RewardToRisk(candidate.signal);
       if (rrTp2 < config.SIGNAL_MIN_TP2_R) {
+        skippedCount += 1;
         skippedByReason.signal_skipped_rr_filter.add(symbol);
         continue;
       }
@@ -794,6 +925,7 @@ async function bootstrap() {
         ? Math.abs(candidate.marketContext.latestPrice - candidate.signal.entryPrice) / atr
         : 0;
       if (stretchAtr > config.SIGNAL_MAX_ENTRY_STRETCH_ATR) {
+        skippedCount += 1;
         skippedByReason.signal_skipped_entry_stretch.add(symbol);
         continue;
       }
@@ -869,6 +1001,7 @@ async function bootstrap() {
   const cycleNow = new Date();
 
   if (prismaClient && cycleCandidatesForPersistence.length > 0) {
+    persistedSignalCount = cycleCandidatesForPersistence.length;
     const persistedSignalEvents = await Promise.all(
       cycleCandidatesForPersistence.map((entry) =>
         prismaClient.signalEvent.create({
@@ -1769,6 +1902,7 @@ async function bootstrap() {
       chatId: config.TELEGRAM_CHAT_ID,
       parseMode: config.TELEGRAM_PARSE_MODE
     });
+    dispatchedTelegramCount += dispatchResults.filter((result) => result.status === "sent").length;
 
     if (prismaClient) {
       if (dispatchResults.length > 0) {
@@ -1841,6 +1975,7 @@ async function bootstrap() {
       chatId: config.TELEGRAM_CHAT_ID,
       parseMode: config.TELEGRAM_PARSE_MODE
     });
+    dispatchedTelegramCount += resultDispatches.filter((result) => result.status === "sent").length;
 
     if (prismaClient && resultDispatches.length > 0) {
       await prismaClient.transportEvent.createMany({
@@ -1973,40 +2108,124 @@ async function bootstrap() {
   if (prismaClient) {
     await prismaClient.runtimeEvent.create({
       data: {
-        type: "cycle_complete",
+        type: "cycle_completed",
         mode: runtimeMode,
         message: "Worker cycle completed"
       }
     });
   }
+
+  const durationMs = Date.now() - cycleStartedAtMs;
+  console.log(
+    JSON.stringify(
+      {
+        event: "worker_cycle_end",
+        cycleNumber,
+        cycleStartedAt: cycleStartedAtIso,
+        activeMode: runtimeMode,
+        isRunning: systemControl.isRunning,
+        killSwitchActive: systemControl.killSwitchActive,
+        allowedSymbolsCount: systemControl.allowedSymbols.length,
+        symbolsScanned,
+        candidateCount,
+        skippedCount,
+        persistedSignalCount,
+        dispatchedTelegramCount,
+        outcome: cycleOutcome,
+        durationMs
+      },
+      null,
+      2
+    )
+  );
+
+  return {
+    cycleStartedAt: cycleStartedAtIso,
+    mode: runtimeMode,
+    isRunning: systemControl.isRunning,
+    killSwitchActive: systemControl.killSwitchActive,
+    allowedSymbolsCount: systemControl.allowedSymbols.length,
+    symbolsScanned,
+    candidateCount,
+    skippedCount,
+    persistedSignalCount,
+    dispatchedTelegramCount,
+    outcome: cycleOutcome,
+    durationMs
+  };
 }
 
-bootstrap().catch(async (error) => {
-  console.error("[worker] bootstrap failed", error);
-  try {
-    const { prisma } = await import("@hashi/db");
-    await prisma.runtimeEvent.create({
-      data: {
-        type: "connector_error",
-        mode: "signal",
-        message: "Worker bootstrap failed",
-        payload: {
-          reason: error instanceof Error ? error.message : "unknown_error"
-        }
+async function startWorkerLoop() {
+  const config = getConfig();
+  const loopIntervalSeconds = config.WORKER_LOOP_INTERVAL_SECONDS;
+  const loopIntervalMs = loopIntervalSeconds * 1000;
+  let cycleNumber = 0;
+
+  console.log(
+    JSON.stringify(
+      {
+        event: "worker_loop_started",
+        loopIntervalSeconds
+      },
+      null,
+      2
+    )
+  );
+
+  while (true) {
+    cycleNumber += 1;
+    const cycleStartedAt = Date.now();
+    try {
+      await runWorkerCycle(cycleNumber);
+    } catch (error) {
+      console.error("[worker] cycle failed", error);
+      try {
+        const { prisma } = await import("@hashi/db");
+        await prisma.runtimeEvent.create({
+          data: {
+            type: "cycle_error",
+            mode: "signal",
+            message: "Worker cycle failed",
+            payload: {
+              cycleNumber,
+              reason: error instanceof Error ? error.message : "unknown_error"
+            }
+          }
+        });
+        await prisma.incident.create({
+          data: {
+            severity: "critical",
+            source: "worker",
+            message: "Worker cycle failed",
+            payload: {
+              cycleNumber,
+              reason: error instanceof Error ? error.message : "unknown_error"
+            }
+          }
+        });
+      } catch {
+        // no-op: observability persistence unavailable in this environment
       }
-    });
-    await prisma.incident.create({
-      data: {
-        severity: "critical",
-        source: "worker",
-        message: "Worker bootstrap failed",
-        payload: {
-          reason: error instanceof Error ? error.message : "unknown_error"
-        }
-      }
-    });
-  } catch {
-    // no-op: observability persistence unavailable in this environment
+      console.log(
+        JSON.stringify(
+          {
+            event: "worker_cycle_skipped",
+            cycleNumber,
+            reason: "runtime_error"
+          },
+          null,
+          2
+        )
+      );
+    }
+
+    const elapsedMs = Date.now() - cycleStartedAt;
+    const waitMs = Math.max(loopIntervalMs - elapsedMs, 0);
+    await sleep(waitMs);
   }
+}
+
+startWorkerLoop().catch((error) => {
+  console.error("[worker] worker loop failed", error);
   process.exit(1);
 });
