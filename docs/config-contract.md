@@ -1,13 +1,17 @@
 # Configuration Contract Inventory
 
 This document is the audited environment/config contract for `hashi-bot2` as of 2026-04-06.
-The canonical operator template is `.env.example`.
+The canonical full contract template is `.env.example`.
+For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
 
 ## Runtime loading model
 
 - `packages/config` parses and normalizes most runtime env values via a Zod schema and is used by worker and parts of web runtime.
 - `packages/config/loadLocalRuntimeEnv` auto-loads root `.env` for local non-docker `pnpm` runs.
-- `docker-compose.yml` injects `DATABASE_URL` and `REDIS_URL` service overrides for `web` and `worker` containers.
+- `docker-compose.yml` loads `${HASHI_ENV_FILE:-.env}` as each app service env file and injects `DATABASE_URL` and `REDIS_URL` container-host overrides for `web` and `worker`.
+- Recommended signal-mode launch:
+  - local pnpm: `cp .env.signal .env`
+  - docker compose: `HASHI_ENV_FILE=.env.signal docker compose up -d`
 
 ## Classification labels
 
@@ -59,6 +63,12 @@ The canonical operator template is `.env.example`.
 | SIGNAL_TP1_PROTECT_MODE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `break_even` | Yes | TP1 stop protection mode. |
 | SIGNAL_TP1_PROTECT_OFFSET_R | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0` | Yes | Offset when TP1 protection uses `offset_r`. |
 | SIGNAL_BREAKEVEN_BUFFER_R | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0` | Yes | Breakeven buffer in R. |
+| SIGNAL_PAPER_EQUITY | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `10000` | Yes | Paper portfolio equity base for signal mode sizing. |
+| SIGNAL_PAPER_RISK_PCT | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0.01` | Yes | Per-trade risk fraction used for raw risk sizing. |
+| SIGNAL_PAPER_LEVERAGE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `1` | Yes | Per-trade leverage cap used as a notional ceiling. |
+| SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `1` | Yes | Portfolio notional ceiling = equity × multiplier. |
+| SIGNAL_PAPER_MAX_OPEN_RISK_PCT | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0.05` | Yes | Portfolio open-risk ceiling = equity × percent. |
+| SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `10` | Yes | Hard cap on simultaneous open paper positions. |
 | EQUITY_START | OPTIONAL_RUNTIME_WITH_DEFAULT, LOCAL_DEV_ONLY | `10000` | Yes | Backtest initial equity. |
 | PORTFOLIO_PER_SYMBOL_RISK_CAP_PERSONAL_PCT | OPTIONAL_RUNTIME_WITH_DEFAULT, PERSONAL_ONLY | `0.75` | Yes | Per-symbol risk cap in personal mode. |
 | PORTFOLIO_PER_SYMBOL_RISK_CAP_PROP_PCT | OPTIONAL_RUNTIME_WITH_DEFAULT, PROP_ONLY | `0.4` | Yes | Per-symbol risk cap in prop mode. |
@@ -107,5 +117,6 @@ The canonical operator template is `.env.example`.
 ## Sync status notes
 
 - `.env.example` now includes every parser-declared and direct-process env surfaced by runtime or scripts.
+- `.env.signal` provides an operator-safe, signal-only complete preset aligned to the same contract.
 - Docker-only values are documented in comments instead of being promoted as app-runtime env keys.
 - Legacy parser keys remain documented in a dedicated section rather than silently dropped.

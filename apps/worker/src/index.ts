@@ -144,8 +144,22 @@ type SignalCycleReconciliation = {
     closedSignalsThisCycle: number;
     currentOpenPositionsCount: number;
     paperMaxConcurrentPositions: number;
+    paperEquity: number;
+    usedNotional: number;
+    availableNotionalCapacity: number;
+    usedRiskBudget: number;
+    availableRiskBudget: number;
+    maxTotalNotionalMult: number;
+    maxOpenRiskPct: number;
     maxConcurrentBlockedThisCycle: boolean;
     maxConcurrentBlockedCount: number;
+    cycleRankingAllocation: Array<{
+      symbol: string;
+      score: number;
+      rank: number;
+      selected: boolean;
+      rejectionReason: string | null;
+    }>;
   };
   currentCycle: {
     candidatesEvaluatedThisCycle: number;
@@ -182,9 +196,35 @@ function sleep(ms: number) {
   });
 }
 
-function pnlForSide(side: string, entryPrice: number, exitPrice: number) {
-  return side.toUpperCase() === "SHORT" ? entryPrice - exitPrice : exitPrice - entryPrice;
+function pnlForSide(side: string, entryPrice: number, exitPrice: number, quantity = 1) {
+  const perUnit = side.toUpperCase() === "SHORT" ? entryPrice - exitPrice : exitPrice - entryPrice;
+  return perUnit * quantity;
 }
+
+type PaperPositionBlockedReason =
+  | "blocked_remaining_notional_capacity"
+  | "blocked_remaining_open_risk_budget"
+  | "blocked_invalid_qty_after_caps";
+
+type PaperPortfolioSnapshot = {
+  paperEquity: number;
+  configuredLeverage: number;
+  maxTotalNotionalMultiplier: number;
+  maxOpenRiskPct: number;
+  maxConcurrentPositions: number;
+  openPositionsCount: number;
+  usedNotional: number;
+  usedRiskBudget: number;
+};
+
+type PaperPositionSizingResult = {
+  quantity: number;
+  notional: number;
+  riskAmount: number;
+  blockedReason: PaperPositionBlockedReason | null;
+  remainingNotionalCapacity: number;
+  remainingOpenRiskBudget: number;
+};
 
 function computePaperPosition(params: {
   entryPrice: number;
@@ -192,19 +232,76 @@ function computePaperPosition(params: {
   paperEquity: number;
   paperRiskPct: number;
   leverage: number;
-}) {
-  const { entryPrice, stopPrice, paperEquity, paperRiskPct, leverage } = params;
+  remainingNotionalCapacity: number;
+  remainingOpenRiskBudget: number;
+}): PaperPositionSizingResult {
+  const { entryPrice, stopPrice, paperEquity, paperRiskPct, leverage, remainingNotionalCapacity, remainingOpenRiskBudget } = params;
   const riskDistance = Math.abs(entryPrice - stopPrice);
   const riskAmount = paperEquity * paperRiskPct;
   if (riskDistance <= 0 || riskAmount <= 0 || entryPrice <= 0) {
-    return { quantity: 0, notional: 0, riskAmount };
+    return {
+      quantity: 0,
+      notional: 0,
+      riskAmount,
+      blockedReason: "blocked_invalid_qty_after_caps",
+      remainingNotionalCapacity,
+      remainingOpenRiskBudget
+    };
   }
   const riskBasedQty = riskAmount / riskDistance;
   const notionalByRisk = riskBasedQty * entryPrice;
   const maxNotionalByLeverage = paperEquity * leverage;
-  const notional = Math.min(notionalByRisk, maxNotionalByLeverage);
+  const maxNotionalByRiskBudget = riskDistance > 0 ? (Math.max(remainingOpenRiskBudget, 0) / riskDistance) * entryPrice : 0;
+  const notional = Math.min(notionalByRisk, maxNotionalByLeverage, Math.max(remainingNotionalCapacity, 0), maxNotionalByRiskBudget);
   const quantity = notional / entryPrice;
-  return { quantity, notional, riskAmount };
+  const cappedRiskAmount = quantity * riskDistance;
+
+  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(notional) || notional <= 0) {
+    const blockedReason = remainingNotionalCapacity <= 0
+      ? "blocked_remaining_notional_capacity"
+      : remainingOpenRiskBudget <= 0
+        ? "blocked_remaining_open_risk_budget"
+        : "blocked_invalid_qty_after_caps";
+    return {
+      quantity: 0,
+      notional: 0,
+      riskAmount: 0,
+      blockedReason,
+      remainingNotionalCapacity,
+      remainingOpenRiskBudget
+    };
+  }
+
+  return {
+    quantity,
+    notional,
+    riskAmount: cappedRiskAmount,
+    blockedReason: null,
+    remainingNotionalCapacity: Math.max(remainingNotionalCapacity - notional, 0),
+    remainingOpenRiskBudget: Math.max(remainingOpenRiskBudget - cappedRiskAmount, 0)
+  };
+}
+
+function buildPaperPortfolioSnapshot(params: {
+  openTrades: Array<{ notional: number | null; riskAmount: number | null }>;
+  paperEquity: number;
+  configuredLeverage: number;
+  maxTotalNotionalMultiplier: number;
+  maxOpenRiskPct: number;
+  maxConcurrentPositions: number;
+}): PaperPortfolioSnapshot {
+  const usedNotional = params.openTrades.reduce((sum, trade) => sum + Math.max(trade.notional ?? 0, 0), 0);
+  const usedRiskBudget = params.openTrades.reduce((sum, trade) => sum + Math.max(trade.riskAmount ?? 0, 0), 0);
+  return {
+    paperEquity: params.paperEquity,
+    configuredLeverage: params.configuredLeverage,
+    maxTotalNotionalMultiplier: params.maxTotalNotionalMultiplier,
+    maxOpenRiskPct: params.maxOpenRiskPct,
+    maxConcurrentPositions: params.maxConcurrentPositions,
+    openPositionsCount: params.openTrades.length,
+    usedNotional,
+    usedRiskBudget
+  };
 }
 
 function activeSignalTradeWhereClause() {
@@ -247,6 +344,22 @@ function tp2RewardToRisk(signal: BreakoutSignal) {
   const risk = isShort ? signal.stopPrice - signal.entryPrice : signal.entryPrice - signal.stopPrice;
   if (risk <= 0) return 0;
   return reward / risk;
+}
+
+function tierPriority(tier: SignalTier) {
+  if (tier === "A+") return 3;
+  if (tier === "A") return 2;
+  return 1;
+}
+
+function rankingTieBreakers(params: {
+  signal: BreakoutSignal;
+  regime: ReturnType<typeof classifyRegime>;
+}) {
+  const rr = tp2RewardToRisk(params.signal);
+  const trendAlignmentStrength = params.regime.regime.startsWith("TREND") ? 1 : 0;
+  const volatilitySuitability = params.regime.regime === "SHOCK_UNSTABLE" ? 0 : 1;
+  return { rr, trendAlignmentStrength, volatilitySuitability };
 }
 
 function atrFromContext(marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>) {
@@ -595,6 +708,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     rr_threshold: 0,
     entry_stretch: 0,
     max_concurrent_paper_positions: 0,
+    not_selected_portfolio_priority: 0,
+    dropped_due_to_lower_rank: 0,
+    blocked_remaining_notional_capacity: 0,
+    blocked_remaining_open_risk_budget: 0,
+    blocked_invalid_qty_after_caps: 0,
     ranking_telegram_subset: 0,
     no_message_payload: 0
   };
@@ -602,6 +720,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let currentOpenPositionsCount = 0;
   let maxConcurrentBlockedCount = 0;
   let maxConcurrentBlockedThisCycle = false;
+  let cycleRankingAllocation: Array<{
+    symbol: string;
+    score: number;
+    rank: number;
+    selected: boolean;
+    rejectionReason: string | null;
+  }> = [];
 
   const skipInfra = config.SKIP_INFRA_CHECKS;
   if (!skipInfra) {
@@ -966,7 +1091,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     const dedupeWindowStart = new Date(Date.now() - 60_000);
     const cooldownWindowStart = new Date(Date.now() - config.SIGNAL_SYMBOL_COOLDOWN_MINUTES * 60_000);
     const minTierScore = minScoreForTier(config.SIGNAL_MIN_TIER);
-    const [activeOutcomes, currentOpenTradeCount] = await Promise.all([
+    const [activeOutcomes, openSignalTrades] = await Promise.all([
       prismaClient.signalOutcome.findMany({
       where: {
         symbol: { in: candidateSymbols },
@@ -974,7 +1099,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       },
       select: { symbol: true }
     }),
-      prismaClient.signalTrade.count({
+      prismaClient.signalTrade.findMany({
         where: activeSignalTradeWhereClause()
       })
     ]);
@@ -1004,7 +1129,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       signal_skipped_symbol_cooldown: new Set<string>()
     };
     const eligibleCandidates: typeof cycleCandidates = [];
-    const availableSlots = Math.max(config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS - currentOpenTradeCount, 0);
+    const currentOpenTradeCount = openSignalTrades.length;
 
     for (const candidate of cycleCandidates) {
       const symbol = candidate.signal.symbol;
@@ -1076,29 +1201,6 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
 
     currentOpenPositionsCount = currentOpenTradeCount;
-    cycleCandidatesForPersistence = availableSlots > 0 ? eligibleCandidates.slice(0, availableSlots) : [];
-    if (availableSlots < eligibleCandidates.length) {
-      const blocked = eligibleCandidates.length - availableSlots;
-      skippedCount += blocked;
-      rejectionCounts.max_concurrent_paper_positions += blocked;
-      maxConcurrentBlockedCount = blocked;
-      maxConcurrentBlockedThisCycle = true;
-      for (const blockedCandidate of eligibleCandidates.slice(availableSlots)) {
-        const summary = symbolSummaries.get(blockedCandidate.signal.symbol);
-        if (summary) summary.skipReason = "max_concurrent_paper_positions";
-      }
-      await prismaClient.runtimeEvent.create({
-        data: {
-          type: "signal_skipped_max_positions",
-          mode: "signal",
-          message: "Skipped due to SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS",
-          payload: {
-            maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
-            currentOpenTradeCount
-          }
-        }
-      });
-    }
 
     const runtimeEvents = [
       ...Array.from(skippedByReason.signal_skipped_active_symbol).map((symbol) => ({
@@ -1145,6 +1247,144 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       await prismaClient.runtimeEvent.createMany({
         data: runtimeEvents
       });
+    }
+
+    if (eligibleCandidates.length > 0) {
+      const rankedEligibleCandidates = [...eligibleCandidates].sort((a, b) => {
+        if (b.signal.score !== a.signal.score) return b.signal.score - a.signal.score;
+        const tierDiff = tierPriority(b.signal.setupGrade) - tierPriority(a.signal.setupGrade);
+        if (tierDiff !== 0) return tierDiff;
+        const aTie = rankingTieBreakers({ signal: a.signal, regime: a.regime });
+        const bTie = rankingTieBreakers({ signal: b.signal, regime: b.regime });
+        if (bTie.rr !== aTie.rr) return bTie.rr - aTie.rr;
+        if (bTie.trendAlignmentStrength !== aTie.trendAlignmentStrength) {
+          return bTie.trendAlignmentStrength - aTie.trendAlignmentStrength;
+        }
+        if (bTie.volatilitySuitability !== aTie.volatilitySuitability) {
+          return bTie.volatilitySuitability - aTie.volatilitySuitability;
+        }
+        return (b.signal.confidence ?? 0) - (a.signal.confidence ?? 0);
+      });
+
+      const snapshot = buildPaperPortfolioSnapshot({
+        openTrades: openSignalTrades,
+        paperEquity: config.SIGNAL_PAPER_EQUITY,
+        configuredLeverage: config.SIGNAL_PAPER_LEVERAGE,
+        maxTotalNotionalMultiplier: config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT,
+        maxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT,
+        maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS
+      });
+      let remainingNotionalCapacity = Math.max((snapshot.paperEquity * snapshot.maxTotalNotionalMultiplier) - snapshot.usedNotional, 0);
+      let remainingOpenRiskBudget = Math.max((snapshot.paperEquity * snapshot.maxOpenRiskPct) - snapshot.usedRiskBudget, 0);
+      let remainingSlots = Math.max(config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS - currentOpenTradeCount, 0);
+      const allocatorAccepted: typeof cycleCandidates = [];
+
+      cycleRankingAllocation = rankedEligibleCandidates.map((candidate, index) => ({
+        symbol: candidate.signal.symbol,
+        score: candidate.signal.score,
+        rank: index + 1,
+        selected: false,
+        rejectionReason: null
+      }));
+
+      for (const [index, candidate] of rankedEligibleCandidates.entries()) {
+        const rankingEntry = cycleRankingAllocation[index];
+        if (remainingSlots <= 0) {
+          skippedCount += 1;
+          rejectionCounts.max_concurrent_paper_positions += 1;
+          rejectionCounts.not_selected_portfolio_priority += 1;
+          rejectionCounts.dropped_due_to_lower_rank += 1;
+          maxConcurrentBlockedCount += 1;
+          maxConcurrentBlockedThisCycle = true;
+          const summary = symbolSummaries.get(candidate.signal.symbol);
+          if (summary) summary.skipReason = "not_selected_portfolio_priority";
+          if (rankingEntry) {
+            rankingEntry.selected = false;
+            rankingEntry.rejectionReason = "not_selected_portfolio_priority";
+          }
+          continue;
+        }
+
+        if (remainingNotionalCapacity <= 0 || remainingOpenRiskBudget <= 0) {
+          skippedCount += 1;
+          rejectionCounts.not_selected_portfolio_priority += 1;
+          rejectionCounts.dropped_due_to_lower_rank += 1;
+          const summary = symbolSummaries.get(candidate.signal.symbol);
+          if (summary) summary.skipReason = "not_selected_portfolio_priority";
+          if (rankingEntry) {
+            rankingEntry.selected = false;
+            rankingEntry.rejectionReason = "not_selected_portfolio_priority";
+          }
+          continue;
+        }
+
+        const sized = computePaperPosition({
+          entryPrice: candidate.signal.entryPrice,
+          stopPrice: candidate.signal.stopPrice,
+          paperEquity: config.SIGNAL_PAPER_EQUITY,
+          paperRiskPct: config.SIGNAL_PAPER_RISK_PCT,
+          leverage: config.SIGNAL_PAPER_LEVERAGE,
+          remainingNotionalCapacity,
+          remainingOpenRiskBudget
+        });
+        if (sized.blockedReason) {
+          skippedCount += 1;
+          rejectionCounts[sized.blockedReason] = (rejectionCounts[sized.blockedReason] ?? 0) + 1;
+          const summary = symbolSummaries.get(candidate.signal.symbol);
+          if (summary) summary.skipReason = sized.blockedReason;
+          await prismaClient.runtimeEvent.create({
+            data: {
+              type: "signal_skipped_portfolio_allocator",
+              mode: "signal",
+              symbol: candidate.signal.symbol,
+              message: `Skipped due to ${sized.blockedReason}`,
+              payload: {
+                blockedReason: sized.blockedReason,
+                remainingNotionalCapacity,
+                remainingOpenRiskBudget,
+                configuredPerTradeRiskPct: config.SIGNAL_PAPER_RISK_PCT,
+                configuredLeverageCap: config.SIGNAL_PAPER_LEVERAGE,
+                configuredMaxTotalNotionalMult: config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT,
+                configuredMaxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT
+              }
+            }
+          });
+          if (rankingEntry) {
+            rankingEntry.selected = false;
+            rankingEntry.rejectionReason = sized.blockedReason;
+          }
+          continue;
+        }
+
+        remainingNotionalCapacity = sized.remainingNotionalCapacity;
+        remainingOpenRiskBudget = sized.remainingOpenRiskBudget;
+        remainingSlots = Math.max(remainingSlots - 1, 0);
+        allocatorAccepted.push(candidate);
+        if (rankingEntry) {
+          rankingEntry.selected = true;
+          rankingEntry.rejectionReason = null;
+        }
+      }
+
+      cycleCandidatesForPersistence = allocatorAccepted;
+
+      const notSelectedByPriority = cycleRankingAllocation.filter(
+        (entry) => !entry.selected && entry.rejectionReason === "not_selected_portfolio_priority"
+      );
+      if (notSelectedByPriority.length > 0) {
+        await prismaClient.runtimeEvent.createMany({
+          data: notSelectedByPriority.map((entry) => ({
+            type: "signal_skipped_portfolio_priority",
+            mode: "signal",
+            symbol: entry.symbol,
+            message: "Skipped due to portfolio ranking priority",
+            payload: {
+              blockedReason: entry.rejectionReason,
+              rank: entry.rank
+            }
+          }))
+        });
+      }
     }
 
   }
@@ -1237,48 +1477,88 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     });
 
     if (runtimeMode === "signal") {
-      await Promise.all(
-        persistedSignalEvents.map((event) => {
-          const matching = cycleCandidatesForPersistence.find((entry) => entry.signal.symbol === event.symbol);
-          const sized = matching
-            ? computePaperPosition({
-              entryPrice: matching.signal.entryPrice,
-              stopPrice: matching.signal.stopPrice,
-              paperEquity: config.SIGNAL_PAPER_EQUITY,
-              paperRiskPct: config.SIGNAL_PAPER_RISK_PCT,
-              leverage: config.SIGNAL_PAPER_LEVERAGE
-            })
-            : { quantity: 0, notional: 0, riskAmount: config.SIGNAL_PAPER_EQUITY * config.SIGNAL_PAPER_RISK_PCT };
-          return (
-          prismaClient.signalTrade.upsert({
-            where: { signalEventId: event.id },
-            update: {},
-            create: {
-              signalEventId: event.id,
-              cycleId,
-              symbol: event.symbol,
-              side: event.side,
-              entryPrice: event.entry,
-              stopPrice: event.stop,
-              tp1Price: event.tp1,
-              tp2Price: event.tp2,
-              paperEquityBase: config.SIGNAL_PAPER_EQUITY,
-              leverage: config.SIGNAL_PAPER_LEVERAGE,
-              riskPct: config.SIGNAL_PAPER_RISK_PCT,
-              riskAmount: sized.riskAmount,
-              quantity: sized.quantity,
-              notional: sized.notional,
-              status: "open",
-              currentPrice: event.entry,
-              openedAt: cycleNow,
-              outcome: "open",
-              unrealizedPnl: 0,
-              realizedPnl: 0
-            }
+      const openSignalTrades = await prismaClient.signalTrade.findMany({
+        where: activeSignalTradeWhereClause()
+      });
+      const snapshot = buildPaperPortfolioSnapshot({
+        openTrades: openSignalTrades,
+        paperEquity: config.SIGNAL_PAPER_EQUITY,
+        configuredLeverage: config.SIGNAL_PAPER_LEVERAGE,
+        maxTotalNotionalMultiplier: config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT,
+        maxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT,
+        maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS
+      });
+      let remainingNotionalCapacity = Math.max((snapshot.paperEquity * snapshot.maxTotalNotionalMultiplier) - snapshot.usedNotional, 0);
+      let remainingOpenRiskBudget = Math.max((snapshot.paperEquity * snapshot.maxOpenRiskPct) - snapshot.usedRiskBudget, 0);
+
+      for (const event of persistedSignalEvents) {
+        const matching = cycleCandidatesForPersistence.find((entry) => entry.signal.symbol === event.symbol);
+        const sized = matching
+          ? computePaperPosition({
+            entryPrice: matching.signal.entryPrice,
+            stopPrice: matching.signal.stopPrice,
+            paperEquity: config.SIGNAL_PAPER_EQUITY,
+            paperRiskPct: config.SIGNAL_PAPER_RISK_PCT,
+            leverage: config.SIGNAL_PAPER_LEVERAGE,
+            remainingNotionalCapacity,
+            remainingOpenRiskBudget
           })
-          );
-        })
-      );
+          : {
+            quantity: 0,
+            notional: 0,
+            riskAmount: 0,
+            blockedReason: "blocked_invalid_qty_after_caps" as const,
+            remainingNotionalCapacity,
+            remainingOpenRiskBudget
+          };
+
+        if (sized.blockedReason) {
+          await prismaClient.runtimeEvent.create({
+            data: {
+              type: "signal_skipped_portfolio_allocator",
+              mode: "signal",
+              symbol: event.symbol,
+              message: `Skipped late-fill due to ${sized.blockedReason}`,
+              payload: {
+                blockedReason: sized.blockedReason,
+                signalEventId: event.id,
+                remainingNotionalCapacity,
+                remainingOpenRiskBudget
+              }
+            }
+          });
+          continue;
+        }
+
+        remainingNotionalCapacity = sized.remainingNotionalCapacity;
+        remainingOpenRiskBudget = sized.remainingOpenRiskBudget;
+        await prismaClient.signalTrade.upsert({
+          where: { signalEventId: event.id },
+          update: {},
+          create: {
+            signalEventId: event.id,
+            cycleId,
+            symbol: event.symbol,
+            side: event.side,
+            entryPrice: event.entry,
+            stopPrice: event.stop,
+            tp1Price: event.tp1,
+            tp2Price: event.tp2,
+            paperEquityBase: config.SIGNAL_PAPER_EQUITY,
+            leverage: config.SIGNAL_PAPER_LEVERAGE,
+            riskPct: config.SIGNAL_PAPER_RISK_PCT,
+            riskAmount: sized.riskAmount,
+            quantity: sized.quantity,
+            notional: sized.notional,
+            status: "open",
+            currentPrice: event.entry,
+            openedAt: cycleNow,
+            outcome: "open",
+            unrealizedPnl: 0,
+            realizedPnl: 0
+          }
+        });
+      }
     }
   }
 
@@ -1291,7 +1571,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       const latestPrice = latestPriceBySymbol.get(trade.symbol);
       if (latestPrice === undefined) continue;
 
-      const unrealizedPnl = pnlForSide(trade.side, trade.entryPrice, latestPrice);
+      const unrealizedPnl = pnlForSide(trade.side, trade.entryPrice, latestPrice, trade.quantity ?? 0);
       const updates: Partial<{
         status: PersistedSignalTradeStatus;
         outcome: PersistedSignalTradeOutcome;
@@ -1313,7 +1593,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       const tp1Triggered = isShort ? latestPrice <= trade.tp1Price : latestPrice >= trade.tp1Price;
 
       if (stopTriggered) {
-        const stopPnl = pnlForSide(trade.side, trade.entryPrice, trade.stopPrice);
+        const stopPnl = pnlForSide(trade.side, trade.entryPrice, trade.stopPrice, trade.quantity ?? 0);
         updates.status = "stop_hit";
         updates.stopHitAt = cycleNow;
         updates.closedAt = cycleNow;
@@ -1323,7 +1603,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         updates.outcome = trade.tp1HitAt ? "partial_win" : "loss";
         closedSignalsThisCycle += 1;
       } else if (tp2Triggered) {
-        const tp2Pnl = pnlForSide(trade.side, trade.entryPrice, trade.tp2Price);
+        const tp2Pnl = pnlForSide(trade.side, trade.entryPrice, trade.tp2Price, trade.quantity ?? 0);
         updates.status = "tp2_hit";
         updates.tp2HitAt = cycleNow;
         updates.closedAt = cycleNow;
@@ -2397,6 +2677,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       prismaClient.transportEvent.count({ where: { channel: "telegram" } }),
       prismaClient.signalEvent.count()
     ]);
+    const openTradesForPortfolio = await prismaClient.signalTrade.findMany({
+      where: activeSignalTradeWhereClause(),
+      select: {
+        notional: true,
+        riskAmount: true
+      }
+    });
+    const usedNotional = openTradesForPortfolio.reduce((sum, trade) => sum + Math.max(trade.notional ?? 0, 0), 0);
+    const usedRiskBudget = openTradesForPortfolio.reduce((sum, trade) => sum + Math.max(trade.riskAmount ?? 0, 0), 0);
+    const availableNotionalCapacity = Math.max((config.SIGNAL_PAPER_EQUITY * config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT) - usedNotional, 0);
+    const availableRiskBudget = Math.max((config.SIGNAL_PAPER_EQUITY * config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT) - usedRiskBudget, 0);
 
     reconciliation = {
       cycleTruth: {
@@ -2413,8 +2704,16 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         closedSignalsThisCycle,
         currentOpenPositionsCount: totalOpenSignals,
         paperMaxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+        paperEquity: config.SIGNAL_PAPER_EQUITY,
+        usedNotional,
+        availableNotionalCapacity,
+        usedRiskBudget,
+        availableRiskBudget,
+        maxTotalNotionalMult: config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT,
+        maxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT,
         maxConcurrentBlockedThisCycle,
-        maxConcurrentBlockedCount
+        maxConcurrentBlockedCount,
+        cycleRankingAllocation
       },
       currentCycle: {
         candidatesEvaluatedThisCycle: candidateCount,

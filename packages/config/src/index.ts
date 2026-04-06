@@ -66,6 +66,8 @@ const envSchema = z.object({
   SIGNAL_PAPER_EQUITY: z.coerce.number().positive().default(10_000),
   SIGNAL_PAPER_RISK_PCT: z.coerce.number().positive().max(1).default(0.01),
   SIGNAL_PAPER_LEVERAGE: z.coerce.number().positive().default(1),
+  SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT: z.coerce.number().positive().default(1),
+  SIGNAL_PAPER_MAX_OPEN_RISK_PCT: z.coerce.number().positive().max(1).default(0.05),
   SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS: z.coerce.number().int().positive().default(10),
   DEFAULT_EXECUTION_TIMEFRAME: timeframeSchema.default("15m"),
   DEFAULT_HTF_1: timeframeSchema.default("1h"),

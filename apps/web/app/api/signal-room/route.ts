@@ -26,8 +26,22 @@ type ReconciliationPayload = {
     closedSignalsThisCycle?: number;
     currentOpenPositionsCount?: number;
     paperMaxConcurrentPositions?: number;
+    paperEquity?: number;
+    usedNotional?: number;
+    availableNotionalCapacity?: number;
+    usedRiskBudget?: number;
+    availableRiskBudget?: number;
+    maxTotalNotionalMult?: number;
+    maxOpenRiskPct?: number;
     maxConcurrentBlockedThisCycle?: boolean;
     maxConcurrentBlockedCount?: number;
+    cycleRankingAllocation?: Array<{
+      symbol: string;
+      score: number;
+      rank: number;
+      selected: boolean;
+      rejectionReason: string | null;
+    }>;
   };
   currentCycle?: {
     candidatesEvaluatedThisCycle: number;
@@ -57,6 +71,10 @@ function withPaperComputedFields<T extends {
   quantity: number | null;
   notional: number | null;
 }>(trade: T) {
+  const entry = trade.entryPrice;
+  const stop = trade.stopPrice;
+  const tp1 = (trade as T & { tp1Price?: number }).tp1Price;
+  const tp2 = (trade as T & { tp2Price?: number }).tp2Price;
   const stopDistance = Math.abs(trade.entryPrice - trade.stopPrice);
   const equity = trade.paperEquityBase ?? 0;
   const notional = trade.notional ?? 0;
@@ -67,6 +85,20 @@ function withPaperComputedFields<T extends {
   const realizedPnl = trade.realizedPnl ?? 0;
   const rResultClosed = riskAmount > 0 ? realizedPnl / riskAmount : 0;
   const rResultOpen = riskAmount > 0 ? unrealizedPnl / riskAmount : 0;
+  const currentPrice = trade.currentPrice ?? trade.entryPrice;
+  const isShort = (trade as T & { side?: string }).side?.toUpperCase() === "SHORT";
+  const priceMovePct = entry > 0
+    ? (((isShort ? entry - currentPrice : currentPrice - entry) / entry) * 100)
+    : 0;
+  const distanceToStopPct = currentPrice > 0
+    ? (((isShort ? stop - currentPrice : currentPrice - stop) / currentPrice) * 100)
+    : 0;
+  const distanceToTp1Pct = currentPrice > 0 && typeof tp1 === "number"
+    ? (((isShort ? currentPrice - tp1 : tp1 - currentPrice) / currentPrice) * 100)
+    : 0;
+  const distanceToTp2Pct = currentPrice > 0 && typeof tp2 === "number"
+    ? (((isShort ? currentPrice - tp2 : tp2 - currentPrice) / currentPrice) * 100)
+    : 0;
   return {
     ...trade,
     paperComputed: {
@@ -80,7 +112,11 @@ function withPaperComputedFields<T extends {
       realizedPnlQuote: realizedPnl,
       unrealizedPnlQuote: unrealizedPnl,
       rResultClosed,
-      rResultOpen
+      rResultOpen,
+      priceMovePct,
+      distanceToStopPct,
+      distanceToTp1Pct,
+      distanceToTp2Pct
     }
   };
 }
@@ -207,9 +243,14 @@ export async function GET() {
     openTradesWithoutTelegramDispatch: openTradesWithDispatch.filter((trade) => trade.telegramDispatchStatus !== "sent").length
   };
   const cycleTruth = reconciliation?.cycleTruth ?? null;
-  const openNotional = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.notional ?? 0), 0);
-  const currentAvailablePaperCapital = Math.max((config.SIGNAL_PAPER_EQUITY * config.SIGNAL_PAPER_LEVERAGE) - openNotional, 0);
-  const availableRiskBudget = Math.max((config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS - openTradesWithDispatch.length), 0) * (config.SIGNAL_PAPER_EQUITY * config.SIGNAL_PAPER_RISK_PCT);
+  const paperEquity = config.SIGNAL_PAPER_EQUITY;
+  const usedNotional = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.notional ?? 0), 0);
+  const usedRiskBudget = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.riskAmount ?? 0), 0);
+  const maxTotalNotionalCapacity = paperEquity * config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT;
+  const availableNotionalCapacity = Math.max(maxTotalNotionalCapacity - usedNotional, 0);
+  const maxOpenRiskBudget = paperEquity * config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT;
+  const availableRiskBudget = Math.max(maxOpenRiskBudget - usedRiskBudget, 0);
+  const effectivePortfolioLeverage = paperEquity > 0 ? usedNotional / paperEquity : 0;
 
   return NextResponse.json({
     summary,
@@ -230,6 +271,8 @@ export async function GET() {
       equity: config.SIGNAL_PAPER_EQUITY,
       riskPct: config.SIGNAL_PAPER_RISK_PCT,
       leverage: config.SIGNAL_PAPER_LEVERAGE,
+      maxTotalNotionalMult: config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT,
+      maxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT,
       maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
       minTier: config.SIGNAL_MIN_TIER,
       minTp2R: config.SIGNAL_MIN_TP2_R,
@@ -249,10 +292,15 @@ export async function GET() {
       isRunning: systemControl?.isRunning ?? false
     },
     capitalAllocation: {
+      paperEquity,
+      configuredLeverageCap: config.SIGNAL_PAPER_LEVERAGE,
+      totalOpenNotional: usedNotional,
+      effectivePortfolioLeverage,
+      usedOpenRiskBudget: usedRiskBudget,
+      availableNotionalCapacity,
+      availableRiskBudget,
       paperMaxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
       currentOpenPositionsCount: openTradesWithDispatch.length,
-      currentAvailablePaperCapital,
-      availableRiskBudget,
       blockedByMaxConcurrentRulesThisCycle: cycleTruth?.maxConcurrentBlockedThisCycle ?? false
     },
     cycleTruth,

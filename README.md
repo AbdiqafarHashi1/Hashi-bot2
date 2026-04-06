@@ -149,6 +149,14 @@ Single source of truth for local runtime config:
 cp .env.example .env
 ```
 
+Dedicated signal operator preset:
+
+```bash
+cp .env.signal .env
+```
+
+`./.env.signal` is a complete signal-mode env contract (signal-only execution, paper model, portfolio allocator caps, restart/reset policy, and Telegram placeholders).
+
 Both runtime entrypoints now load this same root `.env` file:
 
 - `pnpm --filter @hashi/web dev`
@@ -159,7 +167,7 @@ Schema validation (`getConfig()`) now runs only after root `.env` loading.
 ### Docker vs local hostname behavior
 
 - Local `pnpm` runtime should keep `DATABASE_URL` and `REDIS_URL` pointed to `localhost` in root `.env`.
-- Docker Compose keeps using root `.env` via `env_file`, but explicitly overrides app container infra hosts:
+- Docker Compose loads `${HASHI_ENV_FILE:-.env}` via `env_file`, and explicitly overrides app container infra hosts:
   - `DATABASE_URL=postgresql://postgres:postgres@postgres:5432/hashi_bot2`
   - `REDIS_URL=redis://redis:6379`
 
@@ -171,6 +179,12 @@ Start the full stack (Docker-first):
 
 ```bash
 docker compose up -d
+```
+
+Start with the dedicated signal env without replacing `.env`:
+
+```bash
+HASHI_ENV_FILE=.env.signal docker compose up -d
 ```
 
 Inspect app logs:
@@ -202,6 +216,8 @@ Paper sizing model controls:
 - `SIGNAL_PAPER_EQUITY` (default `10000`)
 - `SIGNAL_PAPER_RISK_PCT` (default `0.01`)
 - `SIGNAL_PAPER_LEVERAGE` (default `1`)
+- `SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT` (default `1`)
+- `SIGNAL_PAPER_MAX_OPEN_RISK_PCT` (default `0.05`)
 - `SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS` (default `10`)
 
 Manual operator reset endpoint:
