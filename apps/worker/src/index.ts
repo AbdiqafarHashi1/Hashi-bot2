@@ -124,11 +124,29 @@ type WorkerCycleSummary = {
   skippedCount: number;
   persistedSignalCount: number;
   dispatchedTelegramCount: number;
+  closedSignalsThisCycle: number;
   outcome: CycleOutcome;
   skipReason?: string;
   durationMs: number;
 };
 type SignalCycleReconciliation = {
+  cycleTruth: {
+    allowedSymbolsConfigured: string[];
+    allowedSymbolsConfiguredCount: number;
+    symbolsActuallyScanned: string[];
+    symbolsActuallyScannedCount: number;
+    symbolsSkippedBeforeEvaluation: string[];
+    symbolsSkippedBeforeEvaluationCount: number;
+    candidatesEvaluatedThisCycle: number;
+    candidatesRejectedBy: Record<string, number>;
+    signalsPersistedThisCycle: number;
+    telegramSignalsDispatchedThisCycle: number;
+    closedSignalsThisCycle: number;
+    currentOpenPositionsCount: number;
+    paperMaxConcurrentPositions: number;
+    maxConcurrentBlockedThisCycle: boolean;
+    maxConcurrentBlockedCount: number;
+  };
   currentCycle: {
     candidatesEvaluatedThisCycle: number;
     signalsPersistedThisCycle: number;
@@ -142,6 +160,20 @@ type SignalCycleReconciliation = {
     totalTelegramDispatchRecords: number;
     totalPersistedSignals: number;
   };
+};
+
+type SymbolCycleSummary = {
+  symbol: string;
+  scanned: boolean;
+  candidateFound: boolean;
+  persisted: boolean;
+  telegramDispatchStatus:
+    | "sent"
+    | "failed"
+    | "not_selected_for_telegram_cycle_subset"
+    | "not_attempted_no_message_payload"
+    | "not_attempted_filtered_before_dispatch";
+  skipReason: string | null;
 };
 
 function sleep(ms: number) {
@@ -552,8 +584,24 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let skippedCount = 0;
   let persistedSignalCount = 0;
   let dispatchedTelegramCount = 0;
+  let closedSignalsThisCycle = 0;
   let cycleOutcome: CycleOutcome = "completed";
   let skipReason: string | undefined;
+  const rejectionCounts: Record<string, number> = {
+    analysis_feed_unavailable: 0,
+    tier: 0,
+    active_symbol_gate: 0,
+    cooldown: 0,
+    rr_threshold: 0,
+    entry_stretch: 0,
+    max_concurrent_paper_positions: 0,
+    ranking_telegram_subset: 0,
+    no_message_payload: 0
+  };
+  const symbolSummaries = new Map<string, SymbolCycleSummary>();
+  let currentOpenPositionsCount = 0;
+  let maxConcurrentBlockedCount = 0;
+  let maxConcurrentBlockedThisCycle = false;
 
   const skipInfra = config.SKIP_INFRA_CHECKS;
   if (!skipInfra) {
@@ -626,6 +674,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       skippedCount,
       persistedSignalCount,
       dispatchedTelegramCount,
+      closedSignalsThisCycle,
       outcome: cycleOutcome,
       skipReason,
       durationMs
@@ -664,7 +713,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     return {
       cycleId, cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
       allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
-      dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
+      dispatchedTelegramCount, closedSignalsThisCycle, outcome: cycleOutcome, skipReason, durationMs
     };
   }
 
@@ -702,18 +751,30 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     return {
       cycleId, cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
       allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
-      dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
+      dispatchedTelegramCount, closedSignalsThisCycle, outcome: cycleOutcome, skipReason, durationMs
     };
   }
 
   const primary = buildProvider(config.DEFAULT_PRIMARY_PROVIDER);
   const backup = buildProvider(config.DEFAULT_BACKUP_PROVIDER);
   const configuredSymbols = buildRuntimeSymbols(config);
+  const configuredSymbolNames = configuredSymbols.map((entry) => entry.symbol.toUpperCase());
   const allowedSymbolSet = new Set(
     (systemControl.allowedSymbols.length > 0 ? systemControl.allowedSymbols : configuredSymbols.map((entry) => entry.symbol))
       .map((symbol) => symbol.toUpperCase())
   );
   const runtimeSymbols = configuredSymbols.filter((entry) => allowedSymbolSet.has(entry.symbol.toUpperCase()));
+  const symbolsSkippedBeforeEvaluation = configuredSymbolNames.filter((symbol) => !runtimeSymbols.some((entry) => entry.symbol.toUpperCase() === symbol));
+  for (const entry of configuredSymbols) {
+    symbolSummaries.set(entry.symbol, {
+      symbol: entry.symbol,
+      scanned: runtimeSymbols.some((symbolMeta) => symbolMeta.symbol === entry.symbol),
+      candidateFound: false,
+      persisted: false,
+      telegramDispatchStatus: "not_attempted_filtered_before_dispatch",
+      skipReason: runtimeSymbols.some((symbolMeta) => symbolMeta.symbol === entry.symbol) ? null : "not_allowed_by_system_control"
+    });
+  }
   if (runtimeSymbols.length === 0) {
     cycleOutcome = "skipped";
     skipReason = "no_allowed_symbols";
@@ -738,7 +799,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     return {
       cycleId, cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
       allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
-      dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
+      dispatchedTelegramCount, closedSignalsThisCycle, outcome: cycleOutcome, skipReason, durationMs
     };
   }
   if (config.MARKET_TYPE === "forex") {
@@ -765,7 +826,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     return {
       cycleId, cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
       allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
-      dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
+      dispatchedTelegramCount, closedSignalsThisCycle, outcome: cycleOutcome, skipReason, durationMs
     };
   }
   symbolsScanned = runtimeSymbols.length;
@@ -819,6 +880,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       });
     } catch (error) {
       skippedCount += 1;
+      rejectionCounts.analysis_feed_unavailable += 1;
+      const summary = symbolSummaries.get(symbolContext.symbol);
+      if (summary) {
+        summary.skipReason = "analysis_feed_unavailable";
+      }
       unavailableFeeds.push({
         symbol: symbolContext.symbol,
         marketType: symbolContext.marketType,
@@ -849,7 +915,18 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     });
     if (!quality.tier) {
       skippedCount += 1;
+      rejectionCounts.tier += 1;
+      const summary = symbolSummaries.get(symbolContext.symbol);
+      if (summary) {
+        summary.candidateFound = false;
+        summary.skipReason = "tier";
+      }
       continue;
+    }
+    const summary = symbolSummaries.get(symbolContext.symbol);
+    if (summary) {
+      summary.candidateFound = true;
+      summary.skipReason = null;
     }
 
     cycleCandidates.push({
@@ -933,27 +1010,42 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       const symbol = candidate.signal.symbol;
       if (seenSymbols.has(symbol)) {
         skippedCount += 1;
+        rejectionCounts.active_symbol_gate += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "active_symbol_gate";
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         continue;
       }
       seenSymbols.add(symbol);
       if (activeSymbolSet.has(symbol)) {
         skippedCount += 1;
+        rejectionCounts.active_symbol_gate += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "active_symbol_gate";
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         continue;
       }
       if (recentSymbolSet.has(symbol)) {
         skippedCount += 1;
+        rejectionCounts.active_symbol_gate += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "active_symbol_gate";
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         continue;
       }
       if (cooldownSymbolSet.has(symbol)) {
         skippedCount += 1;
+        rejectionCounts.cooldown += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "cooldown";
         skippedByReason.signal_skipped_symbol_cooldown.add(symbol);
         continue;
       }
       if (candidate.signal.score < minTierScore) {
         skippedCount += 1;
+        rejectionCounts.tier += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "tier";
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         continue;
       }
@@ -961,6 +1053,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       const rrTp2 = tp2RewardToRisk(candidate.signal);
       if (rrTp2 < config.SIGNAL_MIN_TP2_R) {
         skippedCount += 1;
+        rejectionCounts.rr_threshold += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "rr_threshold";
         skippedByReason.signal_skipped_rr_filter.add(symbol);
         continue;
       }
@@ -971,15 +1066,27 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         : 0;
       if (stretchAtr > config.SIGNAL_MAX_ENTRY_STRETCH_ATR) {
         skippedCount += 1;
+        rejectionCounts.entry_stretch += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "entry_stretch";
         skippedByReason.signal_skipped_entry_stretch.add(symbol);
         continue;
       }
       eligibleCandidates.push(candidate);
     }
 
+    currentOpenPositionsCount = currentOpenTradeCount;
     cycleCandidatesForPersistence = availableSlots > 0 ? eligibleCandidates.slice(0, availableSlots) : [];
     if (availableSlots < eligibleCandidates.length) {
-      skippedCount += eligibleCandidates.length - availableSlots;
+      const blocked = eligibleCandidates.length - availableSlots;
+      skippedCount += blocked;
+      rejectionCounts.max_concurrent_paper_positions += blocked;
+      maxConcurrentBlockedCount = blocked;
+      maxConcurrentBlockedThisCycle = true;
+      for (const blockedCandidate of eligibleCandidates.slice(availableSlots)) {
+        const summary = symbolSummaries.get(blockedCandidate.signal.symbol);
+        if (summary) summary.skipReason = "max_concurrent_paper_positions";
+      }
       await prismaClient.runtimeEvent.create({
         data: {
           type: "signal_skipped_max_positions",
@@ -1081,6 +1188,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         })
       )
     );
+    for (const event of persistedSignalEvents) {
+      const summary = symbolSummaries.get(event.symbol);
+      if (summary) {
+        summary.persisted = true;
+        summary.skipReason = null;
+      }
+    }
 
     await prismaClient.runtimeEvent.createMany({
       data: persistedSignalEvents.map((event) => ({
@@ -1207,6 +1321,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         updates.unrealizedPnl = 0;
         updates.realizedPnl = stopPnl;
         updates.outcome = trade.tp1HitAt ? "partial_win" : "loss";
+        closedSignalsThisCycle += 1;
       } else if (tp2Triggered) {
         const tp2Pnl = pnlForSide(trade.side, trade.entryPrice, trade.tp2Price);
         updates.status = "tp2_hit";
@@ -1216,6 +1331,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         updates.unrealizedPnl = 0;
         updates.realizedPnl = tp2Pnl;
         updates.outcome = "win";
+        closedSignalsThisCycle += 1;
       } else if (tp1Triggered && !trade.tp1HitAt) {
         updates.status = "tp1_hit";
         updates.tp1HitAt = cycleNow;
@@ -1998,20 +2114,30 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         const result = dispatchResults[index];
         return {
           symbol: signal.symbol,
-          status: result?.status ?? "failed",
-          reason: result?.reason ?? "telegram_dispatch_not_attempted"
+          status: result?.status ?? "not_attempted_no_message_payload",
+          reason: result?.reason ?? (result ? undefined : "not_attempted_no_message_payload")
         };
       });
 
       for (const dispatch of selectedSignalDispatches) {
+        const status = dispatch.status === "sent" || dispatch.status === "failed"
+          ? dispatch.status
+          : "not_attempted_no_message_payload";
         await prismaClient.signalEvent.updateMany({
           where: { cycleId, symbol: dispatch.symbol },
           data: {
-            telegramDispatchStatus: dispatch.status === "sent" ? "sent" : "failed",
+            telegramDispatchStatus: status,
             telegramDispatchReason: dispatch.reason,
-            telegramDispatchedAt: dispatch.status === "sent" ? cycleNow : null
+            telegramDispatchedAt: status === "sent" ? cycleNow : null
           }
         });
+        const summary = symbolSummaries.get(dispatch.symbol);
+        if (summary) {
+          summary.telegramDispatchStatus = status;
+        }
+        if (status === "not_attempted_no_message_payload") {
+          rejectionCounts.no_message_payload += 1;
+        }
       }
 
       await prismaClient.signalEvent.updateMany({
@@ -2020,9 +2146,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           telegramDispatchStatus: "not_dispatched"
         },
         data: {
+          telegramDispatchStatus: "not_selected_for_telegram_cycle_subset",
           telegramDispatchReason: "not_selected_for_telegram_cycle_subset"
         }
       });
+      for (const summary of symbolSummaries.values()) {
+        if (summary.persisted && summary.telegramDispatchStatus === "not_attempted_filtered_before_dispatch") {
+          summary.telegramDispatchStatus = "not_selected_for_telegram_cycle_subset";
+          summary.skipReason = "ranking_telegram_subset";
+          rejectionCounts.ranking_telegram_subset += 1;
+        }
+      }
 
       if (dispatchResults.length > 0) {
         await prismaClient.transportEvent.createMany({
@@ -2072,6 +2206,22 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             payload: { count: dispatchResults.length }
           }
         });
+      }
+    }
+  }
+  if (!signalModeOutput) {
+    if (prismaClient && runtimeMode === "signal") {
+      await prismaClient.signalEvent.updateMany({
+        where: { cycleId, telegramDispatchStatus: "not_dispatched" },
+        data: {
+          telegramDispatchStatus: "not_attempted_no_message_payload",
+          telegramDispatchReason: "not_attempted_no_message_payload"
+        }
+      });
+    }
+    for (const summary of symbolSummaries.values()) {
+      if (summary.persisted) {
+        summary.telegramDispatchStatus = "not_attempted_no_message_payload";
       }
     }
   }
@@ -2249,6 +2399,23 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     ]);
 
     reconciliation = {
+      cycleTruth: {
+        allowedSymbolsConfigured: Array.from(allowedSymbolSet),
+        allowedSymbolsConfiguredCount: allowedSymbolSet.size,
+        symbolsActuallyScanned: runtimeSymbols.map((entry) => entry.symbol),
+        symbolsActuallyScannedCount: runtimeSymbols.length,
+        symbolsSkippedBeforeEvaluation,
+        symbolsSkippedBeforeEvaluationCount: symbolsSkippedBeforeEvaluation.length,
+        candidatesEvaluatedThisCycle: candidateCount,
+        candidatesRejectedBy: rejectionCounts,
+        signalsPersistedThisCycle: persistedSignalCount,
+        telegramSignalsDispatchedThisCycle: dispatchedTelegramCount,
+        closedSignalsThisCycle,
+        currentOpenPositionsCount: totalOpenSignals,
+        paperMaxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+        maxConcurrentBlockedThisCycle,
+        maxConcurrentBlockedCount
+      },
       currentCycle: {
         candidatesEvaluatedThisCycle: candidateCount,
         signalsPersistedThisCycle: persistedSignalCount,
@@ -2275,6 +2442,29 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         })
       }
     });
+
+    console.log(
+      JSON.stringify(
+        {
+          event: "signal_cycle_truth",
+          cycleId,
+          allowedSymbolsConfigured: Array.from(allowedSymbolSet),
+          symbolsActuallyScanned: runtimeSymbols.map((entry) => entry.symbol),
+          symbolsSkippedBeforeEvaluation,
+          candidatesEvaluatedThisCycle: candidateCount,
+          candidatesRejectedBy: rejectionCounts,
+          signalsPersistedThisCycle: persistedSignalCount,
+          telegramSignalsDispatchedThisCycle: dispatchedTelegramCount,
+          closedSignalsThisCycle,
+          paperMaxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+          currentOpenPositionsCount: totalOpenSignals,
+          maxConcurrentBlockedThisCycle,
+          perSymbol: Array.from(symbolSummaries.values())
+        },
+        null,
+        2
+      )
+    );
   }
 
   if (prismaClient) {
@@ -2298,11 +2488,15 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         isRunning: systemControl.isRunning,
         killSwitchActive: systemControl.killSwitchActive,
         allowedSymbolsCount: systemControl.allowedSymbols.length,
+        allowedSymbolsConfigured: Array.from(allowedSymbolSet),
+        symbolsSkippedBeforeEvaluation,
         symbolsScanned,
         candidateCount,
         skippedCount,
         persistedSignalCount,
         dispatchedTelegramCount,
+        closedSignalsThisCycle,
+        candidatesRejectedBy: rejectionCounts,
         reconciliation,
         outcome: cycleOutcome,
         durationMs
@@ -2324,6 +2518,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     skippedCount,
     persistedSignalCount,
     dispatchedTelegramCount,
+    closedSignalsThisCycle,
     outcome: cycleOutcome,
     durationMs
   };
