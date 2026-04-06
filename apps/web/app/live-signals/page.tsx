@@ -1,209 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-type SignalTrade = {
-  id: string;
-  signalEventId: string;
-  cycleId: string | null;
-  symbol: string;
-  side: string;
-  entryPrice: number;
-  stopPrice: number;
-  tp1Price: number;
-  tp2Price: number;
-  status: string;
-  currentPrice: number | null;
-  openedAt: string;
-  closedAt: string | null;
-  outcome: string | null;
-  unrealizedPnl: number | null;
-  realizedPnl: number | null;
-  paperEquityBase: number | null;
-  leverage: number | null;
-  riskPct: number | null;
-  riskAmount: number | null;
-  quantity: number | null;
-  notional: number | null;
-  telegramDispatchStatus: string;
-  telegramDispatchedAt: string | null;
-  telegramDispatchReason: string | null;
-  paperComputed?: {
-    stopDistance: number;
-    effectiveLeverage: number;
-    configuredLeverageCap: number;
-    positionRiskPct: number;
-    riskAmountQuote: number;
-    quantity: number;
-    notionalQuote: number;
-    realizedPnlQuote: number;
-    unrealizedPnlQuote: number;
-    rResultClosed: number;
-    rResultOpen: number;
-    priceMovePct: number;
-    distanceToStopPct: number;
-    distanceToTp1Pct: number;
-    distanceToTp2Pct: number;
-  };
-};
-
-type SignalEvent = {
-  id: string;
-  cycleId: string | null;
-  symbol: string;
-  side: string;
-  entry: number;
-  stop: number;
-  tp1: number;
-  tp2: number;
-  score: number;
-  confidence: number | null;
-  strategy: string | null;
-  timeframe: string | null;
-  generatedAt: string;
-  telegramDispatchStatus: string | null;
-  telegramDispatchedAt: string | null;
-  telegramDispatchReason: string | null;
-};
-
-type SignalRoomPayload = {
-  summary: {
-    openCount: number;
-    closedCount: number;
-    winCount: number;
-    lossCount: number;
-    partialWinCount: number;
-    latestSignalTimestamp: string | null;
-  };
-  reconciliation: {
-    cycleId: string | null;
-    currentCycle: {
-      candidatesEvaluatedThisCycle: number;
-      signalsPersistedThisCycle: number;
-      telegramSignalsDispatchedThisCycle: number;
-      signalsSkippedThisCycle: number;
-    };
-    persistedTotals: {
-      totalOpenSignals: number;
-      totalClosedSignals: number;
-      totalResolvedSignals: number;
-      totalTelegramDispatchRecords: number;
-      totalPersistedSignals: number;
-    };
-  };
-  currentCycleSummary: {
-    candidatesEvaluated: number;
-    selectedActionableCount: number;
-    telegramDispatchedCount: number;
-    rejectedCount: number;
-    portfolioCapacityUsage: {
-      selectedCount: number;
-      selectedCap: number;
-      telegramCap: number;
-    };
-    diversificationNotes: string[];
-  };
-  signalSelectionPolicy: {
-    selectedCapPerCycle: number;
-    telegramCapPerCycle: number;
-    diversificationEnabled: boolean;
-    diversificationMode: string;
-  };
-  selectedThisCycle: Array<{
-    symbol: string;
-    side: string;
-    score: number;
-    rank: number;
-    tier: string;
-    selected: boolean;
-    diversificationGroup: string;
-    selectedReason: string;
-    telegramDispatchStatus: string;
-    paperTradeStatus: string;
-  }>;
-  rejectedThisCycle: Array<{
-    symbol: string;
-    side: string;
-    score: number;
-    rank: number;
-    tier: string;
-    selected: boolean;
-    diversificationGroup: string;
-    rejectionReason: string | null;
-  }>;
-  cycleTruth: {
-    allowedSymbolsConfigured: string[];
-    symbolsActuallyScanned: string[];
-    symbolsSkippedBeforeEvaluation: string[];
-    candidatesRejectedBy: Record<string, number>;
-    closedSignalsThisCycle: number;
-    maxConcurrentBlockedThisCycle: boolean;
-    maxConcurrentBlockedCount: number;
-    cycleRankingAllocation?: Array<{
-      symbol: string;
-      score: number;
-      rank: number;
-      selected: boolean;
-      rejectionReason: string | null;
-    }>;
-  } | null;
-  controlPlane: {
-    allowedSymbolsConfiguredDefaults: string[];
-    allowedSymbolsRuntime: string[];
-    allowedSymbolsRuntimeCount: number;
-    activeMode: string;
-    isRunning: boolean;
-  };
-  capitalAllocation: {
-    paperEquity: number;
-    configuredLeverageCap: number;
-    totalOpenNotional: number;
-    effectivePortfolioLeverage: number;
-    usedOpenRiskBudget: number;
-    availableNotionalCapacity: number;
-    availableRiskBudget: number;
-    paperMaxConcurrentPositions: number;
-    currentOpenPositionsCount: number;
-    blockedByMaxConcurrentRulesThisCycle: boolean;
-  };
-  liveView: {
-    openSignalsVisibleInSignalRoom: number;
-    recentGeneratedSignalsVisible: number;
-    recentClosedSignalsVisible: number;
-  };
-  dispatchBreakdown: {
-    openTradesFromPersistedSignals: number;
-    openTradesWithTelegramDispatch: number;
-    openTradesWithoutTelegramDispatch: number;
-  };
-  restartPolicy: {
-    configuredPolicy: "resume_persisted" | "reset_signal_mode_state_on_boot";
-    resetOnBoot: boolean;
-    resumedFromPersistedDb: boolean;
-    lastResetAt: string | null;
-    lastResumeAt: string | null;
-  };
-  paperModel: {
-    equity: number;
-    riskPct: number;
-    leverage: number;
-    maxTotalNotionalMult: number;
-    maxOpenRiskPct: number;
-    maxConcurrentPositions: number;
-    minTier: string;
-    minTp2R: number;
-    symbolCooldownMinutes: number;
-    maxEntryStretchAtr: number;
-    partialAtTp1Enabled: boolean;
-    partialPct: number;
-    tp1ProtectMode: string;
-    tp1ProtectOffsetR: number;
-    breakevenBufferR: number;
-  };
-  openTrades: SignalTrade[];
-  closedTrades: SignalTrade[];
-  recentActionableSignals: SignalEvent[];
-};
+import type { SignalRoomPayload } from "../../lib/signal-room/contracts";
 
 function SummaryCard({ label, value }: { label: string; value: string | number }) {
   return (
@@ -340,7 +138,7 @@ export default function Page() {
           </section>
           <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <SummaryCard label="Allowed symbols active" value={data.controlPlane.allowedSymbolsRuntimeCount} />
-            <SummaryCard label="Scanned this cycle" value={data.cycleTruth?.symbolsActuallyScanned.length ?? 0} />
+            <SummaryCard label="Scanned this cycle" value={data.cycleTruth?.symbolsActuallyScanned?.length ?? 0} />
             <SummaryCard label="Closed this cycle" value={data.cycleTruth?.closedSignalsThisCycle ?? 0} />
             <SummaryCard label="Max concurrent blocked" value={data.cycleTruth?.maxConcurrentBlockedCount ?? 0} />
           </section>
@@ -506,11 +304,11 @@ export default function Page() {
             <section className="rounded border border-slate-800 bg-slate-900/70 p-4">
               <h2 className="text-lg font-semibold">Cycle Truth / Rejection Breakdown</h2>
               <p className="mt-2 text-xs text-slate-400">Why only one signal fired is explained here: runtime allowlist, scanned symbols, and exact filter counts.</p>
-              <p className="mt-2 text-sm">Allowed symbols configured: {data.cycleTruth.allowedSymbolsConfigured.join(", ") || "-"}</p>
-              <p className="text-sm">Symbols scanned: {data.cycleTruth.symbolsActuallyScanned.join(", ") || "-"}</p>
-              <p className="text-sm">Skipped before evaluation: {data.cycleTruth.symbolsSkippedBeforeEvaluation.join(", ") || "-"}</p>
+              <p className="mt-2 text-sm">Allowed symbols configured: {data.cycleTruth.allowedSymbolsConfigured?.join(", ") || "-"}</p>
+              <p className="text-sm">Symbols scanned: {data.cycleTruth.symbolsActuallyScanned?.join(", ") || "-"}</p>
+              <p className="text-sm">Skipped before evaluation: {data.cycleTruth.symbolsSkippedBeforeEvaluation?.join(", ") || "-"}</p>
               <ul className="mt-3 space-y-1 text-sm text-slate-300">
-                {Object.entries(data.cycleTruth.candidatesRejectedBy).map(([reason, count]) => (
+                {Object.entries(data.cycleTruth.candidatesRejectedBy ?? {}).map(([reason, count]) => (
                   <li key={reason}>{reason}: {count}</li>
                 ))}
               </ul>

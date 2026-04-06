@@ -2,34 +2,10 @@
 
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { ControlRoomStatePayload } from "../../lib/control-room/contracts";
+import type { SignalRoomPayload } from "../../lib/signal-room/contracts";
 
 type SignalTier = "A+" | "A" | "B";
 type OutcomeStatus = "OPEN" | "TP1_HIT" | "TP2_HIT" | "STOP_HIT" | "EXPIRED" | "PARTIAL_WIN" | "BE_AFTER_TP1";
-
-type SignalRoomPayload = {
-  summary: {
-    openCount: number;
-    closedCount: number;
-    winCount: number;
-    lossCount: number;
-    partialWinCount: number;
-    latestSignalTimestamp: string | null;
-  };
-  reconciliation: {
-    currentCycle: {
-      selectedActionableCountThisCycle?: number;
-      rejectedCountThisCycle?: number;
-      telegramSignalsDispatchedThisCycle: number;
-    };
-    persistedTotals: {
-      totalOpenSignals: number;
-      totalClosedSignals: number;
-      totalResolvedSignals: number;
-      totalTelegramDispatchRecords: number;
-      totalPersistedSignals: number;
-    };
-  };
-};
 
 type PersonalRoomPayload = {
   connectorStatus: { status: string; authPresent: boolean; lastSyncAt: string | null } | null;

@@ -38,6 +38,15 @@ const jsonRecordSchema = z
       return {};
     }
   });
+const optionalPositiveNumberSchema = z.preprocess(
+  (value) => {
+    if (value === "") {
+      return undefined;
+    }
+    return value;
+  },
+  z.coerce.number().positive().optional()
+);
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -89,7 +98,7 @@ const envSchema = z.object({
   MAX_RISK_PCT_CAP: z.coerce.number().positive().default(0.025),
   SIZE_MOD_MIN: z.coerce.number().positive().default(0.7),
   SIZE_MOD_MAX: z.coerce.number().positive().default(1.2),
-  MAX_POSITION_NOTIONAL: z.coerce.number().positive().optional(),
+  MAX_POSITION_NOTIONAL: optionalPositiveNumberSchema,
   EXEC_REALISM_ENABLED: booleanFlagSchema.default(false),
   SLIPPAGE_PCT: z.coerce.number().min(0).default(0),
   EXEC_DELAY_MODE: execDelayModeSchema.default("none"),

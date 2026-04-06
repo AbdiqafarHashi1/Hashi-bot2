@@ -294,7 +294,7 @@ export async function GET() {
   const availableRiskBudget = Math.max(maxOpenRiskBudget - usedRiskBudget, 0);
   const effectivePortfolioLeverage = paperEquity > 0 ? usedNotional / paperEquity : 0;
 
-  return NextResponse.json({
+  const responsePayload = {
     summary,
     reconciliation: {
       cycleId: reconciliation?.cycleId ?? latestReconciliation?.id ?? null,
@@ -370,5 +370,7 @@ export async function GET() {
     openTrades: openTradesWithDispatch,
     closedTrades: closedTradesWithPaper,
     recentActionableSignals: recentSignals
-  });
+  };
+
+  return NextResponse.json(responsePayload);
 }

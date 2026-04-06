@@ -1,17 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-type SignalRoomPayload = {
-  summary: {
-    openCount: number;
-    closedCount: number;
-    winCount: number;
-    lossCount: number;
-    partialWinCount: number;
-  };
-  recentSignals: Array<{ generatedAt: string }>;
-};
+import type { SignalRoomPayload } from "../../lib/signal-room/contracts";
 
 type BacktestGroup = { key: string; profitFactor: number; tradeCount: number };
 type BacktestPayload = {
@@ -71,7 +61,7 @@ export default function Page() {
             <li>Wins: {signalData.summary.winCount}</li>
             <li>Losses: {signalData.summary.lossCount}</li>
             <li>Partial wins: {signalData.summary.partialWinCount}</li>
-            <li>Latest signal: {signalData.recentSignals?.[0] ? new Date(signalData.recentSignals[0].generatedAt).toISOString() : "No signals yet"}</li>
+            <li>Latest signal: {signalData.summary.latestSignalTimestamp ? new Date(signalData.summary.latestSignalTimestamp).toISOString() : "No signals yet"}</li>
           </ul>
         ) : (
           <p className="text-sm text-slate-400">Signal analytics unavailable.</p>
