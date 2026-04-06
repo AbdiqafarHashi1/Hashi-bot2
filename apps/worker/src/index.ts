@@ -67,11 +67,52 @@ function maskSecret(value: string) {
   return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }
 
+type TelegramParseMode = "Markdown" | "MarkdownV2" | "HTML";
+
+async function sendTelegramMessage(params: {
+  endpoint: string;
+  chatId: string;
+  text: string;
+  parseMode?: TelegramParseMode;
+}) {
+  const { endpoint, chatId, text, parseMode } = params;
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    text,
+    disable_web_page_preview: true
+  };
+
+  if (parseMode) {
+    body.parse_mode = parseMode;
+  }
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  const result = await response.json();
+  if (!response.ok || !result?.ok) {
+    const failureDescription =
+      typeof result?.description === "string" ? result.description : `telegram_http_${response.status}`;
+    throw new Error(failureDescription);
+  }
+
+  return result;
+}
+
+function isParseEntityFailure(error: unknown): error is Error {
+  return error instanceof Error && /can't parse entities/i.test(error.message);
+}
+
 async function sendSignalModeTelegramMessages(params: {
   messages: string[];
   botToken?: string;
   chatId?: string;
-  parseMode: "Markdown" | "MarkdownV2" | "HTML";
+  parseMode: TelegramParseMode;
 }) {
   const { messages, botToken, chatId, parseMode } = params;
   if (messages.length === 0) return;
@@ -111,25 +152,12 @@ async function sendSignalModeTelegramMessages(params: {
     );
 
     try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text,
-          parse_mode: parseMode,
-          disable_web_page_preview: true
-        })
+      const result = await sendTelegramMessage({
+        endpoint,
+        chatId,
+        text,
+        parseMode
       });
-
-      const result = await response.json();
-      if (!response.ok || !result?.ok) {
-        const failureDescription =
-          typeof result?.description === "string" ? result.description : `telegram_http_${response.status}`;
-        throw new Error(failureDescription);
-      }
 
       console.log(
         JSON.stringify(
@@ -138,6 +166,8 @@ async function sendSignalModeTelegramMessages(params: {
             messageNumber,
             messageCount: messages.length,
             chatIdMasked: maskSecret(chatId),
+            parseMode,
+            fallbackToPlainText: false,
             telegramMessageId: result?.result?.message_id ?? null
           },
           null,
@@ -145,6 +175,65 @@ async function sendSignalModeTelegramMessages(params: {
         )
       );
     } catch (error) {
+      if (isParseEntityFailure(error)) {
+        console.log(
+          JSON.stringify(
+            {
+              event: "telegram_send_attempt",
+              messageNumber,
+              messageCount: messages.length,
+              chatIdMasked: maskSecret(chatId),
+              parseMode: "none",
+              fallbackReason: error.message
+            },
+            null,
+            2
+          )
+        );
+
+        try {
+          const fallbackResult = await sendTelegramMessage({
+            endpoint,
+            chatId,
+            text
+          });
+
+          console.log(
+            JSON.stringify(
+              {
+                event: "telegram_send_success",
+                messageNumber,
+                messageCount: messages.length,
+                chatIdMasked: maskSecret(chatId),
+                parseMode: "none",
+                fallbackToPlainText: true,
+                telegramMessageId: fallbackResult?.result?.message_id ?? null
+              },
+              null,
+              2
+            )
+          );
+          continue;
+        } catch (fallbackError) {
+          console.log(
+            JSON.stringify(
+              {
+                event: "telegram_send_failure",
+                messageNumber,
+                messageCount: messages.length,
+                chatIdMasked: maskSecret(chatId),
+                parseMode: "none",
+                fallbackToPlainText: true,
+                reason: fallbackError instanceof Error ? fallbackError.message : "telegram_send_failed"
+              },
+              null,
+              2
+            )
+          );
+          continue;
+        }
+      }
+
       console.log(
         JSON.stringify(
           {
@@ -152,6 +241,8 @@ async function sendSignalModeTelegramMessages(params: {
             messageNumber,
             messageCount: messages.length,
             chatIdMasked: maskSecret(chatId),
+            parseMode,
+            fallbackToPlainText: false,
             reason: error instanceof Error ? error.message : "telegram_send_failed"
           },
           null,
