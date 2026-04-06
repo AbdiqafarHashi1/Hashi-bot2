@@ -58,6 +58,7 @@ model Signal {
 
 model SignalEvent {
   id          String   @id @default(cuid())
+  cycleId     String?
   symbol      String
   side        String
   entry       Float
@@ -68,6 +69,9 @@ model SignalEvent {
   confidence  Float?
   strategy    String?
   timeframe   String?
+  telegramDispatchStatus String?
+  telegramDispatchedAt DateTime?
+  telegramDispatchReason String?
   generatedAt DateTime @default(now())
 
   signalTrade SignalTrade?
@@ -78,12 +82,19 @@ model SignalEvent {
 model SignalTrade {
   id            String   @id @default(cuid())
   signalEventId String   @unique
+  cycleId       String?
   symbol        String
   side          String
   entryPrice    Float
   stopPrice     Float
   tp1Price      Float
   tp2Price      Float
+  paperEquityBase Float?
+  leverage      Float?
+  riskPct       Float?
+  riskAmount    Float?
+  quantity      Float?
+  notional      Float?
   status        String
   currentPrice  Float?
   openedAt      DateTime

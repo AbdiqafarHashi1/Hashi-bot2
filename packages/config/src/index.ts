@@ -9,6 +9,7 @@ const executionModeSchema = z.enum(["signal_only", "live_personal", "live_prop"]
 const marketTypeSchema = z.enum(["crypto", "forex"]);
 const signalTierSchema = z.enum(["A+", "A", "B"]);
 const signalTp1ProtectModeSchema = z.enum(["break_even", "offset_r"]);
+const signalRestartPolicySchema = z.enum(["resume_persisted", "reset_signal_mode_state_on_boot"]);
 const execDelayModeSchema = z.enum(["none", "next_candle"]);
 const booleanFlagSchema = z
   .union([z.literal("1"), z.literal("0"), z.literal("true"), z.literal("false"), z.boolean()])
@@ -59,6 +60,13 @@ const envSchema = z.object({
   SIGNAL_TP1_PROTECT_MODE: signalTp1ProtectModeSchema.default("break_even"),
   SIGNAL_TP1_PROTECT_OFFSET_R: z.coerce.number().min(0).default(0),
   SIGNAL_BREAKEVEN_BUFFER_R: z.coerce.number().min(0).default(0),
+  SIGNAL_RESTART_POLICY: signalRestartPolicySchema.default("resume_persisted"),
+  SIGNAL_RESET_CLEAR_RECENT_SIGNALS: booleanFlagSchema.default(false),
+  SIGNAL_RESET_CLEAR_RUNTIME_EVENTS: booleanFlagSchema.default(true),
+  SIGNAL_PAPER_EQUITY: z.coerce.number().positive().default(10_000),
+  SIGNAL_PAPER_RISK_PCT: z.coerce.number().positive().max(1).default(0.01),
+  SIGNAL_PAPER_LEVERAGE: z.coerce.number().positive().default(1),
+  SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS: z.coerce.number().int().positive().default(10),
   DEFAULT_EXECUTION_TIMEFRAME: timeframeSchema.default("15m"),
   DEFAULT_HTF_1: timeframeSchema.default("1h"),
   DEFAULT_HTF_2: timeframeSchema.default("4h"),

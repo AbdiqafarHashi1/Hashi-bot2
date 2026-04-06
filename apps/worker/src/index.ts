@@ -113,6 +113,7 @@ type TelegramDispatchResult = {
 };
 type CycleOutcome = "completed" | "skipped" | "error";
 type WorkerCycleSummary = {
+  cycleId: string;
   cycleStartedAt: string;
   mode: RuntimeMode;
   isRunning: boolean;
@@ -127,6 +128,21 @@ type WorkerCycleSummary = {
   skipReason?: string;
   durationMs: number;
 };
+type SignalCycleReconciliation = {
+  currentCycle: {
+    candidatesEvaluatedThisCycle: number;
+    signalsPersistedThisCycle: number;
+    telegramSignalsDispatchedThisCycle: number;
+    signalsSkippedThisCycle: number;
+  };
+  persistedTotals: {
+    totalOpenSignals: number;
+    totalClosedSignals: number;
+    totalResolvedSignals: number;
+    totalTelegramDispatchRecords: number;
+    totalPersistedSignals: number;
+  };
+};
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => {
@@ -136,6 +152,27 @@ function sleep(ms: number) {
 
 function pnlForSide(side: string, entryPrice: number, exitPrice: number) {
   return side.toUpperCase() === "SHORT" ? entryPrice - exitPrice : exitPrice - entryPrice;
+}
+
+function computePaperPosition(params: {
+  entryPrice: number;
+  stopPrice: number;
+  paperEquity: number;
+  paperRiskPct: number;
+  leverage: number;
+}) {
+  const { entryPrice, stopPrice, paperEquity, paperRiskPct, leverage } = params;
+  const riskDistance = Math.abs(entryPrice - stopPrice);
+  const riskAmount = paperEquity * paperRiskPct;
+  if (riskDistance <= 0 || riskAmount <= 0 || entryPrice <= 0) {
+    return { quantity: 0, notional: 0, riskAmount };
+  }
+  const riskBasedQty = riskAmount / riskDistance;
+  const notionalByRisk = riskBasedQty * entryPrice;
+  const maxNotionalByLeverage = paperEquity * leverage;
+  const notional = Math.min(notionalByRisk, maxNotionalByLeverage);
+  const quantity = notional / entryPrice;
+  return { quantity, notional, riskAmount };
 }
 
 function activeSignalTradeWhereClause() {
@@ -498,6 +535,7 @@ function priceForR(side: string, entry: number, riskDistance: number, rValue: nu
 async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> {
   const cycleStartedAtMs = Date.now();
   const cycleStartedAtIso = new Date(cycleStartedAtMs).toISOString();
+  const cycleId = `signal-cycle-${cycleStartedAtMs}`;
   const config = getConfig();
   const redis = new Redis(config.REDIS_URL);
   let prismaClient: (typeof import("@hashi/db"))["prisma"] | null = null;
@@ -577,6 +615,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     );
     const durationMs = Date.now() - cycleStartedAtMs;
     return {
+      cycleId,
       cycleStartedAt: cycleStartedAtIso,
       mode: runtimeMode,
       isRunning: systemControl.isRunning,
@@ -623,7 +662,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     );
     const durationMs = Date.now() - cycleStartedAtMs;
     return {
-      cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
+      cycleId, cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
       allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
       dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
     };
@@ -661,7 +700,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     );
     const durationMs = Date.now() - cycleStartedAtMs;
     return {
-      cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
+      cycleId, cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
       allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
       dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
     };
@@ -697,7 +736,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     );
     const durationMs = Date.now() - cycleStartedAtMs;
     return {
-      cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
+      cycleId, cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
       allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
       dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
     };
@@ -724,7 +763,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     );
     const durationMs = Date.now() - cycleStartedAtMs;
     return {
-      cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
+      cycleId, cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
       allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
       dispatchedTelegramCount, outcome: cycleOutcome, skipReason, durationMs
     };
@@ -850,13 +889,18 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     const dedupeWindowStart = new Date(Date.now() - 60_000);
     const cooldownWindowStart = new Date(Date.now() - config.SIGNAL_SYMBOL_COOLDOWN_MINUTES * 60_000);
     const minTierScore = minScoreForTier(config.SIGNAL_MIN_TIER);
-    const activeOutcomes = await prismaClient.signalOutcome.findMany({
+    const [activeOutcomes, currentOpenTradeCount] = await Promise.all([
+      prismaClient.signalOutcome.findMany({
       where: {
         symbol: { in: candidateSymbols },
         status: { in: ["OPEN", "TP1_HIT"] }
       },
       select: { symbol: true }
-    });
+    }),
+      prismaClient.signalTrade.count({
+        where: activeSignalTradeWhereClause()
+      })
+    ]);
     const recentOutcomes = await prismaClient.signalOutcome.findMany({
       where: {
         symbol: { in: candidateSymbols },
@@ -883,6 +927,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       signal_skipped_symbol_cooldown: new Set<string>()
     };
     const eligibleCandidates: typeof cycleCandidates = [];
+    const availableSlots = Math.max(config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS - currentOpenTradeCount, 0);
 
     for (const candidate of cycleCandidates) {
       const symbol = candidate.signal.symbol;
@@ -932,6 +977,22 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       eligibleCandidates.push(candidate);
     }
 
+    cycleCandidatesForPersistence = availableSlots > 0 ? eligibleCandidates.slice(0, availableSlots) : [];
+    if (availableSlots < eligibleCandidates.length) {
+      skippedCount += eligibleCandidates.length - availableSlots;
+      await prismaClient.runtimeEvent.create({
+        data: {
+          type: "signal_skipped_max_positions",
+          mode: "signal",
+          message: "Skipped due to SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS",
+          payload: {
+            maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+            currentOpenTradeCount
+          }
+        }
+      });
+    }
+
     const runtimeEvents = [
       ...Array.from(skippedByReason.signal_skipped_active_symbol).map((symbol) => ({
         type: "signal_skipped_active_symbol",
@@ -979,7 +1040,6 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       });
     }
 
-    cycleCandidatesForPersistence = eligibleCandidates;
   }
 
   if (prismaClient) {
@@ -1008,6 +1068,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           data: {
             symbol: entry.signal.symbol,
             side: entry.signal.side,
+            cycleId,
             entry: entry.signal.entryPrice,
             stop: entry.signal.stopPrice,
             tp1: entry.signal.tp1,
@@ -1028,9 +1089,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         symbol: event.symbol,
         message: "Signal event persisted",
         payload: {
-          signalEventId: event.id
-        }
-      }))
+            signalEventId: event.id
+          }
+        }))
+    });
+
+    await prismaClient.signalEvent.updateMany({
+      where: { id: { in: persistedSignalEvents.map((event) => event.id) } },
+      data: {
+        telegramDispatchStatus: "not_dispatched",
+        telegramDispatchReason: "awaiting_dispatch_evaluation"
+      }
     });
 
     await prismaClient.signalOutcome.createMany({
@@ -1055,18 +1124,36 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
     if (runtimeMode === "signal") {
       await Promise.all(
-        persistedSignalEvents.map((event) =>
+        persistedSignalEvents.map((event) => {
+          const matching = cycleCandidatesForPersistence.find((entry) => entry.signal.symbol === event.symbol);
+          const sized = matching
+            ? computePaperPosition({
+              entryPrice: matching.signal.entryPrice,
+              stopPrice: matching.signal.stopPrice,
+              paperEquity: config.SIGNAL_PAPER_EQUITY,
+              paperRiskPct: config.SIGNAL_PAPER_RISK_PCT,
+              leverage: config.SIGNAL_PAPER_LEVERAGE
+            })
+            : { quantity: 0, notional: 0, riskAmount: config.SIGNAL_PAPER_EQUITY * config.SIGNAL_PAPER_RISK_PCT };
+          return (
           prismaClient.signalTrade.upsert({
             where: { signalEventId: event.id },
             update: {},
             create: {
               signalEventId: event.id,
+              cycleId,
               symbol: event.symbol,
               side: event.side,
               entryPrice: event.entry,
               stopPrice: event.stop,
               tp1Price: event.tp1,
               tp2Price: event.tp2,
+              paperEquityBase: config.SIGNAL_PAPER_EQUITY,
+              leverage: config.SIGNAL_PAPER_LEVERAGE,
+              riskPct: config.SIGNAL_PAPER_RISK_PCT,
+              riskAmount: sized.riskAmount,
+              quantity: sized.quantity,
+              notional: sized.notional,
               status: "open",
               currentPrice: event.entry,
               openedAt: cycleNow,
@@ -1075,7 +1162,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
               realizedPnl: 0
             }
           })
-        )
+          );
+        })
       );
     }
   }
@@ -1358,6 +1446,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     ? buildSignalModePayload({
         rankedSetups: allocation.rankedSetups,
         decisions: allocation.decisions,
+        cycleId,
         minTier: config.SIGNAL_MIN_TIER,
         maxSignals: config.MAX_SIGNALS_PER_CYCLE
       })
@@ -1905,6 +1994,36 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     dispatchedTelegramCount += dispatchResults.filter((result) => result.status === "sent").length;
 
     if (prismaClient) {
+      const selectedSignalDispatches = signalModeOutput.json.signals.map((signal, index) => {
+        const result = dispatchResults[index];
+        return {
+          symbol: signal.symbol,
+          status: result?.status ?? "failed",
+          reason: result?.reason ?? "telegram_dispatch_not_attempted"
+        };
+      });
+
+      for (const dispatch of selectedSignalDispatches) {
+        await prismaClient.signalEvent.updateMany({
+          where: { cycleId, symbol: dispatch.symbol },
+          data: {
+            telegramDispatchStatus: dispatch.status === "sent" ? "sent" : "failed",
+            telegramDispatchReason: dispatch.reason,
+            telegramDispatchedAt: dispatch.status === "sent" ? cycleNow : null
+          }
+        });
+      }
+
+      await prismaClient.signalEvent.updateMany({
+        where: {
+          cycleId,
+          telegramDispatchStatus: "not_dispatched"
+        },
+        data: {
+          telegramDispatchReason: "not_selected_for_telegram_cycle_subset"
+        }
+      });
+
       if (dispatchResults.length > 0) {
         await prismaClient.transportEvent.createMany({
           data: dispatchResults.map((result) => ({
@@ -2105,6 +2224,59 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   console.log(skipInfra ? "[worker] db skipped (SKIP_INFRA_CHECKS=1)" : "[worker] db connected");
   console.log(skipInfra ? "[worker] redis skipped (SKIP_INFRA_CHECKS=1)" : "[worker] redis connected");
 
+  let reconciliation: SignalCycleReconciliation | null = null;
+  if (prismaClient && runtimeMode === "signal") {
+    const [
+      totalOpenSignals,
+      totalClosedSignals,
+      totalResolvedSignals,
+      totalTelegramDispatchRecords,
+      totalPersistedSignals
+    ] = await Promise.all([
+      prismaClient.signalTrade.count({ where: activeSignalTradeWhereClause() }),
+      prismaClient.signalTrade.count({
+        where: {
+          OR: [{ status: "tp2_hit" }, { status: "stop_hit" }, { status: "closed" }]
+        }
+      }),
+      prismaClient.signalOutcome.count({
+        where: {
+          status: { in: ["TP2_HIT", "STOP_HIT", "EXPIRED", "PARTIAL_WIN", "BE_AFTER_TP1"] }
+        }
+      }),
+      prismaClient.transportEvent.count({ where: { channel: "telegram" } }),
+      prismaClient.signalEvent.count()
+    ]);
+
+    reconciliation = {
+      currentCycle: {
+        candidatesEvaluatedThisCycle: candidateCount,
+        signalsPersistedThisCycle: persistedSignalCount,
+        telegramSignalsDispatchedThisCycle: dispatchedTelegramCount,
+        signalsSkippedThisCycle: skippedCount
+      },
+      persistedTotals: {
+        totalOpenSignals,
+        totalClosedSignals,
+        totalResolvedSignals,
+        totalTelegramDispatchRecords,
+        totalPersistedSignals
+      }
+    };
+
+    await prismaClient.runtimeEvent.create({
+      data: {
+        type: "signal_cycle_reconciliation",
+        mode: "signal",
+        message: "Signal cycle reconciliation snapshot",
+        payload: toInputJson({
+          cycleId,
+          ...reconciliation
+        })
+      }
+    });
+  }
+
   if (prismaClient) {
     await prismaClient.runtimeEvent.create({
       data: {
@@ -2131,6 +2303,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         skippedCount,
         persistedSignalCount,
         dispatchedTelegramCount,
+        reconciliation,
         outcome: cycleOutcome,
         durationMs
       },
@@ -2140,6 +2313,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   );
 
   return {
+    cycleId,
     cycleStartedAt: cycleStartedAtIso,
     mode: runtimeMode,
     isRunning: systemControl.isRunning,
@@ -2157,6 +2331,57 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
 async function startWorkerLoop() {
   const config = getConfig();
+  try {
+    if (!config.SKIP_INFRA_CHECKS) {
+      const { prisma } = await import("@hashi/db");
+      if (config.SIGNAL_RESTART_POLICY === "reset_signal_mode_state_on_boot") {
+        const cleared = await prisma.$transaction(async (tx) => {
+          const openSignalTrades = await tx.signalTrade.deleteMany({
+            where: activeSignalTradeWhereClause()
+          });
+          const signalOutcomes = await tx.signalOutcome.deleteMany({});
+          const recentSignals = config.SIGNAL_RESET_CLEAR_RECENT_SIGNALS
+            ? await tx.signalEvent.deleteMany({})
+            : { count: 0 };
+          if (config.SIGNAL_RESET_CLEAR_RUNTIME_EVENTS) {
+            await tx.runtimeEvent.deleteMany({ where: { mode: "signal" } });
+          }
+          return {
+            openTradesCleared: openSignalTrades.count,
+            signalOutcomesCleared: signalOutcomes.count,
+            signalEventsCleared: recentSignals.count
+          };
+        });
+        await prisma.runtimeEvent.create({
+          data: {
+            type: "signal_mode_boot_reset",
+            mode: "signal",
+            message: "Signal mode boot reset applied",
+            payload: toInputJson({
+              restartPolicy: config.SIGNAL_RESTART_POLICY,
+              resetClearRecentSignals: config.SIGNAL_RESET_CLEAR_RECENT_SIGNALS,
+              resetClearRuntimeEvents: config.SIGNAL_RESET_CLEAR_RUNTIME_EVENTS,
+              ...cleared
+            })
+          }
+        });
+      } else {
+        await prisma.runtimeEvent.create({
+          data: {
+            type: "signal_mode_boot_resume",
+            mode: "signal",
+            message: "Signal mode resumed from persisted state",
+            payload: toInputJson({
+              restartPolicy: config.SIGNAL_RESTART_POLICY
+            })
+          }
+        });
+      }
+    }
+  } catch (error) {
+    console.error("[worker] signal-mode boot policy failed", error);
+  }
+
   const loopIntervalSeconds = config.WORKER_LOOP_INTERVAL_SECONDS;
   const loopIntervalMs = loopIntervalSeconds * 1000;
   let cycleNumber = 0;
