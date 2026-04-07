@@ -164,15 +164,20 @@ export default function Page() {
               <p>Leverage meaning: <span className="font-medium">Configured cap only; effective leverage = notional / equity</span></p>
               <p>Max concurrent positions: <span className="font-medium">{data.paperModel.maxConcurrentPositions}</span></p>
               <p>Open positions now: <span className="font-medium">{data.capitalAllocation.currentOpenPositionsCount}</span></p>
-              <p>Total open notional: <span className="font-medium">{data.capitalAllocation.totalOpenNotional.toFixed(2)}</span></p>
+              <p>Max total notional capacity: <span className="font-medium">{data.capitalAllocation.maxTotalNotionalCapacity.toFixed(2)}</span></p>
+              <p>Used notional: <span className="font-medium">{data.capitalAllocation.totalOpenNotional.toFixed(2)}</span></p>
+              <p>Remaining notional capacity: <span className="font-medium">{data.capitalAllocation.remainingNotionalCapacity.toFixed(2)}</span></p>
               <p>Effective portfolio leverage: <span className="font-medium">{data.capitalAllocation.effectivePortfolioLeverage.toFixed(4)}x</span></p>
+              <p>Max open risk budget: <span className="font-medium">{data.capitalAllocation.maxOpenRiskBudget.toFixed(2)}</span></p>
               <p>Used open risk budget: <span className="font-medium">{data.capitalAllocation.usedOpenRiskBudget.toFixed(2)}</span></p>
-              <p>Remaining risk budget: <span className="font-medium">{data.capitalAllocation.availableRiskBudget.toFixed(2)}</span></p>
-              <p>Remaining notional capacity: <span className="font-medium">{data.capitalAllocation.availableNotionalCapacity.toFixed(2)}</span></p>
+              <p>Remaining risk budget: <span className="font-medium">{data.capitalAllocation.remainingRiskBudget.toFixed(2)}</span></p>
               <p>Blocked by max concurrent this cycle: <span className="font-medium">{String(data.capitalAllocation.blockedByMaxConcurrentRulesThisCycle)}</span></p>
               <p>Runtime allowed symbols: <span className="font-medium">{data.controlPlane.allowedSymbolsRuntime.join(", ") || "-"}</span></p>
               <p>Configured default symbols: <span className="font-medium">{data.controlPlane.allowedSymbolsConfiguredDefaults.join(", ") || "-"}</span></p>
               <p>Min tier: <span className="font-medium">{data.paperModel.minTier}</span></p>
+              <p>Min score: <span className="font-medium">{data.paperModel.minScore}</span></p>
+              <p>A+ only compatibility: <span className="font-medium">{String(data.paperModel.requireAPlusOnly)}</span></p>
+              <p>Threshold effective: <span className="font-medium">{data.signalSelectionPolicy.thresholdPolicy.minTier} + score≥{data.signalSelectionPolicy.thresholdPolicy.effectiveMinScore}</span></p>
               <p>Min TP2 R: <span className="font-medium">{data.paperModel.minTp2R}</span></p>
               <p>Cooldown (min): <span className="font-medium">{data.paperModel.symbolCooldownMinutes}</span></p>
               <p>Entry stretch ATR cap: <span className="font-medium">{data.paperModel.maxEntryStretchAtr}</span></p>
@@ -181,6 +186,9 @@ export default function Page() {
               <p>Selected cap / cycle: <span className="font-medium">{data.signalSelectionPolicy.selectedCapPerCycle}</span></p>
               <p>Telegram cap / cycle: <span className="font-medium">{data.signalSelectionPolicy.telegramCapPerCycle}</span></p>
               <p>Diversification mode: <span className="font-medium">{data.signalSelectionPolicy.diversificationEnabled ? data.signalSelectionPolicy.diversificationMode : "disabled"}</span></p>
+              <p>Crypto signal actions enabled: <span className="font-medium">{String(data.signalSelectionPolicy.marketModePolicy.cryptoEnabled)}</span></p>
+              <p>Forex signal actions enabled: <span className="font-medium">{String(data.signalSelectionPolicy.marketModePolicy.forexEnabled)}</span></p>
+              <p>Forex readiness-only mode: <span className="font-medium">{String(data.signalSelectionPolicy.marketModePolicy.forexReadinessOnly)}</span></p>
               <p>Portfolio capacity usage: <span className="font-medium">{data.currentCycleSummary.portfolioCapacityUsage.selectedCount}/{data.currentCycleSummary.portfolioCapacityUsage.selectedCap}</span></p>
               <p>Diversification notes: <span className="font-medium">{data.currentCycleSummary.diversificationNotes.join(" | ") || "none"}</span></p>
             </div>
@@ -229,7 +237,7 @@ export default function Page() {
                   <tr>
                     <th className={headerCellClass}>Symbol</th><th className={headerCellClass}>Entry</th><th className={headerCellClass}>Stop</th><th className={headerCellClass}>TP1 / TP2</th>
                     <th className={headerCellClass}>Stop dist</th><th className={headerCellClass}>Qty</th><th className={headerCellClass}>Notional</th><th className={headerCellClass}>Risk</th><th className={headerCellClass}>Leverage</th>
-                    <th className={headerCellClass}>Move / dist</th><th className={headerCellClass}>PnL / R</th><th className={headerCellClass}>Telegram</th><th className={headerCellClass}>Opened</th>
+                    <th className={headerCellClass}>Move / dist</th><th className={headerCellClass}>PnL / R</th><th className={headerCellClass}>Why selected</th><th className={headerCellClass}>Telegram</th><th className={headerCellClass}>Opened</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -250,6 +258,7 @@ export default function Page() {
                         move {(trade.paperComputed?.priceMovePct ?? 0).toFixed(4)}% / stop {(trade.paperComputed?.distanceToStopPct ?? 0).toFixed(4)}% / tp1 {(trade.paperComputed?.distanceToTp1Pct ?? 0).toFixed(4)}% / tp2 {(trade.paperComputed?.distanceToTp2Pct ?? 0).toFixed(4)}%
                       </td>
                       <td className={numericCellClass}>{formatMoney(trade.paperComputed?.unrealizedPnlQuote ?? trade.unrealizedPnl ?? 0)} / {(trade.paperComputed?.rResultOpen ?? 0).toFixed(2)}R</td>
+                      <td className={`${textCellClass} max-w-[280px] whitespace-normal break-words`}>{data.selectedThisCycle.find((entry) => entry.symbol === trade.symbol)?.selectedReason ?? "-"}</td>
                       <td className={`${textCellClass} max-w-[280px] whitespace-normal break-words`}>{trade.telegramDispatchStatus} ({trade.telegramDispatchReason ?? "-"})</td>
                       <td className={textCellClass}>{formatIso(trade.openedAt)}</td>
                     </tr>

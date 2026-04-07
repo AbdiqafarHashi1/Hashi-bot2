@@ -1,5 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { Redis } from "ioredis";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { getConfig } from "@hashi/config";
 import {
   ACTIVE_PRODUCTION_STRATEGY_IDS,
@@ -21,8 +23,11 @@ import {
   reconcilePersonalDemoState,
   reconcilePropDemoState,
   getProductionStrategies,
+  loadCandlesFromCsv,
+  type Candle,
   type MarketDataProvider,
-  type SymbolMetadata
+  type SymbolMetadata,
+  type Timeframe
 } from "@hashi/core";
 
 class ForcedFailureProvider implements MarketDataProvider {
@@ -40,6 +45,84 @@ class ForcedFailureProvider implements MarketDataProvider {
 
   healthCheck() {
     return Promise.resolve(false);
+  }
+}
+
+class DatasetSpotProvider implements MarketDataProvider {
+  private readonly datasetBySymbol: Record<string, string>;
+  private readonly windowOffset: number;
+  private readonly candleCache = new Map<string, Candle[]>();
+
+  constructor(datasetBySymbol: Record<string, string>, windowOffset: number) {
+    this.datasetBySymbol = Object.fromEntries(
+      Object.entries(datasetBySymbol).map(([symbol, datasetPath]) => [symbol.toUpperCase(), datasetPath])
+    );
+    this.windowOffset = Math.max(0, Math.floor(windowOffset));
+  }
+
+  private resolveDatasetPath(symbol: string) {
+    const normalized = symbol.toUpperCase();
+    const direct = this.datasetBySymbol[normalized];
+    if (direct) return this.resolveFilePath(direct);
+    const fallback = this.datasetBySymbol.ETHUSDT ?? this.datasetBySymbol.BTCUSDT;
+    return fallback ? this.resolveFilePath(fallback) : undefined;
+  }
+
+  private resolveFilePath(datasetPath: string) {
+    if (path.isAbsolute(datasetPath)) return datasetPath;
+    const cwdResolved = path.resolve(process.cwd(), datasetPath);
+    if (existsSync(cwdResolved)) return cwdResolved;
+
+    let current = process.cwd();
+    while (true) {
+      const marker = path.join(current, "pnpm-workspace.yaml");
+      if (existsSync(marker)) {
+        return path.resolve(current, datasetPath);
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    return cwdResolved;
+  }
+
+  private async loadSymbol(symbol: string) {
+    const normalized = symbol.toUpperCase();
+    if (this.candleCache.has(normalized)) {
+      return this.candleCache.get(normalized)!;
+    }
+    const datasetPath = this.resolveDatasetPath(normalized);
+    if (!datasetPath) {
+      throw new Error(`dataset_missing_for_symbol:${normalized}`);
+    }
+    const candles = await loadCandlesFromCsv({ filePath: datasetPath, source: "binance_spot" });
+    this.candleCache.set(normalized, candles);
+    return candles;
+  }
+
+  private windowedCandles(candles: Candle[]) {
+    if (candles.length === 0) return candles;
+    const end = Math.max(candles.length - this.windowOffset, 1);
+    return candles.slice(0, end);
+  }
+
+  async getCandles(symbol: string, _timeframe: Timeframe, limit: number): Promise<Candle[]> {
+    const candles = this.windowedCandles(await this.loadSymbol(symbol));
+    if (limit <= 0) return candles;
+    return candles.slice(-limit);
+  }
+
+  async getLatestPrice(symbol: string): Promise<number> {
+    const candles = this.windowedCandles(await this.loadSymbol(symbol.toUpperCase()));
+    return candles.at(-1)?.close ?? 0;
+  }
+
+  getSourceName() {
+    return "binance_spot" as const;
+  }
+
+  async healthCheck(): Promise<boolean> {
+    return true;
   }
 }
 
@@ -72,18 +155,34 @@ function buildRuntimeSymbols(config: ReturnType<typeof getConfig>): SymbolMetada
     symbols.push({ symbol: normalized, marketType });
   };
 
-  if (config.MARKET_TYPE === "forex") {
-    const forexUniverse = config.DEFAULT_FOREX_SYMBOLS.length > 0 ? config.DEFAULT_FOREX_SYMBOLS : defaultForexSymbols;
-    for (const symbol of forexUniverse) append(symbol, "forex");
+  if (config.EXECUTION_MODE === "signal_only") {
+    if (config.SIGNAL_ENABLE_CRYPTO) {
+      const cryptoUniverse = config.DEFAULT_SYMBOLS.length > 0
+        ? config.DEFAULT_SYMBOLS
+        : config.DEFAULT_CRYPTO_SYMBOLS.length > 0
+          ? config.DEFAULT_CRYPTO_SYMBOLS
+          : defaultCryptoSymbols;
+      for (const symbol of cryptoUniverse) append(symbol, "crypto");
+    }
+
+    if (config.SIGNAL_ENABLE_FOREX || config.SIGNAL_FOREX_READINESS_ONLY) {
+      const forexUniverse = config.DEFAULT_FOREX_SYMBOLS.length > 0 ? config.DEFAULT_FOREX_SYMBOLS : defaultForexSymbols;
+      for (const symbol of forexUniverse) append(symbol, "forex");
+    }
     return symbols;
   }
 
-  const cryptoUniverse = config.DEFAULT_SYMBOLS.length > 0
-    ? config.DEFAULT_SYMBOLS
-    : config.DEFAULT_CRYPTO_SYMBOLS.length > 0
-      ? config.DEFAULT_CRYPTO_SYMBOLS
-      : defaultCryptoSymbols;
-  for (const symbol of cryptoUniverse) append(symbol, "crypto");
+  if (config.MARKET_TYPE === "forex") {
+    const forexUniverse = config.DEFAULT_FOREX_SYMBOLS.length > 0 ? config.DEFAULT_FOREX_SYMBOLS : defaultForexSymbols;
+    for (const symbol of forexUniverse) append(symbol, "forex");
+  } else {
+    const cryptoUniverse = config.DEFAULT_SYMBOLS.length > 0
+      ? config.DEFAULT_SYMBOLS
+      : config.DEFAULT_CRYPTO_SYMBOLS.length > 0
+        ? config.DEFAULT_CRYPTO_SYMBOLS
+        : defaultCryptoSymbols;
+    for (const symbol of cryptoUniverse) append(symbol, "crypto");
+  }
   return symbols;
 }
 
@@ -104,6 +203,25 @@ type SystemControlState = {
   allowedSymbols: string[];
 };
 type SignalTier = "A+" | "A" | "B";
+type SignalRejectionReason =
+  | "analysis_feed_unavailable"
+  | "below_min_tier"
+  | "below_min_score"
+  | "active_symbol_gate"
+  | "cooldown"
+  | "rr_threshold"
+  | "entry_stretch"
+  | "blocked_max_concurrent_positions"
+  | "not_selected_portfolio_priority"
+  | "not_selected_diversification_preference"
+  | "not_selected_selected_set_cap"
+  | "not_actionable_not_in_final_selected_set"
+  | "blocked_remaining_notional_capacity"
+  | "blocked_remaining_open_risk_budget"
+  | "blocked_invalid_qty_after_caps"
+  | "not_selected_telegram_cap"
+  | "forex_readiness_only_mode"
+  | "no_message_payload";
 type ScoreComponentName = "trend" | "breakout" | "volatility" | "structure" | "entry";
 type TelegramDispatchResult = {
   messageNumber: number;
@@ -162,7 +280,13 @@ type SignalCycleReconciliation = {
       selected: boolean;
       diversificationGroup: string;
       selectedReason: string | null;
-      rejectionReason: string | null;
+      rejectionReason: SignalRejectionReason | null;
+    }>;
+    evaluatedCandidatesThisCycle: Array<{
+      symbol: string;
+      side: string;
+      score: number;
+      tier: SignalTier;
     }>;
     actionableSelectedThisCycle: Array<{
       symbol: string;
@@ -185,7 +309,7 @@ type SignalCycleReconciliation = {
       selected: boolean;
       diversificationGroup: string;
       selectedReason: string | null;
-      rejectionReason: string | null;
+      rejectionReason: SignalRejectionReason | null;
     }>;
     selectedActionableCountThisCycle: number;
     rejectedCountThisCycle: number;
@@ -195,6 +319,17 @@ type SignalCycleReconciliation = {
       telegramCap: number;
     };
     diversificationNotes: string[];
+    thresholdPolicy: {
+      minTier: SignalTier;
+      minScore: number;
+      requireAPlusOnly: boolean;
+      effectiveMinScore: number;
+    };
+    marketModePolicy: {
+      cryptoEnabled: boolean;
+      forexEnabled: boolean;
+      forexReadinessOnly: boolean;
+    };
   };
   currentCycle: {
     candidatesEvaluatedThisCycle: number;
@@ -374,6 +509,17 @@ function minScoreForTier(tier: SignalTier) {
   return 60;
 }
 
+function passesMinTier(params: {
+  candidateTier: SignalTier;
+  minTier: SignalTier;
+  requireAPlusOnly: boolean;
+}) {
+  if (params.requireAPlusOnly || params.minTier === "A+") {
+    return params.candidateTier === "A+";
+  }
+  return tierPriority(params.candidateTier) >= tierPriority(params.minTier);
+}
+
 function tp2RewardToRisk(signal: BreakoutSignal) {
   const isShort = signal.side.toUpperCase() === "SHORT";
   const reward = isShort ? signal.entryPrice - signal.tp2 : signal.tp2 - signal.entryPrice;
@@ -507,6 +653,60 @@ function computeSignalQuality(params: {
       structure: structureScore,
       entry: entryScore
     }
+  };
+}
+
+function buildDirectionalCandidateFromContext(params: {
+  marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
+  strategyId: string;
+}): BreakoutSignal | null {
+  const { marketContext, strategyId } = params;
+  const candles = marketContext.candles[marketContext.executionTimeframe] ?? [];
+  if (candles.length < 25) return null;
+
+  const recent = candles.slice(-21, -1);
+  if (recent.length < 10) return null;
+  const latest = marketContext.latestPrice;
+  const recentHigh = Math.max(...recent.map((c) => c.high));
+  const recentLow = Math.min(...recent.map((c) => c.low));
+  const avgRange = recent.reduce((sum, candle) => sum + Math.max(candle.high - candle.low, 0), 0) / recent.length;
+  const riskDistance = Math.max(avgRange * 0.8, latest * 0.0025);
+  if (!Number.isFinite(riskDistance) || riskDistance <= 0) return null;
+
+  const longStrength = (latest - recentHigh) / riskDistance;
+  const shortStrength = (recentLow - latest) / riskDistance;
+  const side = longStrength >= shortStrength ? "LONG" : "SHORT";
+
+  if (side === "LONG") {
+    return {
+      strategyId,
+      symbol: marketContext.symbol,
+      marketType: marketContext.marketType,
+      timeframe: marketContext.executionTimeframe,
+      side,
+      entryPrice: latest,
+      stopPrice: latest - riskDistance,
+      tp1: latest + riskDistance,
+      tp2: latest + (riskDistance * 2),
+      score: 70,
+      confidence: Math.min(0.95, Math.max(0.55, 0.6 + Math.max(longStrength, 0) * 0.08)),
+      setupGrade: "A"
+    };
+  }
+
+  return {
+    strategyId,
+    symbol: marketContext.symbol,
+    marketType: marketContext.marketType,
+    timeframe: marketContext.executionTimeframe,
+    side,
+    entryPrice: latest,
+    stopPrice: latest + riskDistance,
+    tp1: latest - riskDistance,
+    tp2: latest - (riskDistance * 2),
+    score: 70,
+    confidence: Math.min(0.95, Math.max(0.55, 0.6 + Math.max(shortStrength, 0) * 0.08)),
+    setupGrade: "A"
   };
 }
 
@@ -775,6 +975,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const cycleStartedAtIso = new Date(cycleStartedAtMs).toISOString();
   const cycleId = `signal-cycle-${cycleStartedAtMs}`;
   const config = getConfig();
+  const effectiveTelegramCap = Math.min(config.SIGNAL_MAX_TELEGRAM_PER_CYCLE, config.SIGNAL_MAX_SELECTED_PER_CYCLE);
   const redis = new Redis(config.REDIS_URL);
   let prismaClient: (typeof import("@hashi/db"))["prisma"] | null = null;
   const configuredMode = toRuntimeMode(config.EXECUTION_MODE);
@@ -793,22 +994,24 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let closedSignalsThisCycle = 0;
   let cycleOutcome: CycleOutcome = "completed";
   let skipReason: string | undefined;
-  const rejectionCounts: Record<string, number> = {
+  const rejectionCounts: Record<SignalRejectionReason, number> = {
     analysis_feed_unavailable: 0,
-    tier: 0,
+    below_min_tier: 0,
+    below_min_score: 0,
     active_symbol_gate: 0,
     cooldown: 0,
     rr_threshold: 0,
     entry_stretch: 0,
-    max_concurrent_paper_positions: 0,
-    not_selected_lower_rank: 0,
-    not_selected_portfolio_capacity: 0,
+    blocked_max_concurrent_positions: 0,
+    not_selected_portfolio_priority: 0,
     not_selected_diversification_preference: 0,
     not_selected_selected_set_cap: 0,
     not_actionable_not_in_final_selected_set: 0,
     blocked_remaining_notional_capacity: 0,
     blocked_remaining_open_risk_budget: 0,
     blocked_invalid_qty_after_caps: 0,
+    not_selected_telegram_cap: 0,
+    forex_readiness_only_mode: 0,
     no_message_payload: 0
   };
   const symbolSummaries = new Map<string, SymbolCycleSummary>();
@@ -824,7 +1027,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     selected: boolean;
     diversificationGroup: string;
     selectedReason: string | null;
-    rejectionReason: string | null;
+    rejectionReason: SignalRejectionReason | null;
   }> = [];
 
   const skipInfra = config.SKIP_INFRA_CHECKS;
@@ -979,8 +1182,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     };
   }
 
-  const primary = buildProvider(config.DEFAULT_PRIMARY_PROVIDER);
-  const backup = buildProvider(config.DEFAULT_BACKUP_PROVIDER);
+  const datasetSymbolPaths = config.SIGNAL_DATASET_SYMBOL_PATHS_JSON;
+  const primary = config.SIGNAL_DATASET_MODE_ENABLED
+    ? new DatasetSpotProvider(datasetSymbolPaths, config.SIGNAL_DATASET_WINDOW_OFFSET)
+    : buildProvider(config.DEFAULT_PRIMARY_PROVIDER);
+  const backup = config.SIGNAL_DATASET_MODE_ENABLED
+    ? new DatasetSpotProvider(datasetSymbolPaths, config.SIGNAL_DATASET_WINDOW_OFFSET)
+    : buildProvider(config.DEFAULT_BACKUP_PROVIDER);
   const configuredSymbols = buildRuntimeSymbols(config);
   const configuredSymbolNames = configuredSymbols.map((entry) => entry.symbol.toUpperCase());
   const allowedSymbolSet = new Set(
@@ -1015,33 +1223,6 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     console.log(
       JSON.stringify(
         { event: "worker_cycle_skipped", cycleNumber, reason: skipReason, activeMode: runtimeMode, allowedSymbolsCount: allowedSymbolSet.size },
-        null,
-        2
-      )
-    );
-    const durationMs = Date.now() - cycleStartedAtMs;
-    return {
-      cycleId, cycleStartedAt: cycleStartedAtIso, mode: runtimeMode, isRunning: systemControl.isRunning, killSwitchActive: systemControl.killSwitchActive,
-      allowedSymbolsCount: systemControl.allowedSymbols.length, symbolsScanned, candidateCount, skippedCount, persistedSignalCount,
-      dispatchedTelegramCount, closedSignalsThisCycle, outcome: cycleOutcome, skipReason, durationMs
-    };
-  }
-  if (config.MARKET_TYPE === "forex") {
-    cycleOutcome = "skipped";
-    skipReason = "mode_not_signal";
-    await prismaClient.runtimeEvent.create({
-      data: {
-        type: "cycle_skipped",
-        mode: runtimeMode,
-        message: "MARKET_TYPE=forex placeholder configured; forex execution not enabled in this phase",
-        payload: {
-          symbols: runtimeSymbols.map((entry) => entry.symbol)
-        }
-      }
-    });
-    console.log(
-      JSON.stringify(
-        { event: "worker_cycle_skipped", cycleNumber, reason: skipReason, activeMode: runtimeMode, marketType: config.MARKET_TYPE },
         null,
         2
       )
@@ -1118,20 +1299,25 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
 
     const regime = classifyRegime(marketContext);
-    const seedSignal: BreakoutSignal = {
-      strategyId: config.ACTIVE_PRODUCTION_STRATEGY,
-      symbol: marketContext.symbol,
-      marketType: marketContext.marketType,
-      timeframe: marketContext.executionTimeframe,
-      side: "LONG",
-      entryPrice: marketContext.latestPrice,
-      stopPrice: marketContext.latestPrice * 0.99,
-      tp1: marketContext.latestPrice * 1.01,
-      tp2: marketContext.latestPrice * 1.02,
-      score: 70,
-      confidence: 0.7,
-      setupGrade: "A"
-    };
+    const seedSignal = buildDirectionalCandidateFromContext({
+      marketContext,
+      strategyId: config.ACTIVE_PRODUCTION_STRATEGY
+    });
+    if (!seedSignal) {
+      skippedCount += 1;
+      rejectionCounts.analysis_feed_unavailable += 1;
+      const summary = symbolSummaries.get(symbolContext.symbol);
+      if (summary) {
+        summary.candidateFound = false;
+        summary.skipReason = "analysis_feed_unavailable";
+      }
+      unavailableFeeds.push({
+        symbol: symbolContext.symbol,
+        marketType: symbolContext.marketType,
+        reason: "insufficient_candle_context_for_directional_candidate"
+      });
+      continue;
+    }
     const quality = computeSignalQuality({
       signal: seedSignal,
       regime,
@@ -1139,11 +1325,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     });
     if (!quality.tier) {
       skippedCount += 1;
-      rejectionCounts.tier += 1;
+      rejectionCounts.below_min_tier += 1;
       const summary = symbolSummaries.get(symbolContext.symbol);
       if (summary) {
         summary.candidateFound = false;
-        summary.skipReason = "tier";
+        summary.skipReason = "below_min_tier";
       }
       continue;
     }
@@ -1185,13 +1371,16 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   }
 
   let finalSelectedCandidates: typeof cycleCandidates = [];
+  const selectedSizingBySymbol = new Map<string, PaperPositionSizingResult>();
   const selectedReasonBySymbol = new Map<string, string>();
   let diversificationNotes: string[] = [];
+  const effectiveRequireAPlusOnly = config.SIGNAL_REQUIRE_A_PLUS_ONLY || config.SIGNAL_MIN_TIER === "A+";
+  const minTierScore = minScoreForTier(config.SIGNAL_MIN_TIER);
+  const effectiveMinScore = Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
   if (prismaClient && runtimeMode === "signal" && cycleCandidates.length > 0) {
     const candidateSymbols = Array.from(new Set(cycleCandidates.map((entry) => entry.signal.symbol)));
     const dedupeWindowStart = new Date(Date.now() - 60_000);
     const cooldownWindowStart = new Date(Date.now() - config.SIGNAL_SYMBOL_COOLDOWN_MINUTES * 60_000);
-    const minTierScore = minScoreForTier(config.SIGNAL_MIN_TIER);
     const [activeOutcomes, openSignalTrades] = await Promise.all([
       prismaClient.signalOutcome.findMany({
       where: {
@@ -1267,12 +1456,30 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         skippedByReason.signal_skipped_symbol_cooldown.add(symbol);
         continue;
       }
-      if (candidate.signal.score < minTierScore) {
+      if (!passesMinTier({
+        candidateTier: candidate.signal.setupGrade,
+        minTier: config.SIGNAL_MIN_TIER,
+        requireAPlusOnly: config.SIGNAL_REQUIRE_A_PLUS_ONLY
+      })) {
         skippedCount += 1;
-        rejectionCounts.tier += 1;
+        rejectionCounts.below_min_tier += 1;
         const summary = symbolSummaries.get(symbol);
-        if (summary) summary.skipReason = "tier";
+        if (summary) summary.skipReason = "below_min_tier";
+        continue;
+      }
+      if (candidate.signal.score < effectiveMinScore) {
+        skippedCount += 1;
+        rejectionCounts.below_min_score += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "below_min_score";
         skippedByReason.signal_skipped_active_symbol.add(symbol);
+        continue;
+      }
+      if (candidate.signal.marketType === "forex" && config.SIGNAL_FOREX_READINESS_ONLY && !config.SIGNAL_ENABLE_FOREX) {
+        skippedCount += 1;
+        rejectionCounts.forex_readiness_only_mode += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "forex_readiness_only_mode";
         continue;
       }
 
@@ -1312,7 +1519,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         payload: {
           activeStatuses: ["OPEN", "TP1_HIT"],
           dedupeWindowSeconds: 60,
-          minTier: config.SIGNAL_MIN_TIER
+          minTier: config.SIGNAL_MIN_TIER,
+          minScore: effectiveMinScore,
+          requireAPlusOnly: effectiveRequireAPlusOnly
         }
       })),
       ...Array.from(skippedByReason.signal_skipped_rr_filter).map((symbol) => ({
@@ -1403,7 +1612,6 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         const rankingEntry = cycleRankingAllocation[index];
         if (finalSelectedCandidates.length >= selectedCap) {
           skippedCount += 1;
-          rejectionCounts.not_selected_selected_set_cap += 1;
           if (rankingEntry) {
             rankingEntry.selected = false;
             rankingEntry.rejectionReason = "not_selected_selected_set_cap";
@@ -1412,27 +1620,24 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         }
         if (remainingSlots <= 0) {
           skippedCount += 1;
-          rejectionCounts.max_concurrent_paper_positions += 1;
-          rejectionCounts.not_selected_portfolio_capacity += 1;
           maxConcurrentBlockedCount += 1;
           maxConcurrentBlockedThisCycle = true;
           const summary = symbolSummaries.get(candidate.signal.symbol);
-          if (summary) summary.skipReason = "not_selected_portfolio_capacity";
+          if (summary) summary.skipReason = "blocked_max_concurrent_positions";
           if (rankingEntry) {
             rankingEntry.selected = false;
-            rankingEntry.rejectionReason = "not_selected_portfolio_capacity";
+            rankingEntry.rejectionReason = "blocked_max_concurrent_positions";
           }
           continue;
         }
 
         if (remainingNotionalCapacity <= 0 || remainingOpenRiskBudget <= 0) {
           skippedCount += 1;
-          rejectionCounts.not_selected_portfolio_capacity += 1;
           const summary = symbolSummaries.get(candidate.signal.symbol);
-          if (summary) summary.skipReason = "not_selected_portfolio_capacity";
+          if (summary) summary.skipReason = "not_selected_portfolio_priority";
           if (rankingEntry) {
             rankingEntry.selected = false;
-            rankingEntry.rejectionReason = "not_selected_portfolio_capacity";
+            rankingEntry.rejectionReason = "not_selected_portfolio_priority";
           }
           continue;
         }
@@ -1448,7 +1653,6 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         });
         if (sized.blockedReason) {
           skippedCount += 1;
-          rejectionCounts[sized.blockedReason] = (rejectionCounts[sized.blockedReason] ?? 0) + 1;
           const summary = symbolSummaries.get(candidate.signal.symbol);
           if (summary) summary.skipReason = sized.blockedReason;
           await prismaClient.runtimeEvent.create({
@@ -1479,25 +1683,28 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         remainingOpenRiskBudget = sized.remainingOpenRiskBudget;
         remainingSlots = Math.max(remainingSlots - 1, 0);
         finalSelectedCandidates.push(candidate);
+        selectedSizingBySymbol.set(candidate.signal.symbol, sized);
         if (rankingEntry) {
           rankingEntry.selected = true;
-          rankingEntry.selectedReason = "selected_by_global_rank_and_portfolio_fit";
+          rankingEntry.selectedReason = `selected rank=${rankingEntry.rank} tier=${candidate.signal.setupGrade} score=${candidate.signal.score.toFixed(2)} via_threshold_and_portfolio_fit`;
           rankingEntry.rejectionReason = null;
         }
-        selectedReasonBySymbol.set(candidate.signal.symbol, "selected_by_global_rank_and_portfolio_fit");
+        selectedReasonBySymbol.set(
+          candidate.signal.symbol,
+          `selected rank=${index + 1} tier=${candidate.signal.setupGrade} score=${candidate.signal.score.toFixed(2)} via_threshold_and_portfolio_fit`
+        );
       }
       const selectedSymbols = new Set(finalSelectedCandidates.map((entry) => entry.signal.symbol));
       for (const entry of cycleRankingAllocation) {
         if (!entry.selected && !entry.rejectionReason) {
           const higherSelectedCount = cycleRankingAllocation.filter((e) => e.rank < entry.rank && selectedSymbols.has(e.symbol)).length;
-          entry.rejectionReason = higherSelectedCount >= selectedCap ? "not_selected_selected_set_cap" : "not_selected_lower_rank";
+          entry.rejectionReason = higherSelectedCount >= selectedCap ? "not_selected_selected_set_cap" : "not_selected_portfolio_priority";
         }
-        if (!entry.selected && diversificationNotes.length > 0 && entry.rejectionReason === "not_selected_lower_rank") {
+        if (!entry.selected && diversificationNotes.length > 0 && entry.rejectionReason === "not_selected_portfolio_priority") {
           const group = entry.diversificationGroup;
           const sameSideSelected = cycleRankingAllocation.some((e) => e.selected && e.side === entry.side && e.diversificationGroup === group);
           if (sameSideSelected) {
             entry.rejectionReason = "not_selected_diversification_preference";
-            rejectionCounts.not_selected_diversification_preference += 1;
           }
         }
         if (entry.rejectionReason) {
@@ -1605,40 +1812,15 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     });
 
     if (runtimeMode === "signal") {
-      const openSignalTrades = await prismaClient.signalTrade.findMany({
-        where: activeSignalTradeWhereClause()
-      });
-      const snapshot = buildPaperPortfolioSnapshot({
-        openTrades: openSignalTrades,
-        paperEquity: config.SIGNAL_PAPER_EQUITY,
-        configuredLeverage: config.SIGNAL_PAPER_LEVERAGE,
-        maxTotalNotionalMultiplier: config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT,
-        maxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT,
-        maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS
-      });
-      let remainingNotionalCapacity = Math.max((snapshot.paperEquity * snapshot.maxTotalNotionalMultiplier) - snapshot.usedNotional, 0);
-      let remainingOpenRiskBudget = Math.max((snapshot.paperEquity * snapshot.maxOpenRiskPct) - snapshot.usedRiskBudget, 0);
-
       for (const event of persistedSignalEvents) {
-        const matching = finalSelectedCandidates.find((entry) => entry.signal.symbol === event.symbol);
-        const sized = matching
-          ? computePaperPosition({
-            entryPrice: matching.signal.entryPrice,
-            stopPrice: matching.signal.stopPrice,
-            paperEquity: config.SIGNAL_PAPER_EQUITY,
-            paperRiskPct: config.SIGNAL_PAPER_RISK_PCT,
-            leverage: config.SIGNAL_PAPER_LEVERAGE,
-            remainingNotionalCapacity,
-            remainingOpenRiskBudget
-          })
-          : {
-            quantity: 0,
-            notional: 0,
-            riskAmount: 0,
-            blockedReason: "blocked_invalid_qty_after_caps" as const,
-            remainingNotionalCapacity,
-            remainingOpenRiskBudget
-          };
+        const sized = selectedSizingBySymbol.get(event.symbol) ?? {
+          quantity: 0,
+          notional: 0,
+          riskAmount: 0,
+          blockedReason: "blocked_invalid_qty_after_caps" as const,
+          remainingNotionalCapacity: 0,
+          remainingOpenRiskBudget: 0
+        };
 
         if (sized.blockedReason) {
           await prismaClient.runtimeEvent.create({
@@ -1650,16 +1832,12 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
               payload: {
                 blockedReason: sized.blockedReason,
                 signalEventId: event.id,
-                remainingNotionalCapacity,
-                remainingOpenRiskBudget
+                selectedSetSizingMissing: !selectedSizingBySymbol.has(event.symbol)
               }
             }
           });
           continue;
         }
-
-        remainingNotionalCapacity = sized.remainingNotionalCapacity;
-        remainingOpenRiskBudget = sized.remainingOpenRiskBudget;
         await prismaClient.signalTrade.upsert({
           where: { signalEventId: event.id },
           update: {},
@@ -1972,8 +2150,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         decisions: allocation.decisions,
         selectedSignals: finalSelectedCandidates.map((entry) => entry.signal),
         cycleId,
-        minTier: "B",
-        maxSignals: config.SIGNAL_MAX_TELEGRAM_PER_CYCLE
+        minTier: config.SIGNAL_MIN_TIER,
+        maxSignals: effectiveTelegramCap
       })
     : null;
 
@@ -2549,7 +2727,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         }
       }
 
-      await prismaClient.signalEvent.updateMany({
+      const notSelectedTelegram = await prismaClient.signalEvent.updateMany({
         where: {
           cycleId,
           telegramDispatchStatus: "not_dispatched"
@@ -2559,6 +2737,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           telegramDispatchReason: "not_selected_telegram_cap"
         }
       });
+      rejectionCounts.not_selected_telegram_cap += notSelectedTelegram.count;
       for (const summary of symbolSummaries.values()) {
         if (summary.persisted && summary.telegramDispatchStatus === "not_attempted_not_in_final_selected_set") {
           summary.telegramDispatchStatus = "not_attempted_not_in_final_selected_set";
@@ -2750,32 +2929,45 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     );
   }
 
-  const fallbackLoader = new MarketContextLoader(new ForcedFailureProvider(), backup);
-  const fallbackSymbol = runtimeSymbols.find((entry) => entry.marketType === "crypto") ?? {
-    symbol: config.DEFAULT_SYMBOL,
-    marketType: "crypto" as const
-  };
-  const fallbackContext = await fallbackLoader.load({
-    symbol: fallbackSymbol.symbol,
-    marketType: fallbackSymbol.marketType,
-    executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
-    htf1: config.DEFAULT_HTF_1,
-    htf2: config.DEFAULT_HTF_2,
-    candleLimit: 50
-  });
+  try {
+    const fallbackLoader = new MarketContextLoader(new ForcedFailureProvider(), backup);
+    const fallbackSymbol = runtimeSymbols.find((entry) => entry.marketType === "crypto") ?? {
+      symbol: config.DEFAULT_SYMBOL,
+      marketType: "crypto" as const
+    };
+    const fallbackContext = await fallbackLoader.load({
+      symbol: fallbackSymbol.symbol,
+      marketType: fallbackSymbol.marketType,
+      executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
+      htf1: config.DEFAULT_HTF_1,
+      htf2: config.DEFAULT_HTF_2,
+      candleLimit: 50
+    });
 
-  console.log(
-    JSON.stringify(
-      {
-        event: "engine_fallback_smoke",
-        symbol: fallbackContext.symbol,
-        marketType: fallbackContext.marketType,
-        source: fallbackContext.source
-      },
-      null,
-      2
-    )
-  );
+    console.log(
+      JSON.stringify(
+        {
+          event: "engine_fallback_smoke",
+          symbol: fallbackContext.symbol,
+          marketType: fallbackContext.marketType,
+          source: fallbackContext.source
+        },
+        null,
+        2
+      )
+    );
+  } catch (error) {
+    console.log(
+      JSON.stringify(
+        {
+          event: "engine_fallback_smoke_skipped",
+          reason: error instanceof Error ? error.message : "fallback_loader_failed"
+        },
+        null,
+        2
+      )
+    );
+  }
 
   console.log("[worker] started");
   console.log(skipInfra ? "[worker] db skipped (SKIP_INFRA_CHECKS=1)" : "[worker] db connected");
@@ -2871,6 +3063,12 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         maxConcurrentBlockedThisCycle,
         maxConcurrentBlockedCount,
         cycleRankingAllocation,
+        evaluatedCandidatesThisCycle: cycleCandidates.map((entry) => ({
+          symbol: entry.signal.symbol,
+          side: entry.signal.side,
+          score: entry.signal.score,
+          tier: entry.signal.setupGrade
+        })),
         actionableSelectedThisCycle,
         auditCandidatesThisCycle,
         selectedActionableCountThisCycle: actionableSelectedThisCycle.length,
@@ -2878,9 +3076,20 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         portfolioCapacityUsage: {
           selectedCount: actionableSelectedThisCycle.length,
           selectedCap: config.SIGNAL_MAX_SELECTED_PER_CYCLE,
-          telegramCap: config.SIGNAL_MAX_TELEGRAM_PER_CYCLE
+          telegramCap: effectiveTelegramCap
         },
-        diversificationNotes
+        diversificationNotes,
+        thresholdPolicy: {
+          minTier: config.SIGNAL_MIN_TIER,
+          minScore: config.SIGNAL_MIN_SCORE,
+          requireAPlusOnly: config.SIGNAL_REQUIRE_A_PLUS_ONLY,
+          effectiveMinScore
+        },
+        marketModePolicy: {
+          cryptoEnabled: config.SIGNAL_ENABLE_CRYPTO,
+          forexEnabled: config.SIGNAL_ENABLE_FOREX,
+          forexReadinessOnly: config.SIGNAL_FOREX_READINESS_ONLY
+        }
       },
       currentCycle: {
         candidatesEvaluatedThisCycle: candidateCount,

@@ -1,0 +1,157 @@
+{
+  "generatedAt": "2026-04-07T02:32:04.596Z",
+  "datasetMode": true,
+  "datasets": [
+    "data/ETHUSDT_15m.csv",
+    "data/BTCUSDT_15m.csv"
+  ],
+  "runs": [
+    {
+      "name": "a_mode",
+      "cycleId": "signal-cycle-1775529089852",
+      "scanned": 2,
+      "candidates": 2,
+      "selected": 1,
+      "persisted": 1,
+      "opened": 1,
+      "telegramDispatched": 0,
+      "rejected": 1,
+      "rejectedBy": {
+        "cooldown": 0,
+        "rr_threshold": 0,
+        "entry_stretch": 0,
+        "below_min_tier": 0,
+        "below_min_score": 0,
+        "active_symbol_gate": 0,
+        "no_message_payload": 0,
+        "analysis_feed_unavailable": 0,
+        "forex_readiness_only_mode": 0,
+        "not_selected_telegram_cap": 0,
+        "not_selected_selected_set_cap": 0,
+        "blocked_invalid_qty_after_caps": 0,
+        "not_selected_portfolio_priority": 1,
+        "blocked_max_concurrent_positions": 0,
+        "blocked_remaining_open_risk_budget": 0,
+        "blocked_remaining_notional_capacity": 0,
+        "not_selected_diversification_preference": 0,
+        "not_actionable_not_in_final_selected_set": 1
+      },
+      "selectedEqualsPersistedEqualsOpened": true,
+      "sidesObserved": [
+        "LONG"
+      ],
+      "openTrades": [
+        {
+          "symbol": "ETHUSDT",
+          "side": "LONG",
+          "entry": 1948.13,
+          "stop": 1942.284,
+          "tp1": 1953.976,
+          "tp2": 1959.822,
+          "qty": 5.133127666018181,
+          "notional": 10000,
+          "leverageCap": 1,
+          "effectiveLeverage": 1,
+          "riskAmount": 30.0082643355423,
+          "riskPct": 0.00300082643355423
+        }
+      ],
+      "evaluatedShortCandidates": 0
+    },
+    {
+      "name": "a_plus_mode",
+      "cycleId": "signal-cycle-1775529099378",
+      "scanned": 2,
+      "candidates": 2,
+      "selected": 0,
+      "persisted": 0,
+      "opened": 0,
+      "telegramDispatched": 0,
+      "rejected": 0,
+      "rejectedBy": {
+        "cooldown": 0,
+        "rr_threshold": 0,
+        "entry_stretch": 0,
+        "below_min_tier": 2,
+        "below_min_score": 0,
+        "active_symbol_gate": 0,
+        "no_message_payload": 0,
+        "analysis_feed_unavailable": 0,
+        "forex_readiness_only_mode": 0,
+        "not_selected_telegram_cap": 0,
+        "not_selected_selected_set_cap": 0,
+        "blocked_invalid_qty_after_caps": 0,
+        "not_selected_portfolio_priority": 0,
+        "blocked_max_concurrent_positions": 0,
+        "blocked_remaining_open_risk_budget": 0,
+        "blocked_remaining_notional_capacity": 0,
+        "not_selected_diversification_preference": 0,
+        "not_actionable_not_in_final_selected_set": 2
+      },
+      "selectedEqualsPersistedEqualsOpened": true,
+      "sidesObserved": [],
+      "openTrades": [],
+      "evaluatedShortCandidates": 0
+    },
+    {
+      "name": "short_probe_100",
+      "cycleId": "signal-cycle-1775529118072",
+      "scanned": 2,
+      "candidates": 2,
+      "selected": 1,
+      "persisted": 1,
+      "opened": 1,
+      "telegramDispatched": 0,
+      "rejected": 1,
+      "rejectedBy": {
+        "cooldown": 0,
+        "rr_threshold": 0,
+        "entry_stretch": 0,
+        "below_min_tier": 0,
+        "below_min_score": 0,
+        "active_symbol_gate": 0,
+        "no_message_payload": 0,
+        "analysis_feed_unavailable": 0,
+        "forex_readiness_only_mode": 0,
+        "not_selected_telegram_cap": 0,
+        "not_selected_selected_set_cap": 0,
+        "blocked_invalid_qty_after_caps": 0,
+        "not_selected_portfolio_priority": 1,
+        "blocked_max_concurrent_positions": 0,
+        "blocked_remaining_open_risk_budget": 0,
+        "blocked_remaining_notional_capacity": 0,
+        "not_selected_diversification_preference": 0,
+        "not_actionable_not_in_final_selected_set": 1
+      },
+      "selectedEqualsPersistedEqualsOpened": true,
+      "sidesObserved": [
+        "SHORT"
+      ],
+      "openTrades": [
+        {
+          "symbol": "ETHUSDT",
+          "side": "SHORT",
+          "entry": 1947.39,
+          "stop": 1956.4808,
+          "tp1": 1938.2992,
+          "tp2": 1929.2084,
+          "qty": 5.135078232916878,
+          "notional": 10000,
+          "leverageCap": 1,
+          "effectiveLeverage": 1,
+          "riskAmount": 46.68196919980047,
+          "riskPct": 0.004668196919980047
+        }
+      ],
+      "evaluatedShortCandidates": 2
+    }
+  ],
+  "thresholdPolicyResults": {
+    "aModeAllowsA": true,
+    "aPlusOnlyBlocksA": true,
+    "aPlusObserved": false
+  },
+  "longObserved": true,
+  "shortObserved": true,
+  "shortCapabilityStatus": "IMPLEMENTED_AND_OBSERVED"
+}

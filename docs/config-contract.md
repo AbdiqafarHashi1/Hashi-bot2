@@ -41,7 +41,7 @@ For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
 | ACTIVE_PRODUCTION_STRATEGY | OPTIONAL_RUNTIME_WITH_DEFAULT | `compression_breakout_balanced` | Yes | Active strategy id. |
 | ENABLE_SWING_RESEARCH_MODE | OPTIONAL_FEATURE_FLAG | `0` | Yes | Enables broader strategy catalog in control-room/runtime reporting. |
 | WORKER_LOOP_INTERVAL_SECONDS | OPTIONAL_RUNTIME_WITH_DEFAULT | `15` | Yes | Worker cycle interval. |
-| MARKET_TYPE | OPTIONAL_RUNTIME_WITH_DEFAULT | `crypto` | Yes | Chooses crypto vs forex symbol build path. |
+| MARKET_TYPE | OPTIONAL_RUNTIME_WITH_DEFAULT | `crypto` | Yes | Non-signal modes: chooses crypto vs forex symbol build path. |
 | DEFAULT_SYMBOL | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT` | Yes | UI/control-room default single symbol. |
 | DEFAULT_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT,...` | Yes | Primary multi-symbol list consumed by worker runtime. |
 | DEFAULT_CRYPTO_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT,BTCUSDT,SOLUSDT` | Yes | Fallback crypto universe when DEFAULT_SYMBOLS absent. |
@@ -52,7 +52,15 @@ For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
 | DEFAULT_PRIMARY_PROVIDER | OPTIONAL_RUNTIME_WITH_DEFAULT | `binance` | Yes | Live provider primary adapter. |
 | DEFAULT_BACKUP_PROVIDER | OPTIONAL_RUNTIME_WITH_DEFAULT | `bybit` | Yes | Live provider backup adapter. |
 | DEFAULT_DATASET_PATH | OPTIONAL_RUNTIME_WITH_DEFAULT, LOCAL_DEV_ONLY | `data/ETHUSDT_15m.csv` | Yes | Backtest harness dataset fallback. |
-| SIGNAL_MIN_TIER | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `A+` | Yes | Signal quality gate threshold. |
+| SIGNAL_MIN_TIER | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `A` | Yes | Signal quality gate threshold. |
+| SIGNAL_MIN_SCORE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `74` | Yes | Explicit numeric floor applied with `SIGNAL_MIN_TIER` gate. |
+| SIGNAL_REQUIRE_A_PLUS_ONLY | OPTIONAL_FEATURE_FLAG, SIGNAL_ONLY | `0` | Yes | Compatibility switch that forces A+ only gate regardless of lower tiers. |
+| SIGNAL_ENABLE_CRYPTO | OPTIONAL_FEATURE_FLAG, SIGNAL_ONLY | `1` | Yes | Enables crypto candidates for actionable signal selection. |
+| SIGNAL_ENABLE_FOREX | OPTIONAL_FEATURE_FLAG, SIGNAL_ONLY | `0` | Yes | Enables forex candidates for actionable signal selection. |
+| SIGNAL_FOREX_READINESS_ONLY | OPTIONAL_FEATURE_FLAG, SIGNAL_ONLY | `1` | Yes | Keeps forex in live-feed readiness path while blocking signal-mode paper actions. |
+| SIGNAL_DATASET_MODE_ENABLED | OPTIONAL_FEATURE_FLAG, SIGNAL_ONLY | `0` | Yes | Uses local CSV-backed dataset provider for deterministic signal-mode validation without live transport. |
+| SIGNAL_DATASET_SYMBOL_PATHS_JSON | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `{\"ETHUSDT\":\"data/ETHUSDT_15m.csv\",...}` | Yes | Per-symbol dataset file mapping used when dataset mode is enabled. |
+| SIGNAL_DATASET_WINDOW_OFFSET | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0` | Yes | Offset-from-latest window index used by dataset mode to replay earlier deterministic candles. |
 | MAX_SIGNALS_PER_CYCLE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `3` | Yes | Signal emission cap per cycle. |
 | SIGNAL_MAX_SELECTED_PER_CYCLE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `3` | Yes | Hard cap for final actionable selected set per cycle. |
 | SIGNAL_MAX_TELEGRAM_PER_CYCLE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `3` | Yes | Telegram dispatch cap per cycle (may be lower than selected cap). |

@@ -106,6 +106,17 @@ export type SignalRoomPayload = {
     telegramCapPerCycle: number;
     diversificationEnabled: boolean;
     diversificationMode: string;
+    thresholdPolicy: {
+      minTier: string;
+      minScore: number;
+      requireAPlusOnly: boolean;
+      effectiveMinScore: number;
+    };
+    marketModePolicy: {
+      cryptoEnabled: boolean;
+      forexEnabled: boolean;
+      forexReadinessOnly: boolean;
+    };
   };
   selectedThisCycle: Array<{
     symbol: string;
@@ -155,11 +166,13 @@ export type SignalRoomPayload = {
   capitalAllocation: {
     paperEquity: number;
     configuredLeverageCap: number;
+    maxTotalNotionalCapacity: number;
     totalOpenNotional: number;
+    remainingNotionalCapacity: number;
     effectivePortfolioLeverage: number;
+    maxOpenRiskBudget: number;
     usedOpenRiskBudget: number;
-    availableNotionalCapacity: number;
-    availableRiskBudget: number;
+    remainingRiskBudget: number;
     paperMaxConcurrentPositions: number;
     currentOpenPositionsCount: number;
     blockedByMaxConcurrentRulesThisCycle: boolean;
@@ -189,6 +202,8 @@ export type SignalRoomPayload = {
     maxOpenRiskPct: number;
     maxConcurrentPositions: number;
     minTier: string;
+    minScore: number;
+    requireAPlusOnly: boolean;
     minTp2R: number;
     symbolCooldownMinutes: number;
     maxEntryStretchAtr: number;
