@@ -77,6 +77,17 @@ type ReconciliationPayload = {
       telegramCap: number;
     };
     diversificationNotes?: string[];
+    thresholdPolicy?: {
+      minTier: string;
+      minScore: number;
+      requireAPlusOnly: boolean;
+      effectiveMinScore: number;
+    };
+    marketModePolicy?: {
+      cryptoEnabled: boolean;
+      forexEnabled: boolean;
+      forexReadinessOnly: boolean;
+    };
   };
   currentCycle?: {
     candidatesEvaluatedThisCycle: number;
@@ -168,6 +179,7 @@ export async function GET() {
   }
 
   const config = getConfig();
+  const effectiveTelegramCap = Math.min(config.SIGNAL_MAX_TELEGRAM_PER_CYCLE, config.SIGNAL_MAX_SELECTED_PER_CYCLE);
 
   const [
     openTrades,
@@ -317,6 +329,8 @@ export async function GET() {
       maxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT,
       maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
       minTier: config.SIGNAL_MIN_TIER,
+      minScore: config.SIGNAL_MIN_SCORE,
+      requireAPlusOnly: config.SIGNAL_REQUIRE_A_PLUS_ONLY,
       minTp2R: config.SIGNAL_MIN_TP2_R,
       symbolCooldownMinutes: config.SIGNAL_SYMBOL_COOLDOWN_MINUTES,
       maxEntryStretchAtr: config.SIGNAL_MAX_ENTRY_STRETCH_ATR,
@@ -328,9 +342,20 @@ export async function GET() {
     },
     signalSelectionPolicy: {
       selectedCapPerCycle: config.SIGNAL_MAX_SELECTED_PER_CYCLE,
-      telegramCapPerCycle: config.SIGNAL_MAX_TELEGRAM_PER_CYCLE,
+      telegramCapPerCycle: effectiveTelegramCap,
       diversificationEnabled: config.SIGNAL_DIVERSIFICATION_ENABLED,
-      diversificationMode: config.SIGNAL_CRYPTO_DIVERSIFICATION_MODE
+      diversificationMode: config.SIGNAL_CRYPTO_DIVERSIFICATION_MODE,
+      thresholdPolicy: cycleTruth?.thresholdPolicy ?? {
+        minTier: config.SIGNAL_MIN_TIER,
+        minScore: config.SIGNAL_MIN_SCORE,
+        requireAPlusOnly: config.SIGNAL_REQUIRE_A_PLUS_ONLY,
+        effectiveMinScore: Math.max(config.SIGNAL_MIN_SCORE, config.SIGNAL_MIN_TIER === "A+" ? 85 : config.SIGNAL_MIN_TIER === "A" ? 70 : 60)
+      },
+      marketModePolicy: cycleTruth?.marketModePolicy ?? {
+        cryptoEnabled: config.SIGNAL_ENABLE_CRYPTO,
+        forexEnabled: config.SIGNAL_ENABLE_FOREX,
+        forexReadinessOnly: config.SIGNAL_FOREX_READINESS_ONLY
+      }
     },
     controlPlane: {
       allowedSymbolsConfiguredDefaults: config.DEFAULT_SYMBOLS.length > 0 ? config.DEFAULT_SYMBOLS : config.DEFAULT_CRYPTO_SYMBOLS,
@@ -342,11 +367,13 @@ export async function GET() {
     capitalAllocation: {
       paperEquity,
       configuredLeverageCap: config.SIGNAL_PAPER_LEVERAGE,
+      maxTotalNotionalCapacity,
       totalOpenNotional: usedNotional,
+      remainingNotionalCapacity: availableNotionalCapacity,
       effectivePortfolioLeverage,
+      maxOpenRiskBudget,
       usedOpenRiskBudget: usedRiskBudget,
-      availableNotionalCapacity,
-      availableRiskBudget,
+      remainingRiskBudget: availableRiskBudget,
       paperMaxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
       currentOpenPositionsCount: openTradesWithDispatch.length,
       blockedByMaxConcurrentRulesThisCycle: cycleTruth?.maxConcurrentBlockedThisCycle ?? false
@@ -359,7 +386,7 @@ export async function GET() {
       portfolioCapacityUsage: cycleTruth?.portfolioCapacityUsage ?? {
         selectedCount: currentCycle.signalsPersistedThisCycle,
         selectedCap: config.SIGNAL_MAX_SELECTED_PER_CYCLE,
-        telegramCap: config.SIGNAL_MAX_TELEGRAM_PER_CYCLE
+        telegramCap: effectiveTelegramCap
       },
       diversificationNotes: cycleTruth?.diversificationNotes ?? []
     },

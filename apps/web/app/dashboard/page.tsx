@@ -245,6 +245,14 @@ export default function DashboardPage() {
                 <Kpi label="Selected this cycle" value={String(data.signalRoom.reconciliation.currentCycle.selectedActionableCountThisCycle ?? 0)} />
                 <Kpi label="Rejected this cycle" value={String(data.signalRoom.reconciliation.currentCycle.rejectedCountThisCycle ?? 0)} />
                 <Kpi label="Telegram dispatched this cycle" value={String(data.signalRoom.reconciliation.currentCycle.telegramSignalsDispatchedThisCycle)} />
+                <Kpi
+                  label="Threshold model"
+                  value={`${data.signalRoom.signalSelectionPolicy.thresholdPolicy.minTier} + score≥${data.signalRoom.signalSelectionPolicy.thresholdPolicy.effectiveMinScore}`}
+                />
+                <Kpi
+                  label="Market mode"
+                  value={`crypto:${data.signalRoom.signalSelectionPolicy.marketModePolicy.cryptoEnabled ? "on" : "off"} / forex readiness-only:${data.signalRoom.signalSelectionPolicy.marketModePolicy.forexReadinessOnly ? "on" : "off"}`}
+                />
                 <Kpi label="Allowed symbols list" value={(control?.allowedSymbols ?? []).join(", ") || "None"} />
               </div>
             ) : (
