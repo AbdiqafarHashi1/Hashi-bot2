@@ -74,8 +74,7 @@ class DatasetSpotProvider implements MarketDataProvider {
     const normalized = symbol.toUpperCase();
     const direct = this.datasetBySymbol[normalized];
     if (direct) return this.resolveFilePath(direct);
-    const fallback = this.datasetBySymbol.ETHUSDT ?? this.datasetBySymbol.BTCUSDT;
-    return fallback ? this.resolveFilePath(fallback) : undefined;
+    return undefined;
   }
 
   private resolveFilePath(datasetPath: string) {
@@ -141,18 +140,7 @@ function buildProvider(name: "binance" | "bybit") {
 }
 
 function buildRuntimeSymbols(config: ReturnType<typeof getConfig>): SymbolMetadata[] {
-  const defaultCryptoSymbols = [
-    "ETHUSDT",
-    "BTCUSDT",
-    "SOLUSDT",
-    "BNBUSDT",
-    "XRPUSDT",
-    "ADAUSDT",
-    "DOGEUSDT",
-    "AVAXUSDT",
-    "LINKUSDT",
-    "MATICUSDT"
-  ];
+  const defaultCryptoSymbols = ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"];
   const defaultForexSymbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"];
   const symbols: SymbolMetadata[] = [];
   const seen = new Set<string>();
@@ -281,41 +269,61 @@ type SignalCycleReconciliation = {
     maxConcurrentBlockedCount: number;
     cycleRankingAllocation: Array<{
       symbol: string;
+      marketType: SymbolMetadata["marketType"];
       side: string;
       score: number;
       rank: number;
       tier: SignalTier;
+      setupVariant: string;
       selected: boolean;
       diversificationGroup: string;
+      riskRecommendationLabel: string;
+      suggestedManualRiskPctRange: string;
+      suggestedManualLeverageRange: string;
       selectedReason: string | null;
       rejectionReason: SignalRejectionReason | null;
     }>;
     evaluatedCandidatesThisCycle: Array<{
       symbol: string;
+      marketType: SymbolMetadata["marketType"];
       side: string;
       score: number;
       tier: SignalTier;
+      setupVariant: string;
+      riskRecommendationLabel: string;
+      suggestedManualRiskPctRange: string;
+      suggestedManualLeverageRange: string;
     }>;
     actionableSelectedThisCycle: Array<{
       symbol: string;
+      marketType: SymbolMetadata["marketType"];
       side: string;
       score: number;
       rank: number;
       tier: SignalTier;
+      setupVariant: string;
       selected: true;
       diversificationGroup: string;
+      riskRecommendationLabel: string;
+      suggestedManualRiskPctRange: string;
+      suggestedManualLeverageRange: string;
       selectedReason: string;
       telegramDispatchStatus: string;
       paperTradeStatus: "opened" | "not_opened";
     }>;
     auditCandidatesThisCycle: Array<{
       symbol: string;
+      marketType: SymbolMetadata["marketType"];
       side: string;
       score: number;
       rank: number;
       tier: SignalTier;
+      setupVariant: string;
       selected: boolean;
       diversificationGroup: string;
+      riskRecommendationLabel: string;
+      suggestedManualRiskPctRange: string;
+      suggestedManualLeverageRange: string;
       selectedReason: string | null;
       rejectionReason: SignalRejectionReason | null;
     }>;
@@ -567,6 +575,21 @@ function computeSignalQuality(params: {
       structure: structureScore,
       entry: entryScore
     }
+  };
+}
+
+function operatorManualRecommendation(signal: Pick<BreakoutSignal, "setupGrade" | "score">) {
+  if (signal.setupGrade === "A+" && signal.score >= 92) {
+    return {
+      riskRecommendationLabel: "high_conviction_a_plus_core",
+      suggestedManualRiskPctRange: "0.75%–1.00%",
+      suggestedManualLeverageRange: "5x–8x"
+    };
+  }
+  return {
+    riskRecommendationLabel: "standard_a_plus_core",
+    suggestedManualRiskPctRange: "0.50%–0.75%",
+    suggestedManualLeverageRange: "3x–5x"
   };
 }
 
@@ -939,12 +962,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let maxConcurrentBlockedThisCycle = false;
   let cycleRankingAllocation: Array<{
     symbol: string;
+    marketType: SymbolMetadata["marketType"];
     side: string;
     score: number;
     rank: number;
     tier: SignalTier;
+    setupVariant: string;
     selected: boolean;
     diversificationGroup: string;
+    riskRecommendationLabel: string;
+    suggestedManualRiskPctRange: string;
+    suggestedManualLeverageRange: string;
     selectedReason: string | null;
     rejectionReason: SignalRejectionReason | null;
   }> = [];
@@ -964,7 +992,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         isRunning: false,
         activeMode: "signal",
         killSwitchActive: false,
-        allowedSymbols: ["ETHUSDT"]
+        allowedSymbols: buildRuntimeSymbols(config).map((entry) => entry.symbol)
       }
     });
     systemControl = {
@@ -1263,23 +1291,37 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       marketContext,
       regime,
       candidateCount: 1,
-      signal: {
-        ...seedSignal,
-        score: quality.signalScore,
-        confidence: 0.7,
-        setupGrade: quality.tier,
-        metadata: {
-          previewOnly: !(runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT),
-          signalScore: quality.signalScore,
-          tier: quality.tier,
-          scoring: quality.components,
-          rationale: [
-            ...quality.reasons,
-            `regime=${regime.regime}`,
-            `symbol=${marketContext.symbol}`
-          ]
-        }
-      }
+      signal: (() => {
+        const scoredSignal: BreakoutSignal = {
+          ...seedSignal,
+          score: quality.signalScore,
+          confidence: 0.7,
+          setupGrade: quality.tier
+        };
+        const recommendation = operatorManualRecommendation(scoredSignal);
+        return {
+          ...scoredSignal,
+          metadata: {
+            previewOnly: !(runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT),
+            strategyBackbone: "trusted_a_plus_breakout_core",
+            setupVariant: "trusted_a_plus_breakout_core_v1",
+            feedActionability: symbolContext.marketType === "crypto"
+              ? "live_actionable"
+              : config.SIGNAL_ENABLE_FOREX
+                ? "live_actionable"
+                : "readiness_only",
+            signalScore: quality.signalScore,
+            tier: quality.tier,
+            scoring: quality.components,
+            ...recommendation,
+            rationale: [
+              ...quality.reasons,
+              `regime=${regime.regime}`,
+              `symbol=${marketContext.symbol}`
+            ]
+          }
+        };
+      })()
     });
   }
   candidateCount = cycleCandidates.length;
@@ -1292,9 +1334,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let finalSelectedCandidates: typeof cycleCandidates = [];
   const selectedReasonBySymbol = new Map<string, string>();
   let diversificationNotes: string[] = [];
-  const effectiveRequireAPlusOnly = config.SIGNAL_REQUIRE_A_PLUS_ONLY || config.SIGNAL_MIN_TIER === "A+";
+  const effectiveRequireAPlusOnly = runtimeMode === "signal"
+    ? true
+    : (config.SIGNAL_REQUIRE_A_PLUS_ONLY || config.SIGNAL_MIN_TIER === "A+");
   const minTierScore = minScoreForTier(config.SIGNAL_MIN_TIER);
-  const effectiveMinScore = Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
+  const effectiveMinScore = runtimeMode === "signal"
+    ? Math.max(config.SIGNAL_MIN_SCORE, minTierScore, 85)
+    : Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
   if (prismaClient && runtimeMode === "signal" && cycleCandidates.length > 0) {
     const candidateSymbols = Array.from(new Set(cycleCandidates.map((entry) => entry.signal.symbol)));
     const dedupeWindowStart = new Date(Date.now() - 60_000);
@@ -1377,7 +1423,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       if (!passesMinTier({
         candidateTier: candidate.signal.setupGrade,
         minTier: config.SIGNAL_MIN_TIER,
-        requireAPlusOnly: config.SIGNAL_REQUIRE_A_PLUS_ONLY
+        requireAPlusOnly: effectiveRequireAPlusOnly
       })) {
         skippedCount += 1;
         rejectionCounts.below_min_tier += 1;
@@ -1505,12 +1551,25 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
       cycleRankingAllocation = rankedForSelection.map((candidate, index) => ({
         symbol: candidate.signal.symbol,
+        marketType: candidate.signal.marketType,
         side: candidate.signal.side,
         score: candidate.signal.score,
         rank: index + 1,
         tier: candidate.signal.setupGrade,
+        setupVariant: typeof candidate.signal.metadata?.setupVariant === "string"
+          ? candidate.signal.metadata.setupVariant
+          : "trusted_a_plus_breakout_core_v1",
         selected: false,
         diversificationGroup: candidate.signal.marketType === "crypto" ? cryptoDiversificationGroup(candidate.signal.symbol) : "other",
+        riskRecommendationLabel: typeof candidate.signal.metadata?.riskRecommendationLabel === "string"
+          ? candidate.signal.metadata.riskRecommendationLabel
+          : "standard_a_plus_core",
+        suggestedManualRiskPctRange: typeof candidate.signal.metadata?.suggestedManualRiskPctRange === "string"
+          ? candidate.signal.metadata.suggestedManualRiskPctRange
+          : "0.50%–0.75%",
+        suggestedManualLeverageRange: typeof candidate.signal.metadata?.suggestedManualLeverageRange === "string"
+          ? candidate.signal.metadata.suggestedManualLeverageRange
+          : "3x–5x",
         selectedReason: null,
         rejectionReason: null
       }));
@@ -3034,18 +3093,23 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
   let reconciliation: SignalCycleReconciliation | null = null;
   if (prismaClient && runtimeMode === "signal") {
-    const rankingBySymbol = new Map(cycleRankingAllocation.map((entry) => [entry.symbol, entry]));
+    const rankingBySymbol = new Map(cycleRankingAllocation.map((entry) => [`${entry.marketType}:${entry.symbol}`, entry]));
     const actionableSelectedThisCycle = finalSelectedCandidates.map((entry) => {
-      const ranking = rankingBySymbol.get(entry.signal.symbol);
+      const ranking = rankingBySymbol.get(`${entry.signal.marketType}:${entry.signal.symbol}`);
       const summary = symbolSummaries.get(entry.signal.symbol);
       return {
         symbol: entry.signal.symbol,
+        marketType: entry.signal.marketType,
         side: entry.signal.side,
         score: entry.signal.score,
         rank: ranking?.rank ?? 0,
         tier: entry.signal.setupGrade,
+        setupVariant: ranking?.setupVariant ?? "trusted_a_plus_breakout_core_v1",
         selected: true as const,
         diversificationGroup: ranking?.diversificationGroup ?? (entry.signal.marketType === "crypto" ? cryptoDiversificationGroup(entry.signal.symbol) : "other"),
+        riskRecommendationLabel: ranking?.riskRecommendationLabel ?? "standard_a_plus_core",
+        suggestedManualRiskPctRange: ranking?.suggestedManualRiskPctRange ?? "0.50%–0.75%",
+        suggestedManualLeverageRange: ranking?.suggestedManualLeverageRange ?? "3x–5x",
         selectedReason: ranking?.selectedReason ?? selectedReasonBySymbol.get(entry.signal.symbol) ?? "selected_by_global_rank_and_portfolio_fit",
         telegramDispatchStatus: summary?.telegramDispatchStatus ?? "unknown",
         paperTradeStatus: "opened" as const
@@ -3053,12 +3117,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     });
     const auditCandidatesThisCycle = cycleRankingAllocation.map((entry) => ({
       symbol: entry.symbol,
+      marketType: entry.marketType,
       side: entry.side,
       score: entry.score,
       rank: entry.rank,
       tier: entry.tier,
+      setupVariant: entry.setupVariant,
       selected: entry.selected,
       diversificationGroup: entry.diversificationGroup,
+      riskRecommendationLabel: entry.riskRecommendationLabel,
+      suggestedManualRiskPctRange: entry.suggestedManualRiskPctRange,
+      suggestedManualLeverageRange: entry.suggestedManualLeverageRange,
       selectedReason: entry.selectedReason,
       rejectionReason: entry.rejectionReason
     }));
@@ -3150,9 +3219,22 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         cycleRankingAllocation,
         evaluatedCandidatesThisCycle: cycleCandidates.map((entry) => ({
           symbol: entry.signal.symbol,
+          marketType: entry.signal.marketType,
           side: entry.signal.side,
           score: entry.signal.score,
-          tier: entry.signal.setupGrade
+          tier: entry.signal.setupGrade,
+          setupVariant: typeof entry.signal.metadata?.setupVariant === "string"
+            ? entry.signal.metadata.setupVariant
+            : "trusted_a_plus_breakout_core_v1",
+          riskRecommendationLabel: typeof entry.signal.metadata?.riskRecommendationLabel === "string"
+            ? entry.signal.metadata.riskRecommendationLabel
+            : "standard_a_plus_core",
+          suggestedManualRiskPctRange: typeof entry.signal.metadata?.suggestedManualRiskPctRange === "string"
+            ? entry.signal.metadata.suggestedManualRiskPctRange
+            : "0.50%–0.75%",
+          suggestedManualLeverageRange: typeof entry.signal.metadata?.suggestedManualLeverageRange === "string"
+            ? entry.signal.metadata.suggestedManualLeverageRange
+            : "3x–5x"
         })),
         actionableSelectedThisCycle,
         auditCandidatesThisCycle,
@@ -3167,7 +3249,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         thresholdPolicy: {
           minTier: config.SIGNAL_MIN_TIER,
           minScore: config.SIGNAL_MIN_SCORE,
-          requireAPlusOnly: config.SIGNAL_REQUIRE_A_PLUS_ONLY,
+          requireAPlusOnly: effectiveRequireAPlusOnly,
           effectiveMinScore
         },
         marketModePolicy: {

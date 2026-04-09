@@ -15,6 +15,9 @@ export type TelegramReadySignal = {
   score: number;
   rank: number;
   rationale: string[];
+  riskRecommendationLabel: string;
+  suggestedManualRiskPctRange: string;
+  suggestedManualLeverageRange: string;
   metadata?: Record<string, unknown>;
 };
 
@@ -35,6 +38,15 @@ function toRationale(signal: BreakoutSignal): string[] {
 }
 
 function toTelegramReadySignal(signal: BreakoutSignal, rank: number): TelegramReadySignal {
+  const riskRecommendationLabel = typeof signal.metadata?.riskRecommendationLabel === "string"
+    ? signal.metadata.riskRecommendationLabel
+    : "manual_operator_standard";
+  const suggestedManualRiskPctRange = typeof signal.metadata?.suggestedManualRiskPctRange === "string"
+    ? signal.metadata.suggestedManualRiskPctRange
+    : "0.50%–0.75%";
+  const suggestedManualLeverageRange = typeof signal.metadata?.suggestedManualLeverageRange === "string"
+    ? signal.metadata.suggestedManualLeverageRange
+    : "3x–5x";
   return {
     symbol: signal.symbol,
     marketType: signal.marketType,
@@ -49,6 +61,9 @@ function toTelegramReadySignal(signal: BreakoutSignal, rank: number): TelegramRe
     score: signal.score,
     rank,
     rationale: toRationale(signal),
+    riskRecommendationLabel,
+    suggestedManualRiskPctRange,
+    suggestedManualLeverageRange,
     metadata: signal.metadata
   };
 }
@@ -110,6 +125,9 @@ export function buildSignalModePayload(input: {
       `TP2: ${signal.tp2.toFixed(6)}`,
       "",
       `Score: ${signal.signalScore}`,
+      `Operator Risk: ${signal.riskRecommendationLabel}`,
+      `Manual Risk Range: ${signal.suggestedManualRiskPctRange}`,
+      `Manual Leverage Range: ${signal.suggestedManualLeverageRange}`,
       reasonSection
     ].join("\n");
   });
