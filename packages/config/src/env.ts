@@ -49,7 +49,12 @@ export function loadLocalRuntimeEnv(): void {
   hasLoadedLocalRuntimeEnv = true;
 
   const workspaceRoot = findWorkspaceRoot(process.cwd());
-  const envPath = path.join(workspaceRoot, ".env");
+  const configuredEnvFile = process.env.HASHI_ENV_FILE?.trim();
+  const envPath = configuredEnvFile
+    ? path.isAbsolute(configuredEnvFile)
+      ? configuredEnvFile
+      : path.join(workspaceRoot, configuredEnvFile)
+    : path.join(workspaceRoot, ".env");
 
   if (!existsSync(envPath)) {
     return;

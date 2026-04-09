@@ -10,7 +10,9 @@
     "worker": "pnpm --filter @hashi/worker dev",
     "prisma:generate": "pnpm --filter @hashi/db prisma:generate",
     "prisma:migrate": "pnpm --filter @hashi/db prisma:migrate",
-    "backtest": "tsx scripts/run-backtest.ts"
+    "backtest": "tsx scripts/run-backtest.ts",
+    "validate:signal-output": "tsx scripts/validate-signal-mode-output.ts",
+    "validate:phase-b6": "HASHI_ENV_FILE=.env.signal tsx scripts/validate-phase-b6-local-run-ready.ts"
   },
   "devDependencies": {
     "typescript": "^5.7.3",

@@ -1,0 +1,75 @@
+{
+  "generatedAt": "2026-04-09T23:48:04.871Z",
+  "envFile": ".env.signal",
+  "configGate": {
+    "executionMode": "signal_only",
+    "breakoutEntryMode": "signal",
+    "minTier": "A+",
+    "minScore": 85,
+    "requireAPlusOnly": true
+  },
+  "runtimeUniverse": {
+    "crypto": [
+      "ETHUSDT",
+      "BTCUSDT",
+      "SOLUSDT",
+      "BNBUSDT",
+      "XRPUSDT",
+      "DOGEUSDT"
+    ],
+    "forex": [
+      "EURUSD",
+      "GBPUSD",
+      "USDJPY",
+      "XAUUSD"
+    ]
+  },
+  "liveFeedReadiness": {
+    "crypto": {
+      "marketType": "crypto",
+      "adapterPresent": true,
+      "transportConnected": false,
+      "reason": "primary and backup crypto providers failed health checks",
+      "symbolsReady": [],
+      "symbolsNotReady": [
+        "ETHUSDT",
+        "BTCUSDT",
+        "SOLUSDT",
+        "BNBUSDT",
+        "XRPUSDT",
+        "DOGEUSDT"
+      ]
+    },
+    "forex": {
+      "marketType": "forex",
+      "adapterPresent": true,
+      "transportConnected": false,
+      "reason": "mt5 bridge health check failed",
+      "symbolsReady": [],
+      "symbolsNotReady": [
+        "EURUSD",
+        "GBPUSD",
+        "USDJPY",
+        "XAUUSD"
+      ],
+      "actionabilityMode": "readiness_only"
+    }
+  },
+  "structuralContracts": {
+    "unifiedCandidatePool": true,
+    "globalRankingAndCap": true,
+    "selectedSetToTelegramAndPaperDecisionPath": true,
+    "operatorReasoningAndRecommendationFields": true
+  },
+  "contractProbe": {
+    "selectedCount": 3,
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT"
+    ],
+    "includesOnlyAPlusCrypto": true,
+    "paperDecisionAccepted": true
+  },
+  "validateSignalModeOutputStatus": "pass"
+}

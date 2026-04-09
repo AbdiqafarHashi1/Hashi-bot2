@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-04-09T21:32:50.952Z",
+  "generatedAt": "2026-04-09T23:48:10.860Z",
   "mode": "structural_validation_only",
   "filesInspected": [
     "apps/worker/src/index.ts",
