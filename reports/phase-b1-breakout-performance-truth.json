@@ -1,0 +1,445 @@
+{
+  "generatedAt": "2026-04-09T08:58:15.485Z",
+  "sourceOfTruth": "Deterministic signal-mode backtest lifecycle trades (runtime/backtests/*.json)",
+  "methodology": [
+    "Metrics are computed from opened/closed trades in deterministic signal-mode backtest artifacts.",
+    "PnL and R are read from lifecycle-resolved trade rows (no reconstruction from candidate logs).",
+    "A vs A+ is measured from score-tiered opened trades only."
+  ],
+  "datasetsUsed": [
+    "data/ETHUSDT_15m.csv",
+    "data/BTCUSDT_15m.csv"
+  ],
+  "scenarios": [
+    {
+      "id": "eth_broad",
+      "description": "ETH broad signal-mode validation",
+      "dataset": "data/ETHUSDT_15m.csv",
+      "sourceArtifact": "runtime/backtests/phase-b1-eth_broad-1775725083881.json",
+      "tradesAnalyzed": 294,
+      "performance": {
+        "totals": {
+          "totalTrades": 294,
+          "longTrades": 167,
+          "shortTrades": 127,
+          "winRate": 0.5476190476190477,
+          "lossRate": 0.4523809523809524,
+          "tp1HitRate": 0.7517006802721088,
+          "tp2HitRate": 0.5510204081632653,
+          "stopHitRate": 0.24829931972789115,
+          "timeStopRate": 0,
+          "averageRealizedPnl": 17.67746804122668,
+          "averageRealizedR": 0.28873892171820587,
+          "expectancyR": 0.28873892171820587,
+          "profitFactor": 1.6221405884801845,
+          "totalRealizedPnl": 5197.175604120644,
+          "averageHoldBars": 5.448979591836735,
+          "maxWinStreak": 13,
+          "maxLossStreak": 7
+        },
+        "equity": {
+          "startingBalance": 10000,
+          "endingBalance": 15197.175604120652,
+          "totalReturnPct": 51.97175604120652,
+          "maxDrawdownPct": 6.661622617756041,
+          "maxDrawdownAmount": 802.0733648105761,
+          "longestRecoveryLengthTrades": 53,
+          "equityCurveCheckpoints": [
+            {
+              "trade": 0,
+              "equity": 10000
+            },
+            {
+              "trade": 25,
+              "equity": 10846.543938636056
+            },
+            {
+              "trade": 50,
+              "equity": 11490.682783182332
+            },
+            {
+              "trade": 75,
+              "equity": 11615.861322648936
+            },
+            {
+              "trade": 100,
+              "equity": 11575.39997688272
+            },
+            {
+              "trade": 125,
+              "equity": 12090.79985622497
+            },
+            {
+              "trade": 150,
+              "equity": 12738.739276036864
+            },
+            {
+              "trade": 175,
+              "equity": 13675.669728390401
+            },
+            {
+              "trade": 200,
+              "equity": 15266.790417145045
+            },
+            {
+              "trade": 225,
+              "equity": 14966.556531604007
+            },
+            {
+              "trade": 250,
+              "equity": 14872.929137871895
+            },
+            {
+              "trade": 275,
+              "equity": 15164.230468966503
+            },
+            {
+              "trade": 294,
+              "equity": 15197.175604120652
+            }
+          ]
+        },
+        "splits": {
+          "bySide": {
+            "LONG": {
+              "trades": 167,
+              "winRate": 0.5568862275449101,
+              "avgPnl": 17.85904135424314,
+              "avgR": 0.3129012183839693,
+              "totalPnl": 2982.459906158604
+            },
+            "SHORT": {
+              "trades": 127,
+              "winRate": 0.5354330708661418,
+              "avgPnl": 17.43870628316568,
+              "avgR": 0.25696645287424935,
+              "totalPnl": 2214.7156979620413
+            }
+          },
+          "byTier": {
+            "B": {
+              "trades": 294,
+              "winRate": 0.5476190476190477,
+              "avgPnl": 17.67746804122668,
+              "avgR": 0.28873892171820587,
+              "totalPnl": 5197.175604120644
+            }
+          },
+          "byScoreBucket": {
+            "<70": {
+              "trades": 294,
+              "winRate": 0.5476190476190477,
+              "avgPnl": 17.67746804122668,
+              "avgR": 0.28873892171820587,
+              "totalPnl": 5197.175604120644
+            }
+          },
+          "byExitReason": {
+            "tp2_hit": {
+              "trades": 162,
+              "winRate": 0.9938271604938271,
+              "avgPnl": 83.2954552661817,
+              "avgR": 1.2913399021357979,
+              "totalPnl": 13493.863753121435
+            },
+            "stop_hit": {
+              "trades": 73,
+              "winRate": 0,
+              "avgPnl": -95.04191727920767,
+              "avgR": -1.4173846060892241,
+              "totalPnl": -6938.05996138216
+            },
+            "tp1_only": {
+              "trades": 59,
+              "winRate": 0,
+              "avgPnl": -23.02759640031572,
+              "avgR": -0.3531990663785315,
+              "totalPnl": -1358.6281876186274
+            }
+          },
+          "bySymbol": {
+            "ETHUSDT": {
+              "trades": 294,
+              "winRate": 0.5476190476190477,
+              "avgPnl": 17.67746804122668,
+              "avgR": 0.28873892171820587,
+              "totalPnl": 5197.175604120644
+            }
+          },
+          "byRegime": {
+            "COMPRESSION_READY": {
+              "trades": 294,
+              "winRate": 0.5476190476190477,
+              "avgPnl": 17.67746804122668,
+              "avgR": 0.28873892171820587,
+              "totalPnl": 5197.175604120644
+            }
+          },
+          "byEntryModule": {
+            "COMPRESSION_BREAKOUT_RETEST": {
+              "trades": 294,
+              "winRate": 0.5476190476190477,
+              "avgPnl": 17.67746804122668,
+              "avgR": 0.28873892171820587,
+              "totalPnl": 5197.175604120644
+            }
+          }
+        },
+        "continuation": {
+          "tp1ReachedCount": 221,
+          "tp1ReachedButNoTp2Count": 59,
+          "tp1ToTp2ConversionRate": 0.7330316742081447,
+          "tp1ThenStoppedAtProtectiveStopCount": 0,
+          "averageRCapturedWhenTp1Reached": 0.8523000870120625,
+          "averageMfeWhenTp1Reached": 3.2562872121708413,
+          "averageMaeWhenTp1Reached": -0.5437306140716445
+        },
+        "diagnostics": {
+          "lowScoreAcceptedTrades": 294,
+          "lowScoreExpectancyR": 0.28873892171820587,
+          "highScoreAcceptedTrades": 0,
+          "highScoreExpectancyR": 0,
+          "longExpectancyR": 0.3129012183839693,
+          "shortExpectancyR": 0.25696645287424935,
+          "weakestSymbolsByExpectancy": [
+            {
+              "symbol": "ETHUSDT",
+              "expectancyR": 0.28873892171820587,
+              "trades": 294
+            }
+          ],
+          "aTradesExpectancyR": 0,
+          "aPlusTradesExpectancyR": 0
+        }
+      },
+      "aOnlyComparison": {
+        "trades": 0,
+        "expectancyR": 0,
+        "winRate": 0
+      },
+      "aPlusOnlyComparison": {
+        "trades": 0,
+        "expectancyR": 0,
+        "winRate": 0
+      }
+    },
+    {
+      "id": "btc_broad",
+      "description": "BTC broad signal-mode validation",
+      "dataset": "data/BTCUSDT_15m.csv",
+      "sourceArtifact": "runtime/backtests/phase-b1-btc_broad-1775725091769.json",
+      "tradesAnalyzed": 261,
+      "performance": {
+        "totals": {
+          "totalTrades": 261,
+          "longTrades": 156,
+          "shortTrades": 105,
+          "winRate": 0.5095785440613027,
+          "lossRate": 0.4904214559386973,
+          "tp1HitRate": 0.7662835249042146,
+          "tp2HitRate": 0.5632183908045977,
+          "stopHitRate": 0.23371647509578544,
+          "timeStopRate": 0,
+          "averageRealizedPnl": -2.7475586812753914,
+          "averageRealizedR": -0.05271832835080417,
+          "expectancyR": -0.05271832835080417,
+          "profitFactor": 0.901582364053337,
+          "totalRealizedPnl": -717.1128158128771,
+          "averageHoldBars": 5.183908045977011,
+          "maxWinStreak": 7,
+          "maxLossStreak": 7
+        },
+        "equity": {
+          "startingBalance": 10000,
+          "endingBalance": 9282.887184187126,
+          "totalReturnPct": -7.171128158128741,
+          "maxDrawdownPct": 18.663451272238564,
+          "maxDrawdownAmount": 1993.4269762121185,
+          "longestRecoveryLengthTrades": 192,
+          "equityCurveCheckpoints": [
+            {
+              "trade": 0,
+              "equity": 10000
+            },
+            {
+              "trade": 25,
+              "equity": 10640.82096924868
+            },
+            {
+              "trade": 50,
+              "equity": 10548.612895021042
+            },
+            {
+              "trade": 75,
+              "equity": 10327.31954297422
+            },
+            {
+              "trade": 100,
+              "equity": 9998.543284388084
+            },
+            {
+              "trade": 125,
+              "equity": 10187.108494608001
+            },
+            {
+              "trade": 150,
+              "equity": 9866.978134146897
+            },
+            {
+              "trade": 175,
+              "equity": 9254.826456309067
+            },
+            {
+              "trade": 200,
+              "equity": 9476.003816501263
+            },
+            {
+              "trade": 225,
+              "equity": 9169.819989061785
+            },
+            {
+              "trade": 250,
+              "equity": 9012.342011184373
+            },
+            {
+              "trade": 261,
+              "equity": 9282.887184187126
+            }
+          ]
+        },
+        "splits": {
+          "bySide": {
+            "LONG": {
+              "trades": 156,
+              "winRate": 0.5128205128205128,
+              "avgPnl": -4.689737748252087,
+              "avgR": -0.09652160428475409,
+              "totalPnl": -731.5990887273256
+            },
+            "SHORT": {
+              "trades": 105,
+              "winRate": 0.5047619047619047,
+              "avgPnl": 0.13796450394712537,
+              "avgR": 0.012360824465350027,
+              "totalPnl": 14.486272914448165
+            }
+          },
+          "byTier": {
+            "B": {
+              "trades": 261,
+              "winRate": 0.5095785440613027,
+              "avgPnl": -2.7475586812753914,
+              "avgR": -0.05271832835080417,
+              "totalPnl": -717.1128158128771
+            }
+          },
+          "byScoreBucket": {
+            "<70": {
+              "trades": 261,
+              "winRate": 0.5095785440613027,
+              "avgPnl": -2.7475586812753914,
+              "avgR": -0.05271832835080417,
+              "totalPnl": -717.1128158128771
+            }
+          },
+          "byExitReason": {
+            "tp2_hit": {
+              "trades": 147,
+              "winRate": 0.9047619047619048,
+              "avgPnl": 39.5504719739325,
+              "avgR": 0.8041660804034083,
+              "totalPnl": 5813.919380168078
+            },
+            "tp1_only": {
+              "trades": 53,
+              "winRate": 0,
+              "avgPnl": -25.366410430502686,
+              "avgR": -0.5103453390229689,
+              "totalPnl": -1344.4197528166424
+            },
+            "stop_hit": {
+              "trades": 61,
+              "winRate": 0,
+              "avgPnl": -85.02643349449694,
+              "avgR": -1.7200589270597295,
+              "totalPnl": -5186.612443164314
+            }
+          },
+          "bySymbol": {
+            "BTCUSDT": {
+              "trades": 261,
+              "winRate": 0.5095785440613027,
+              "avgPnl": -2.7475586812753914,
+              "avgR": -0.05271832835080417,
+              "totalPnl": -717.1128158128771
+            }
+          },
+          "byRegime": {
+            "COMPRESSION_READY": {
+              "trades": 261,
+              "winRate": 0.5095785440613027,
+              "avgPnl": -2.7475586812753914,
+              "avgR": -0.05271832835080417,
+              "totalPnl": -717.1128158128771
+            }
+          },
+          "byEntryModule": {
+            "COMPRESSION_BREAKOUT_RETEST": {
+              "trades": 261,
+              "winRate": 0.5095785440613027,
+              "avgPnl": -2.7475586812753914,
+              "avgR": -0.05271832835080417,
+              "totalPnl": -717.1128158128771
+            }
+          }
+        },
+        "continuation": {
+          "tp1ReachedCount": 200,
+          "tp1ReachedButNoTp2Count": 53,
+          "tp1ToTp2ConversionRate": 0.735,
+          "tp1ThenStoppedAtProtectiveStopCount": 0,
+          "averageRCapturedWhenTp1Reached": 0.45582055425541823,
+          "averageMfeWhenTp1Reached": 3.682965067044228,
+          "averageMaeWhenTp1Reached": -0.47540887042323426
+        },
+        "diagnostics": {
+          "lowScoreAcceptedTrades": 261,
+          "lowScoreExpectancyR": -0.05271832835080417,
+          "highScoreAcceptedTrades": 0,
+          "highScoreExpectancyR": 0,
+          "longExpectancyR": -0.09652160428475409,
+          "shortExpectancyR": 0.012360824465350027,
+          "weakestSymbolsByExpectancy": [
+            {
+              "symbol": "BTCUSDT",
+              "expectancyR": -0.05271832835080417,
+              "trades": 261
+            }
+          ],
+          "aTradesExpectancyR": 0,
+          "aPlusTradesExpectancyR": 0
+        }
+      },
+      "aOnlyComparison": {
+        "trades": 0,
+        "expectancyR": 0,
+        "winRate": 0
+      },
+      "aPlusOnlyComparison": {
+        "trades": 0,
+        "expectancyR": 0,
+        "winRate": 0
+      }
+    }
+  ],
+  "requiredAnswers": {
+    "hasPositiveExpectancy": "YES",
+    "edgeStrongerOn": "LONG",
+    "aVsAPlus": "A stronger or equal",
+    "tp1HelpingOverall": "YES",
+    "stopsDominating": "NO",
+    "overtradingLikely": "NOT_EVIDENT",
+    "recommendation": "KEEP AS IS",
+    "finalVerdict": "CONTINUE"
+  }
+}
