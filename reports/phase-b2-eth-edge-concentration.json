@@ -1,0 +1,519 @@
+{
+  "generatedAt": "2026-04-09T09:45:01.283Z",
+  "phase": "B2",
+  "dataset": "data/ETHUSDT_15m.csv",
+  "executionTruthPathConfirmation": {
+    "harnessMode": "signal",
+    "paperAccountLifecycleUsed": true,
+    "candidateSignalsAreNotTrades": true,
+    "performanceDerivedFromClosedPaperPositions": true,
+    "source": "runtime/backtests/*.json deterministic signal-mode artifacts"
+  },
+  "baseline": {
+    "label": "baseline",
+    "artifact": "runtime/backtests/phase-b2-baseline-current.json",
+    "metrics": {
+      "trades": 294,
+      "winRate": 0.5476190476190477,
+      "profitFactor": 1.6221405884801845,
+      "expectancyR": 0.28873892171820587,
+      "maxDrawdownPct": 6.661622617756041
+    },
+    "diagnostics": {
+      "byFeatureBand": {
+        "breakoutBodyAtr": {
+          ">=1.90": {
+            "trades": 47,
+            "expectancyR": 0.7939414023810951,
+            "winRate": 0.723404255319149,
+            "profitFactor": 4.828582111713841
+          },
+          "<1.00": {
+            "trades": 62,
+            "expectancyR": -0.20503228701701864,
+            "winRate": 0.4032258064516129,
+            "profitFactor": 0.6963843679773571
+          },
+          "1.25-1.50": {
+            "trades": 60,
+            "expectancyR": 0.04951314775399634,
+            "winRate": 0.45,
+            "profitFactor": 1.0797491095101692
+          },
+          "1.50-1.90": {
+            "trades": 66,
+            "expectancyR": 0.38393127767870855,
+            "winRate": 0.5606060606060606,
+            "profitFactor": 2.099333511517641
+          },
+          "1.00-1.25": {
+            "trades": 59,
+            "expectancyR": 0.5419617911230792,
+            "winRate": 0.6440677966101694,
+            "profitFactor": 2.5523821184464306
+          }
+        },
+        "rangeExpansionRatio": {
+          ">=2.60": {
+            "trades": 59,
+            "expectancyR": 0.7497967071978253,
+            "winRate": 0.7288135593220338,
+            "profitFactor": 4.552454295517591
+          },
+          "<1.35": {
+            "trades": 55,
+            "expectancyR": -0.03894191060013538,
+            "winRate": 0.4727272727272727,
+            "profitFactor": 0.9009368401008682
+          },
+          "2.00-2.60": {
+            "trades": 58,
+            "expectancyR": 0.25392010901381584,
+            "winRate": 0.4827586206896552,
+            "profitFactor": 1.7153004557729983
+          },
+          "1.35-1.65": {
+            "trades": 63,
+            "expectancyR": 0.10548505584359125,
+            "winRate": 0.5079365079365079,
+            "profitFactor": 1.1450941129006666
+          },
+          "1.65-2.00": {
+            "trades": 59,
+            "expectancyR": 0.3630528390261139,
+            "winRate": 0.5423728813559322,
+            "profitFactor": 1.919793072452544
+          }
+        },
+        "preBreakImpulseRatio": {
+          ">=0.52": {
+            "trades": 44,
+            "expectancyR": 0.5704205289697333,
+            "winRate": 0.7045454545454546,
+            "profitFactor": 2.605787386769239
+          },
+          "0.43-0.48": {
+            "trades": 100,
+            "expectancyR": 0.16677204605611692,
+            "winRate": 0.47,
+            "profitFactor": 1.3082606197586801
+          },
+          "0.48-0.52": {
+            "trades": 76,
+            "expectancyR": 0.46092045992365027,
+            "winRate": 0.618421052631579,
+            "profitFactor": 2.3712320897501766
+          },
+          "<0.38": {
+            "trades": 19,
+            "expectancyR": 0.047834010653629896,
+            "winRate": 0.47368421052631576,
+            "profitFactor": 0.9923983190531034
+          },
+          "0.38-0.43": {
+            "trades": 55,
+            "expectancyR": 0.13044970815011264,
+            "winRate": 0.4909090909090909,
+            "profitFactor": 1.2251193535991824
+          }
+        },
+        "closeLocationRatio": {
+          ">=0.90": {
+            "trades": 91,
+            "expectancyR": 0.3860219828910265,
+            "winRate": 0.5714285714285714,
+            "profitFactor": 1.9356977967306999
+          },
+          "<0.68": {
+            "trades": 36,
+            "expectancyR": -0.14425239949811552,
+            "winRate": 0.4722222222222222,
+            "profitFactor": 0.7776984863808967
+          },
+          "0.82-0.90": {
+            "trades": 71,
+            "expectancyR": 0.475676564912078,
+            "winRate": 0.5915492957746479,
+            "profitFactor": 2.3723958980637683
+          },
+          "0.75-0.82": {
+            "trades": 47,
+            "expectancyR": 0.341048680558053,
+            "winRate": 0.5531914893617021,
+            "profitFactor": 1.798275906551405
+          },
+          "0.68-0.75": {
+            "trades": 49,
+            "expectancyR": 0.10514295569418818,
+            "winRate": 0.4897959183673469,
+            "profitFactor": 1.1866285679291118
+          }
+        },
+        "emaSlope5": {
+          "0.00-0.00": {
+            "trades": 86,
+            "expectancyR": 0.24652527806722918,
+            "winRate": 0.5232558139534884,
+            "profitFactor": 1.394190746323508
+          },
+          ">=0.00": {
+            "trades": 54,
+            "expectancyR": 0.4418781628797664,
+            "winRate": 0.6111111111111112,
+            "profitFactor": 2.2612007278407513
+          },
+          "-0.00--0.00": {
+            "trades": 61,
+            "expectancyR": 0.31109240076207956,
+            "winRate": 0.5573770491803278,
+            "profitFactor": 1.7665257172419482
+          },
+          "-0.00-0.00": {
+            "trades": 34,
+            "expectancyR": 0.17475423989639663,
+            "winRate": 0.5294117647058824,
+            "profitFactor": 1.3958576458927696
+          },
+          "<-0.00": {
+            "trades": 59,
+            "expectancyR": 0.2526841978457471,
+            "winRate": 0.5254237288135594,
+            "profitFactor": 1.5585808194103974
+          }
+        }
+      },
+      "weakTradeConcentration": {
+        "lowBreakoutBodyAtr": {
+          "losingTrades": 37,
+          "losingShare": 0.2781954887218045,
+          "expectancyR": -1.1863003566671726
+        },
+        "lowRangeExpansion": {
+          "losingTrades": 29,
+          "losingShare": 0.21804511278195488,
+          "expectancyR": -1.201743445882085
+        },
+        "lowPreBreakImpulse": {
+          "losingTrades": 10,
+          "losingShare": 0.07518796992481203,
+          "expectancyR": -1.0037456771658224
+        },
+        "lowCloseConfirmation": {
+          "losingTrades": 19,
+          "losingShare": 0.14285714285714285,
+          "expectancyR": -1.28020342016772
+        },
+        "flatSlopeCluster": {
+          "losingTrades": 23,
+          "losingShare": 0.17293233082706766,
+          "expectancyR": -1.0146756698555515
+        }
+      },
+      "tp1Continuation": {
+        "tp1ReachedCount": 221,
+        "tp2HitCount": 162,
+        "tp1ToTp2ConversionRate": 0.7330316742081447,
+        "avgRWhenTp1Reached": 0.8523000870120625
+      },
+      "bySide": {
+        "LONG": {
+          "trades": 167,
+          "expectancyR": 0.3129012183839693,
+          "winRate": 0.5568862275449101,
+          "profitFactor": 1.6504938674925744
+        },
+        "SHORT": {
+          "trades": 127,
+          "expectancyR": 0.25696645287424935,
+          "winRate": 0.5354330708661418,
+          "profitFactor": 1.587647385553093
+        }
+      },
+      "byEntryMode": {
+        "retest": {
+          "trades": 294,
+          "expectancyR": 0.28873892171820587,
+          "winRate": 0.5476190476190477,
+          "profitFactor": 1.6221405884801845
+        }
+      },
+      "byRegime": {
+        "COMPRESSION_READY": {
+          "trades": 294,
+          "expectancyR": 0.28873892171820587,
+          "winRate": 0.5476190476190477,
+          "profitFactor": 1.6221405884801845
+        }
+      },
+      "byModule": {
+        "COMPRESSION_BREAKOUT_RETEST": {
+          "trades": 294,
+          "expectancyR": 0.28873892171820587,
+          "winRate": 0.5476190476190477,
+          "profitFactor": 1.6221405884801845
+        }
+      }
+    }
+  },
+  "updated": {
+    "label": "updated",
+    "artifact": "runtime/backtests/phase-b2-eth-updated-1775727889082.json",
+    "metrics": {
+      "trades": 193,
+      "winRate": 0.6062176165803109,
+      "profitFactor": 2.436199490105675,
+      "expectancyR": 0.4922683574928207,
+      "maxDrawdownPct": 3.742861971603594
+    },
+    "diagnostics": {
+      "byFeatureBand": {
+        "breakoutBodyAtr": {
+          ">=1.90": {
+            "trades": 44,
+            "expectancyR": 0.8702529841493679,
+            "winRate": 0.75,
+            "profitFactor": 6.238346084381458
+          },
+          "1.25-1.50": {
+            "trades": 43,
+            "expectancyR": 0.176404078901404,
+            "winRate": 0.4883720930232558,
+            "profitFactor": 1.3043506665939661
+          },
+          "1.50-1.90": {
+            "trades": 57,
+            "expectancyR": 0.44098512443418153,
+            "winRate": 0.5614035087719298,
+            "profitFactor": 2.3989446072241987
+          },
+          "<1.00": {
+            "trades": 10,
+            "expectancyR": -0.06846120385062508,
+            "winRate": 0.5,
+            "profitFactor": 0.9256453100132893
+          },
+          "1.00-1.25": {
+            "trades": 39,
+            "expectancyR": 0.632814006321532,
+            "winRate": 0.6666666666666666,
+            "profitFactor": 3.019045351805263
+          }
+        },
+        "rangeExpansionRatio": {
+          ">=2.60": {
+            "trades": 51,
+            "expectancyR": 0.837910528047868,
+            "winRate": 0.7450980392156863,
+            "profitFactor": 5.8348640497083855
+          },
+          "2.00-2.60": {
+            "trades": 48,
+            "expectancyR": 0.29063420099413756,
+            "winRate": 0.4791666666666667,
+            "profitFactor": 1.8606602982964564
+          },
+          "1.35-1.65": {
+            "trades": 40,
+            "expectancyR": 0.31782739626832424,
+            "winRate": 0.575,
+            "profitFactor": 1.6826090734773123
+          },
+          "1.65-2.00": {
+            "trades": 45,
+            "expectancyR": 0.5065195162395911,
+            "winRate": 0.6,
+            "profitFactor": 2.56935186849268
+          },
+          "<1.35": {
+            "trades": 9,
+            "expectancyR": 0.31304892627110736,
+            "winRate": 0.6666666666666666,
+            "profitFactor": 1.2569483315400487
+          }
+        },
+        "preBreakImpulseRatio": {
+          ">=0.52": {
+            "trades": 34,
+            "expectancyR": 0.745675975551064,
+            "winRate": 0.7352941176470589,
+            "profitFactor": 4.114011507697472
+          },
+          "0.43-0.48": {
+            "trades": 65,
+            "expectancyR": 0.3643784925026867,
+            "winRate": 0.5384615384615384,
+            "profitFactor": 1.8099649824837947
+          },
+          "0.38-0.43": {
+            "trades": 39,
+            "expectancyR": 0.2026277722067611,
+            "winRate": 0.48717948717948717,
+            "profitFactor": 1.4446074349801155
+          },
+          "0.48-0.52": {
+            "trades": 55,
+            "expectancyR": 0.6921404490661802,
+            "winRate": 0.6909090909090909,
+            "profitFactor": 4.1273980171888525
+          }
+        },
+        "closeLocationRatio": {
+          ">=0.90": {
+            "trades": 68,
+            "expectancyR": 0.46211930582670463,
+            "winRate": 0.5735294117647058,
+            "profitFactor": 2.3413997865469267
+          },
+          "0.82-0.90": {
+            "trades": 56,
+            "expectancyR": 0.6689699012006096,
+            "winRate": 0.6607142857142857,
+            "profitFactor": 3.5006366250283074
+          },
+          "0.75-0.82": {
+            "trades": 34,
+            "expectancyR": 0.5680466087281227,
+            "winRate": 0.6764705882352942,
+            "profitFactor": 2.6994958024372027
+          },
+          "0.68-0.75": {
+            "trades": 35,
+            "expectancyR": 0.19450802959737643,
+            "winRate": 0.5142857142857142,
+            "profitFactor": 1.422834585829712
+          }
+        },
+        "emaSlope5": {
+          "0.00-0.00": {
+            "trades": 63,
+            "expectancyR": 0.525139060556755,
+            "winRate": 0.6031746031746031,
+            "profitFactor": 2.622010443415954
+          },
+          ">=0.00": {
+            "trades": 37,
+            "expectancyR": 0.602119707197377,
+            "winRate": 0.6486486486486487,
+            "profitFactor": 3.52165713748606
+          },
+          "-0.00--0.00": {
+            "trades": 37,
+            "expectancyR": 0.3021910357163945,
+            "winRate": 0.5405405405405406,
+            "profitFactor": 1.7079395576102396
+          },
+          "-0.00-0.00": {
+            "trades": 18,
+            "expectancyR": 0.4765549772771123,
+            "winRate": 0.6111111111111112,
+            "profitFactor": 2.219778329592495
+          },
+          "<-0.00": {
+            "trades": 38,
+            "expectancyR": 0.5233301342695075,
+            "winRate": 0.631578947368421,
+            "profitFactor": 2.4482827716169453
+          }
+        }
+      },
+      "weakTradeConcentration": {
+        "lowBreakoutBodyAtr": {
+          "losingTrades": 5,
+          "losingShare": 0.06578947368421052,
+          "expectancyR": -1.2661270859868456
+        },
+        "lowRangeExpansion": {
+          "losingTrades": 3,
+          "losingShare": 0.039473684210526314,
+          "expectancyR": -1.5821242609709143
+        },
+        "lowPreBreakImpulse": {
+          "losingTrades": 0,
+          "losingShare": 0,
+          "expectancyR": 0
+        },
+        "lowCloseConfirmation": {
+          "losingTrades": 0,
+          "losingShare": 0,
+          "expectancyR": 0
+        },
+        "flatSlopeCluster": {
+          "losingTrades": 14,
+          "losingShare": 0.18421052631578946,
+          "expectancyR": -0.9187205862695931
+        }
+      },
+      "tp1Continuation": {
+        "tp1ReachedCount": 159,
+        "tp2HitCount": 118,
+        "tp1ToTp2ConversionRate": 0.7421383647798742,
+        "avgRWhenTp1Reached": 0.8949230178377606
+      },
+      "bySide": {
+        "LONG": {
+          "trades": 114,
+          "expectancyR": 0.533590688861658,
+          "winRate": 0.6140350877192983,
+          "profitFactor": 2.7325603589370075
+        },
+        "SHORT": {
+          "trades": 79,
+          "expectancyR": 0.4326386641251316,
+          "winRate": 0.5949367088607594,
+          "profitFactor": 2.120710341638771
+        }
+      },
+      "byEntryMode": {
+        "retest": {
+          "trades": 193,
+          "expectancyR": 0.4922683574928207,
+          "winRate": 0.6062176165803109,
+          "profitFactor": 2.436199490105675
+        }
+      },
+      "byRegime": {
+        "COMPRESSION_READY": {
+          "trades": 193,
+          "expectancyR": 0.4922683574928207,
+          "winRate": 0.6062176165803109,
+          "profitFactor": 2.436199490105675
+        }
+      },
+      "byModule": {
+        "COMPRESSION_BREAKOUT_RETEST": {
+          "trades": 193,
+          "expectancyR": 0.4922683574928207,
+          "winRate": 0.6062176165803109,
+          "profitFactor": 2.436199490105675
+        }
+      }
+    }
+  },
+  "delta": {
+    "trades": -101,
+    "winRate": 0.05859856896126325,
+    "profitFactor": 0.8140589016254904,
+    "expectancyR": 0.20352943577461485,
+    "maxDrawdownPct": -2.9187606461524473,
+    "tp1ToTp2ConversionRate": 0.009106690571729414
+  },
+  "changesTested": [
+    {
+      "id": "edge_concentration_gates_v1",
+      "status": "keep",
+      "details": [
+        "Raised minBreakoutBodyAtr to reject low-impulse breakouts.",
+        "Raised minRangeExpansionRatio to reject weak expansion breakouts.",
+        "Raised minPreBreakImpulseRatio to reject choppy pre-break structures.",
+        "Raised minCloseLocationRatio to require stronger close-through confirmation."
+      ]
+    }
+  ],
+  "baselineReferenceFromPrompt": {
+    "profitFactor": 1.62,
+    "expectancyR": 0.2887,
+    "trades": 294,
+    "winRate": 0.5476,
+    "maxDrawdownPct": 6.66
+  }
+}
