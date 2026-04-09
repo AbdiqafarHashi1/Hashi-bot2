@@ -43,9 +43,9 @@ For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
 | WORKER_LOOP_INTERVAL_SECONDS | OPTIONAL_RUNTIME_WITH_DEFAULT | `15` | Yes | Worker cycle interval. |
 | MARKET_TYPE | OPTIONAL_RUNTIME_WITH_DEFAULT | `crypto` | Yes | Non-signal modes: chooses crypto vs forex symbol build path. |
 | DEFAULT_SYMBOL | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT` | Yes | UI/control-room default single symbol. |
-| DEFAULT_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT,...` | Yes | Primary multi-symbol list consumed by worker runtime. |
-| DEFAULT_CRYPTO_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT,BTCUSDT,SOLUSDT` | Yes | Fallback crypto universe when DEFAULT_SYMBOLS absent. |
-| DEFAULT_FOREX_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | `EURUSD,GBPUSD` | Yes | Forex universe list. |
+| DEFAULT_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT,BTCUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT` | Yes | Primary multi-symbol crypto list consumed by worker runtime. |
+| DEFAULT_CRYPTO_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | empty | Yes | Optional override crypto universe when DEFAULT_SYMBOLS absent. |
+| DEFAULT_FOREX_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | empty | Yes | Optional forex universe override (runtime fallback: EURUSD, GBPUSD, USDJPY, XAUUSD). |
 | DEFAULT_EXECUTION_TIMEFRAME | OPTIONAL_RUNTIME_WITH_DEFAULT | `15m` | Yes | Analyzer timeframe default. |
 | DEFAULT_HTF_1 | OPTIONAL_RUNTIME_WITH_DEFAULT | `1h` | Yes | HTF context default. |
 | DEFAULT_HTF_2 | OPTIONAL_RUNTIME_WITH_DEFAULT | `4h` | Yes | HTF context default. |
@@ -132,3 +132,38 @@ For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
 - `.env.signal` provides an operator-safe, signal-only complete preset aligned to the same contract.
 - Docker-only values are documented in comments instead of being promoted as app-runtime env keys.
 - Legacy parser keys remain documented in a dedicated section rather than silently dropped.
+
+## Signal paper-account phase-1 contract lock (2026-04-09)
+
+- Authoritative account snapshot model:
+  - `equity = balance + unrealizedPnl`
+  - `freeMargin = equity - usedMargin`
+- Locked position-capital model:
+  - `maxConcurrentPositions = 5`
+  - `slotEquity = equity / 5`
+  - `maxNotionalPerPosition = slotEquity * leverage`
+  - `riskAmount = equity * riskPct`
+  - `riskQty = riskAmount / abs(entry - stop)`
+  - `notionalQty = maxNotionalPerPosition / entry`
+  - `finalQty = min(riskQty, notionalQty)`
+  - `notional = finalQty * entry`
+  - `marginUsed = notional / leverage`
+- Strategy output remains candidate-only. Open paper positions require an explicit account-level execution decision.
+
+## Signal paper-account phase-2 lifecycle lock (2026-04-09)
+
+- Lifecycle math is centralized in shared core (`packages/core/src/execution/paper-account.ts`):
+  - mark-to-market updates unrealized PnL using directional equations.
+  - full close realizes PnL, releases margin/notional, and transitions to `closed`.
+  - partial close reduces qty, realizes PnL on reduced qty, updates remainder margin/notional, and transitions to `partially_closed`.
+- Close reasons supported in the shared domain:
+  - `stop_hit`, `tp1_hit`, `tp2_hit`, `manual_close`, `time_stop`, `liquidation_guard_close`, `policy_close`.
+
+## Signal paper-account phase-3 exit wiring lock (2026-04-09)
+
+- Worker exit mutations now flow through shared paper-account lifecycle functions for:
+  - mark-to-market updates,
+  - TP1 partial reduction,
+  - stop / TP2 full closes,
+  - time-stop full closes.
+- TP1 protective stop movement now mutates persisted open paper position stop via shared protected-stop computation.

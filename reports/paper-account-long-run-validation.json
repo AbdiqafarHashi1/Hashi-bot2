@@ -1,0 +1,163 @@
+{
+  "generatedAt": "2026-04-09T08:37:44.418Z",
+  "dataset": {
+    "file": "data/ETHUSDT_15m.csv",
+    "barsProcessed": 74976,
+    "workerCyclesExecuted": null
+  },
+  "summary": {
+    "totalCandidates": 57214,
+    "totalAcceptedExecutionDecisions": 46240,
+    "totalRejectedExecutionDecisions": 10974,
+    "totalOpenedPositions": 46240,
+    "totalPartiallyClosedEvents": 23517,
+    "totalFullyClosedPositions": 46235,
+    "longTrades": 23241,
+    "shortTrades": 22999
+  },
+  "lifecycle": {
+    "closeReasonCounts": {
+      "stop_hit": 36258,
+      "tp2_hit": 9964,
+      "time_stop": 13,
+      "manual_close": 0,
+      "policy_close": 0,
+      "liquidation_guard_close": 0,
+      "tp1_hit": 23517
+    },
+    "everyOpenedFromAcceptedOnly": true,
+    "noPositionClosedTwice": true,
+    "noClosedRetainsQtyOrMarginOrUnrealized": true,
+    "noOpenHasClosedAt": true
+  },
+  "accountInvariants": {
+    "equityFormula": true,
+    "freeMarginFormula": true,
+    "usedMarginRowMatch": true,
+    "openCountMatch": true,
+    "finalSnapshot": {
+      "balance": 1913.4653885767457,
+      "equity": 1920.5804564801774,
+      "unrealizedPnl": 7.115067903431813,
+      "realizedPnl": -8086.534611423254,
+      "usedMargin": 1919.0213543710488,
+      "freeMargin": 1.5591021091286166,
+      "configuredLeverage": 1,
+      "maxConcurrentPositions": 5,
+      "openPositionsCount": 5,
+      "closedPositionsCount": 46235
+    }
+  },
+  "capitalModelTruthSamples": [
+    {
+      "id": "p-1",
+      "side": "LONG",
+      "entry": 2285.49,
+      "stop": 2279.687857142857,
+      "slotEquity": 2000,
+      "riskQty": 17.2350116951866,
+      "notionalQty": 0.875085867800778,
+      "finalQty": 0.875085867800778,
+      "notional": 2000,
+      "margin": 2000
+    },
+    {
+      "id": "p-2",
+      "side": "LONG",
+      "entry": 2286.76,
+      "stop": 2281.4278571428576,
+      "slotEquity": 2000.2222718104215,
+      "riskQty": 18.756270465738382,
+      "notionalQty": 0.8746970700075308,
+      "finalQty": 0.8746970700075308,
+      "notional": 2000.2222718104215,
+      "margin": 2000.2222718104215
+    },
+    {
+      "id": "p-3",
+      "side": "LONG",
+      "entry": 2287.24,
+      "stop": 2282.000714285714,
+      "slotEquity": 2000.390250972451,
+      "riskQty": 19.090295510302305,
+      "notionalQty": 0.8745869480126489,
+      "finalQty": 0.8745869480126489,
+      "notional": 2000.390250972451,
+      "margin": 2000.390250972451
+    },
+    {
+      "id": "p-4",
+      "side": "LONG",
+      "entry": 2285.2,
+      "stop": 2280.1142857142854,
+      "slotEquity": 1999.3195080590363,
+      "riskQty": 19.65623111855749,
+      "notionalQty": 0.8748991370816718,
+      "finalQty": 0.8748991370816718,
+      "notional": 1999.3195080590363,
+      "margin": 1999.3195080590363
+    },
+    {
+      "id": "p-5",
+      "side": "LONG",
+      "entry": 2289.44,
+      "stop": 2284.6364285714285,
+      "slotEquity": 2002.2868881904574,
+      "riskQty": 20.841647906814607,
+      "notionalQty": 0.874574956404386,
+      "finalQty": 0.874574956404386,
+      "notional": 2002.2868881904576,
+      "margin": 2002.2868881904576
+    },
+    {
+      "id": "p-6",
+      "side": "LONG",
+      "entry": 2292,
+      "stop": 2287.3571428571427,
+      "slotEquity": 2003.1102902503535,
+      "riskQty": 21.57195697192598,
+      "notionalQty": 0.8739573692191769,
+      "finalQty": 0.8739573692191769,
+      "notional": 2003.1102902503535,
+      "margin": 2003.1102902503535
+    },
+    {
+      "id": "p-7",
+      "side": "LONG",
+      "entry": 2299.2,
+      "stop": 2294.255714285714,
+      "slotEquity": 2007.5689105466379,
+      "riskQty": 20.301910392698975,
+      "notionalQty": 0.8731597558049052,
+      "finalQty": 0.8731597558049052,
+      "notional": 2007.5689105466379,
+      "margin": 2007.5689105466379
+    },
+    {
+      "id": "p-8",
+      "side": "LONG",
+      "entry": 2302.37,
+      "stop": 2297.6364285714285,
+      "slotEquity": 2008.1224938318185,
+      "riskQty": 21.211494577973184,
+      "notionalQty": 0.8721979932989999,
+      "finalQty": 0.8721979932989999,
+      "notional": 2008.1224938318185,
+      "margin": 2008.1224938318185
+    }
+  ],
+  "selectedOpenedConsistency": {
+    "selectedCount": 57214,
+    "openedCount": 46240,
+    "rejectedNeverOpened": true,
+    "openedEqualsAcceptedOpenable": true
+  },
+  "finalState": {
+    "openRows": 5,
+    "closedRows": 46235,
+    "orphanLifecycleEventCount": 0,
+    "invariantFailureCount": 0
+  },
+  "failures": [],
+  "verdict": "PASS"
+}

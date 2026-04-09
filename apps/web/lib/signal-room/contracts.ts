@@ -63,6 +63,102 @@ export type SignalEvent = {
 };
 
 export type SignalRoomPayload = {
+  paperAccount: {
+    balance: number;
+    equity: number;
+    unrealizedPnl: number;
+    realizedPnl: number;
+    usedMargin: number;
+    freeMargin: number;
+    configuredLeverage: number;
+    maxConcurrentPositions: number;
+    openPositionsCount: number;
+    closedPositionsCount: number;
+  };
+  openPaperPositions: Array<{
+    id: string;
+    symbol: string;
+    side: "LONG" | "SHORT";
+    entryPrice: number;
+    markPrice: number;
+    stopPrice: number;
+    tp1Price: number;
+    tp2Price: number;
+    qty: number;
+    notional: number;
+    leverage: number;
+    marginUsed: number;
+    riskAmountAtEntry: number;
+    status: "pending_open" | "open" | "partially_closed" | "closed" | "rejected";
+    openedAt: string | null;
+    closedAt: string | null;
+    sourceSignalId: string | null;
+    sourceCandidateId: string | null;
+    selectedReason: string | null;
+    rejectedReason: string | null;
+    closeReason: "stop_hit" | "tp1_hit" | "tp2_hit" | "manual_close" | "time_stop" | "liquidation_guard_close" | "policy_close" | null;
+    unrealizedPnl: number;
+    realizedPnl: number;
+  }>;
+  closedPaperPositions: Array<{
+    id: string;
+    symbol: string;
+    side: "LONG" | "SHORT";
+    entryPrice: number;
+    markPrice: number;
+    stopPrice: number;
+    tp1Price: number;
+    tp2Price: number;
+    qty: number;
+    notional: number;
+    leverage: number;
+    marginUsed: number;
+    riskAmountAtEntry: number;
+    status: "pending_open" | "open" | "partially_closed" | "closed" | "rejected";
+    openedAt: string | null;
+    closedAt: string | null;
+    sourceSignalId: string | null;
+    sourceCandidateId: string | null;
+    selectedReason: string | null;
+    rejectedReason: string | null;
+    closeReason: "stop_hit" | "tp1_hit" | "tp2_hit" | "manual_close" | "time_stop" | "liquidation_guard_close" | "policy_close" | null;
+    unrealizedPnl: number;
+    realizedPnl: number;
+  }>;
+  recentExecutionDecisions: Array<{
+    signalEventId: string | null;
+    symbol: string | null;
+    accepted: boolean;
+    rejectionReason:
+      | "blocked_max_concurrent_positions"
+      | "blocked_invalid_stop_distance"
+      | "blocked_zero_or_negative_qty"
+      | "blocked_notional_cap"
+      | "blocked_margin_unavailable"
+      | "blocked_risk_invalid"
+      | "blocked_symbol_cooldown"
+      | "blocked_policy_gate"
+      | "blocked_invalid_entry_price"
+      | null;
+    computedQty: number;
+    computedNotional: number;
+    computedMargin: number;
+    computedRiskAmount: number;
+    selectedReason: string | null;
+    createdAt: string;
+  }>;
+  recentPaperLifecycleEvents: Array<{
+    signalTradeId: string | null;
+    symbol: string | null;
+    status: string | null;
+    outcome: string | null;
+    closeReason: "stop_hit" | "tp1_hit" | "tp2_hit" | "manual_close" | "time_stop" | "liquidation_guard_close" | "policy_close" | null;
+    currentPrice: number | null;
+    remainingQty: number | null;
+    remainingNotional: number | null;
+    stopPrice: number | null;
+    createdAt: string;
+  }>;
   summary: {
     openCount: number;
     closedCount: number;
@@ -120,24 +216,34 @@ export type SignalRoomPayload = {
   };
   selectedThisCycle: Array<{
     symbol: string;
+    marketType: "crypto" | "forex";
     side: string;
     score: number;
     rank: number;
     tier: string;
+    setupVariant: string;
     selected: boolean;
     diversificationGroup: string;
+    riskRecommendationLabel: string;
+    suggestedManualRiskPctRange: string;
+    suggestedManualLeverageRange: string;
     selectedReason: string;
     telegramDispatchStatus: string;
     paperTradeStatus: string;
   }>;
   rejectedThisCycle: Array<{
     symbol: string;
+    marketType: "crypto" | "forex";
     side: string;
     score: number;
     rank: number;
     tier: string;
+    setupVariant: string;
     selected: boolean;
     diversificationGroup: string;
+    riskRecommendationLabel: string;
+    suggestedManualRiskPctRange: string;
+    suggestedManualLeverageRange: string;
     rejectionReason: string | null;
   }>;
   cycleTruth: {
@@ -150,6 +256,7 @@ export type SignalRoomPayload = {
     maxConcurrentBlockedCount?: number;
     cycleRankingAllocation?: Array<{
       symbol: string;
+      marketType?: "crypto" | "forex";
       score: number;
       rank: number;
       selected: boolean;

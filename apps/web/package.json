@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@hashi/config": "workspace:*",
+    "@hashi/core": "workspace:*",
     "@hashi/db": "workspace:*",
     "ioredis": "^5.4.2",
     "next": "15.1.4",

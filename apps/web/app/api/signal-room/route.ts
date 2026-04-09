@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getConfig } from "@hashi/config";
+import { buildPaperAccountSnapshot, type PaperCloseReason, type PaperExecutionDecision, type PaperPosition } from "@hashi/core";
 
 async function resolvePrisma() {
   try {
@@ -169,6 +170,20 @@ function withPaperComputedFields<T extends {
   };
 }
 
+function toPaperPositionStatus(status: string, closedAt: Date | null): PaperPosition["status"] {
+  if (closedAt) return "closed";
+  if (status === "tp1_hit") return "partially_closed";
+  return "open";
+}
+
+function closeReasonFromTradeStatus(status: string): PaperCloseReason | null {
+  if (status === "stop_hit") return "stop_hit";
+  if (status === "tp2_hit") return "tp2_hit";
+  if (status === "tp1_hit") return "tp1_hit";
+  if (status === "closed") return "time_stop";
+  return null;
+}
+
 export async function GET() {
   const prisma = await resolvePrisma();
   if (!prisma) {
@@ -190,7 +205,9 @@ export async function GET() {
     latestResetEvent,
     totalResolvedOutcomes,
     totalTelegramDispatchRecords,
-    latestSignalEvent
+    latestSignalEvent,
+    recentExecutionDecisionEvents,
+    recentTradeLifecycleEvents
   ] = await Promise.all([
     prisma.signalTrade.findMany({
       where: {
@@ -229,7 +246,17 @@ export async function GET() {
       }
     }),
     prisma.transportEvent.count({ where: { channel: "telegram" } }),
-    prisma.signalEvent.findFirst({ orderBy: { generatedAt: "desc" } })
+    prisma.signalEvent.findFirst({ orderBy: { generatedAt: "desc" } }),
+    prisma.runtimeEvent.findMany({
+      where: { type: "signal_paper_execution_decision", mode: "signal" },
+      orderBy: { createdAt: "desc" },
+      take: 30
+    }),
+    prisma.runtimeEvent.findMany({
+      where: { type: "signal_trade_updated", mode: "signal" },
+      orderBy: { createdAt: "desc" },
+      take: 30
+    })
   ]);
   const systemControl = await prisma.systemControl.findUnique({ where: { id: "system" } });
 
@@ -275,6 +302,118 @@ export async function GET() {
     });
   });
   const closedTradesWithPaper = closedTrades.map((trade) => withPaperComputedFields(trade));
+  const selectedReasonBySignalEventId = new Map<string, string>();
+  for (const event of recentExecutionDecisionEvents) {
+    const payload = (event.payload as {
+      signalEventId?: string;
+      selectedReason?: string | null;
+    } | null) ?? null;
+    if (payload?.signalEventId && payload.selectedReason) {
+      selectedReasonBySignalEventId.set(payload.signalEventId, payload.selectedReason);
+    }
+  }
+  const openPaperPositions: PaperPosition[] = openTradesWithDispatch.map((trade) => ({
+    id: trade.id,
+    symbol: trade.symbol,
+    side: trade.side.toUpperCase() === "SHORT" ? "SHORT" : "LONG",
+    entryPrice: trade.entryPrice,
+    markPrice: trade.currentPrice ?? trade.entryPrice,
+    stopPrice: trade.stopPrice,
+    tp1Price: trade.tp1Price,
+    tp2Price: trade.tp2Price,
+    qty: trade.quantity ?? 0,
+    notional: trade.notional ?? 0,
+    leverage: trade.leverage ?? config.SIGNAL_PAPER_LEVERAGE,
+    marginUsed: trade.leverage && trade.leverage > 0 && trade.notional ? trade.notional / trade.leverage : 0,
+    riskAmountAtEntry: trade.riskAmount ?? 0,
+    status: toPaperPositionStatus(trade.status, trade.closedAt),
+    openedAt: trade.openedAt.toISOString(),
+    closedAt: trade.closedAt ? trade.closedAt.toISOString() : null,
+    sourceSignalId: trade.signalEventId,
+    sourceCandidateId: trade.signalEventId,
+    selectedReason: selectedReasonBySignalEventId.get(trade.signalEventId) ?? null,
+    rejectedReason: null,
+    closeReason: closeReasonFromTradeStatus(trade.status),
+    unrealizedPnl: trade.unrealizedPnl ?? 0,
+    realizedPnl: trade.realizedPnl ?? 0
+  }));
+  const closedPaperPositions: PaperPosition[] = closedTradesWithPaper.map((trade) => ({
+    id: trade.id,
+    symbol: trade.symbol,
+    side: trade.side.toUpperCase() === "SHORT" ? "SHORT" : "LONG",
+    entryPrice: trade.entryPrice,
+    markPrice: trade.currentPrice ?? trade.entryPrice,
+    stopPrice: trade.stopPrice,
+    tp1Price: trade.tp1Price,
+    tp2Price: trade.tp2Price,
+    qty: trade.quantity ?? 0,
+    notional: trade.notional ?? 0,
+    leverage: trade.leverage ?? config.SIGNAL_PAPER_LEVERAGE,
+    marginUsed: trade.leverage && trade.leverage > 0 && trade.notional ? trade.notional / trade.leverage : 0,
+    riskAmountAtEntry: trade.riskAmount ?? 0,
+    status: "closed",
+    openedAt: trade.openedAt.toISOString(),
+    closedAt: trade.closedAt ? trade.closedAt.toISOString() : null,
+    sourceSignalId: trade.signalEventId,
+    sourceCandidateId: trade.signalEventId,
+    selectedReason: selectedReasonBySignalEventId.get(trade.signalEventId) ?? null,
+    rejectedReason: null,
+    closeReason: closeReasonFromTradeStatus(trade.status),
+    unrealizedPnl: trade.unrealizedPnl ?? 0,
+    realizedPnl: trade.realizedPnl ?? 0
+  }));
+  const paperAccount = buildPaperAccountSnapshot({
+    startingBalance: config.SIGNAL_PAPER_EQUITY,
+    configuredLeverage: config.SIGNAL_PAPER_LEVERAGE,
+    maxConcurrentPositions: 5,
+    openPositions: openPaperPositions,
+    closedPositions: closedPaperPositions
+  });
+
+  const recentExecutionDecisions = recentExecutionDecisionEvents.map((event) => {
+    const payload = (event.payload as {
+      signalEventId?: string;
+      selectedReason?: string | null;
+      decision?: PaperExecutionDecision;
+    } | null) ?? null;
+    const decision = payload?.decision;
+    return {
+      signalEventId: payload?.signalEventId ?? null,
+      symbol: event.symbol ?? null,
+      accepted: decision?.accepted ?? false,
+      rejectionReason: decision?.rejectionReason ?? null,
+      computedQty: decision?.computedQty ?? 0,
+      computedNotional: decision?.computedNotional ?? 0,
+      computedMargin: decision?.computedMargin ?? 0,
+      computedRiskAmount: decision?.computedRiskAmount ?? 0,
+      selectedReason: payload?.selectedReason ?? null,
+      createdAt: event.createdAt.toISOString()
+    };
+  });
+  const recentPaperLifecycleEvents = recentTradeLifecycleEvents.map((event) => {
+    const payload = (event.payload as {
+      signalTradeId?: string;
+      status?: string;
+      outcome?: string | null;
+      currentPrice?: number;
+      remainingQty?: number;
+      remainingNotional?: number;
+      stopPrice?: number;
+      closeReason?: PaperCloseReason | null;
+    } | null) ?? null;
+    return {
+      signalTradeId: payload?.signalTradeId ?? null,
+      symbol: event.symbol ?? null,
+      status: payload?.status ?? null,
+      outcome: payload?.outcome ?? null,
+      closeReason: payload?.closeReason ?? closeReasonFromTradeStatus(payload?.status ?? ""),
+      currentPrice: payload?.currentPrice ?? null,
+      remainingQty: payload?.remainingQty ?? null,
+      remainingNotional: payload?.remainingNotional ?? null,
+      stopPrice: payload?.stopPrice ?? null,
+      createdAt: event.createdAt.toISOString()
+    };
+  });
 
   const summary = {
     openCount: openTrades.length,
@@ -297,16 +436,22 @@ export async function GET() {
     openTradesWithoutTelegramDispatch: openTradesWithDispatch.filter((trade) => trade.telegramDispatchStatus !== "sent").length
   };
   const cycleTruth = reconciliation?.cycleTruth ?? null;
-  const paperEquity = config.SIGNAL_PAPER_EQUITY;
+  const paperEquity = paperAccount.equity;
   const usedNotional = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.notional ?? 0), 0);
   const usedRiskBudget = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.riskAmount ?? 0), 0);
-  const maxTotalNotionalCapacity = paperEquity * config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT;
+  const slotEquity = paperEquity / 5;
+  const maxTotalNotionalCapacity = slotEquity * config.SIGNAL_PAPER_LEVERAGE * 5;
   const availableNotionalCapacity = Math.max(maxTotalNotionalCapacity - usedNotional, 0);
   const maxOpenRiskBudget = paperEquity * config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT;
   const availableRiskBudget = Math.max(maxOpenRiskBudget - usedRiskBudget, 0);
   const effectivePortfolioLeverage = paperEquity > 0 ? usedNotional / paperEquity : 0;
 
   const responsePayload = {
+    paperAccount,
+    openPaperPositions,
+    closedPaperPositions,
+    recentExecutionDecisions,
+    recentPaperLifecycleEvents,
     summary,
     reconciliation: {
       cycleId: reconciliation?.cycleId ?? latestReconciliation?.id ?? null,
@@ -327,7 +472,7 @@ export async function GET() {
       leverage: config.SIGNAL_PAPER_LEVERAGE,
       maxTotalNotionalMult: config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT,
       maxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT,
-      maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+      maxConcurrentPositions: 5,
       minTier: config.SIGNAL_MIN_TIER,
       minScore: config.SIGNAL_MIN_SCORE,
       requireAPlusOnly: config.SIGNAL_REQUIRE_A_PLUS_ONLY,
@@ -374,7 +519,7 @@ export async function GET() {
       maxOpenRiskBudget,
       usedOpenRiskBudget: usedRiskBudget,
       remainingRiskBudget: availableRiskBudget,
-      paperMaxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+      paperMaxConcurrentPositions: 5,
       currentOpenPositionsCount: openTradesWithDispatch.length,
       blockedByMaxConcurrentRulesThisCycle: cycleTruth?.maxConcurrentBlockedThisCycle ?? false
     },

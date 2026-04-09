@@ -54,7 +54,7 @@ const envSchema = z.object({
   NEXT_PUBLIC_APP_NAME: z.string().default("hashi-bot2"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DEFAULT_SYMBOL: z.string().default("ETHUSDT"),
-  DEFAULT_SYMBOLS: csvSymbolsSchema.default("ETHUSDT,BTCUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,MATICUSDT"),
+  DEFAULT_SYMBOLS: csvSymbolsSchema.default("ETHUSDT,BTCUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT"),
   DEFAULT_CRYPTO_SYMBOLS: csvSymbolsSchema,
   DEFAULT_FOREX_SYMBOLS: csvSymbolsSchema,
   MARKET_TYPE: marketTypeSchema.default("crypto"),

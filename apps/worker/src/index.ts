@@ -19,9 +19,19 @@ import {
   MarketTypeAwareAnalysisLoader,
   CryptoLiveKlineAdapter,
   Mt5ForexLiveBarAdapter,
+  buildPaperAccountSnapshot,
   classifyRegime,
+  closePaperPosition,
+  computeProtectedStopPrice,
+  computePaperExecutionDecision,
+  markOpenPaperPositions,
+  partiallyClosePaperPosition,
   reconcilePersonalDemoState,
   reconcilePropDemoState,
+  type PaperCloseReason,
+  type PaperExecutionDecision,
+  type PaperExecutionRejectionReason,
+  type PaperPosition,
   getProductionStrategies,
   loadCandlesFromCsv,
   type Candle,
@@ -64,8 +74,7 @@ class DatasetSpotProvider implements MarketDataProvider {
     const normalized = symbol.toUpperCase();
     const direct = this.datasetBySymbol[normalized];
     if (direct) return this.resolveFilePath(direct);
-    const fallback = this.datasetBySymbol.ETHUSDT ?? this.datasetBySymbol.BTCUSDT;
-    return fallback ? this.resolveFilePath(fallback) : undefined;
+    return undefined;
   }
 
   private resolveFilePath(datasetPath: string) {
@@ -131,18 +140,7 @@ function buildProvider(name: "binance" | "bybit") {
 }
 
 function buildRuntimeSymbols(config: ReturnType<typeof getConfig>): SymbolMetadata[] {
-  const defaultCryptoSymbols = [
-    "ETHUSDT",
-    "BTCUSDT",
-    "SOLUSDT",
-    "BNBUSDT",
-    "XRPUSDT",
-    "ADAUSDT",
-    "DOGEUSDT",
-    "AVAXUSDT",
-    "LINKUSDT",
-    "MATICUSDT"
-  ];
+  const defaultCryptoSymbols = ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"];
   const defaultForexSymbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"];
   const symbols: SymbolMetadata[] = [];
   const seen = new Set<string>();
@@ -216,9 +214,7 @@ type SignalRejectionReason =
   | "not_selected_diversification_preference"
   | "not_selected_selected_set_cap"
   | "not_actionable_not_in_final_selected_set"
-  | "blocked_remaining_notional_capacity"
-  | "blocked_remaining_open_risk_budget"
-  | "blocked_invalid_qty_after_caps"
+  | PaperExecutionRejectionReason
   | "not_selected_telegram_cap"
   | "forex_readiness_only_mode"
   | "no_message_payload";
@@ -273,41 +269,61 @@ type SignalCycleReconciliation = {
     maxConcurrentBlockedCount: number;
     cycleRankingAllocation: Array<{
       symbol: string;
+      marketType: SymbolMetadata["marketType"];
       side: string;
       score: number;
       rank: number;
       tier: SignalTier;
+      setupVariant: string;
       selected: boolean;
       diversificationGroup: string;
+      riskRecommendationLabel: string;
+      suggestedManualRiskPctRange: string;
+      suggestedManualLeverageRange: string;
       selectedReason: string | null;
       rejectionReason: SignalRejectionReason | null;
     }>;
     evaluatedCandidatesThisCycle: Array<{
       symbol: string;
+      marketType: SymbolMetadata["marketType"];
       side: string;
       score: number;
       tier: SignalTier;
+      setupVariant: string;
+      riskRecommendationLabel: string;
+      suggestedManualRiskPctRange: string;
+      suggestedManualLeverageRange: string;
     }>;
     actionableSelectedThisCycle: Array<{
       symbol: string;
+      marketType: SymbolMetadata["marketType"];
       side: string;
       score: number;
       rank: number;
       tier: SignalTier;
+      setupVariant: string;
       selected: true;
       diversificationGroup: string;
+      riskRecommendationLabel: string;
+      suggestedManualRiskPctRange: string;
+      suggestedManualLeverageRange: string;
       selectedReason: string;
       telegramDispatchStatus: string;
       paperTradeStatus: "opened" | "not_opened";
     }>;
     auditCandidatesThisCycle: Array<{
       symbol: string;
+      marketType: SymbolMetadata["marketType"];
       side: string;
       score: number;
       rank: number;
       tier: SignalTier;
+      setupVariant: string;
       selected: boolean;
       diversificationGroup: string;
+      riskRecommendationLabel: string;
+      suggestedManualRiskPctRange: string;
+      suggestedManualLeverageRange: string;
       selectedReason: string | null;
       rejectionReason: SignalRejectionReason | null;
     }>;
@@ -367,119 +383,25 @@ function sleep(ms: number) {
   });
 }
 
-function pnlForSide(side: string, entryPrice: number, exitPrice: number, quantity = 1) {
-  const perUnit = side.toUpperCase() === "SHORT" ? entryPrice - exitPrice : exitPrice - entryPrice;
-  return perUnit * quantity;
-}
-
-type PaperPositionBlockedReason =
-  | "blocked_remaining_notional_capacity"
-  | "blocked_remaining_open_risk_budget"
-  | "blocked_invalid_qty_after_caps";
-
-type PaperPortfolioSnapshot = {
-  paperEquity: number;
-  configuredLeverage: number;
-  maxTotalNotionalMultiplier: number;
-  maxOpenRiskPct: number;
-  maxConcurrentPositions: number;
-  openPositionsCount: number;
-  usedNotional: number;
-  usedRiskBudget: number;
-};
-
-type PaperPositionSizingResult = {
-  quantity: number;
-  notional: number;
-  riskAmount: number;
-  blockedReason: PaperPositionBlockedReason | null;
-  remainingNotionalCapacity: number;
-  remainingOpenRiskBudget: number;
-};
-
-function computePaperPosition(params: {
-  entryPrice: number;
-  stopPrice: number;
-  paperEquity: number;
-  paperRiskPct: number;
-  leverage: number;
-  remainingNotionalCapacity: number;
-  remainingOpenRiskBudget: number;
-}): PaperPositionSizingResult {
-  const { entryPrice, stopPrice, paperEquity, paperRiskPct, leverage, remainingNotionalCapacity, remainingOpenRiskBudget } = params;
-  const riskDistance = Math.abs(entryPrice - stopPrice);
-  const riskAmount = paperEquity * paperRiskPct;
-  if (riskDistance <= 0 || riskAmount <= 0 || entryPrice <= 0) {
-    return {
-      quantity: 0,
-      notional: 0,
-      riskAmount,
-      blockedReason: "blocked_invalid_qty_after_caps",
-      remainingNotionalCapacity,
-      remainingOpenRiskBudget
-    };
-  }
-  const riskBasedQty = riskAmount / riskDistance;
-  const notionalByRisk = riskBasedQty * entryPrice;
-  const maxNotionalByLeverage = paperEquity * leverage;
-  const maxNotionalByRiskBudget = riskDistance > 0 ? (Math.max(remainingOpenRiskBudget, 0) / riskDistance) * entryPrice : 0;
-  const notional = Math.min(notionalByRisk, maxNotionalByLeverage, Math.max(remainingNotionalCapacity, 0), maxNotionalByRiskBudget);
-  const quantity = notional / entryPrice;
-  const cappedRiskAmount = quantity * riskDistance;
-
-  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(notional) || notional <= 0) {
-    const blockedReason = remainingNotionalCapacity <= 0
-      ? "blocked_remaining_notional_capacity"
-      : remainingOpenRiskBudget <= 0
-        ? "blocked_remaining_open_risk_budget"
-        : "blocked_invalid_qty_after_caps";
-    return {
-      quantity: 0,
-      notional: 0,
-      riskAmount: 0,
-      blockedReason,
-      remainingNotionalCapacity,
-      remainingOpenRiskBudget
-    };
-  }
-
-  return {
-    quantity,
-    notional,
-    riskAmount: cappedRiskAmount,
-    blockedReason: null,
-    remainingNotionalCapacity: Math.max(remainingNotionalCapacity - notional, 0),
-    remainingOpenRiskBudget: Math.max(remainingOpenRiskBudget - cappedRiskAmount, 0)
-  };
-}
-
-function buildPaperPortfolioSnapshot(params: {
-  openTrades: Array<{ notional: number | null; riskAmount: number | null }>;
-  paperEquity: number;
-  configuredLeverage: number;
-  maxTotalNotionalMultiplier: number;
-  maxOpenRiskPct: number;
-  maxConcurrentPositions: number;
-}): PaperPortfolioSnapshot {
-  const usedNotional = params.openTrades.reduce((sum, trade) => sum + Math.max(trade.notional ?? 0, 0), 0);
-  const usedRiskBudget = params.openTrades.reduce((sum, trade) => sum + Math.max(trade.riskAmount ?? 0, 0), 0);
-  return {
-    paperEquity: params.paperEquity,
-    configuredLeverage: params.configuredLeverage,
-    maxTotalNotionalMultiplier: params.maxTotalNotionalMultiplier,
-    maxOpenRiskPct: params.maxOpenRiskPct,
-    maxConcurrentPositions: params.maxConcurrentPositions,
-    openPositionsCount: params.openTrades.length,
-    usedNotional,
-    usedRiskBudget
-  };
-}
-
 function activeSignalTradeWhereClause() {
   return {
     OR: [{ status: "open" }, { status: "tp1_hit" }],
     closedAt: null
   };
+}
+
+function toPaperPositionStatus(status: string, closedAt: Date | null): PaperPosition["status"] {
+  if (closedAt) return "closed";
+  if (status === "tp1_hit") return "partially_closed";
+  return "open";
+}
+
+function closeReasonFromTradeStatus(status: string): PaperCloseReason | null {
+  if (status === "stop_hit") return "stop_hit";
+  if (status === "tp2_hit") return "tp2_hit";
+  if (status === "tp1_hit") return "tp1_hit";
+  if (status === "closed") return "time_stop";
+  return null;
 }
 
 function toInputJson(value: unknown): Prisma.InputJsonValue {
@@ -653,6 +575,21 @@ function computeSignalQuality(params: {
       structure: structureScore,
       entry: entryScore
     }
+  };
+}
+
+function operatorManualRecommendation(signal: Pick<BreakoutSignal, "setupGrade" | "score">) {
+  if (signal.setupGrade === "A+" && signal.score >= 92) {
+    return {
+      riskRecommendationLabel: "high_conviction_a_plus_core",
+      suggestedManualRiskPctRange: "0.75%–1.00%",
+      suggestedManualLeverageRange: "5x–8x"
+    };
+  }
+  return {
+    riskRecommendationLabel: "standard_a_plus_core",
+    suggestedManualRiskPctRange: "0.50%–0.75%",
+    suggestedManualLeverageRange: "3x–5x"
   };
 }
 
@@ -1007,9 +944,14 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     not_selected_diversification_preference: 0,
     not_selected_selected_set_cap: 0,
     not_actionable_not_in_final_selected_set: 0,
-    blocked_remaining_notional_capacity: 0,
-    blocked_remaining_open_risk_budget: 0,
-    blocked_invalid_qty_after_caps: 0,
+    blocked_invalid_stop_distance: 0,
+    blocked_zero_or_negative_qty: 0,
+    blocked_notional_cap: 0,
+    blocked_margin_unavailable: 0,
+    blocked_risk_invalid: 0,
+    blocked_symbol_cooldown: 0,
+    blocked_policy_gate: 0,
+    blocked_invalid_entry_price: 0,
     not_selected_telegram_cap: 0,
     forex_readiness_only_mode: 0,
     no_message_payload: 0
@@ -1020,12 +962,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let maxConcurrentBlockedThisCycle = false;
   let cycleRankingAllocation: Array<{
     symbol: string;
+    marketType: SymbolMetadata["marketType"];
     side: string;
     score: number;
     rank: number;
     tier: SignalTier;
+    setupVariant: string;
     selected: boolean;
     diversificationGroup: string;
+    riskRecommendationLabel: string;
+    suggestedManualRiskPctRange: string;
+    suggestedManualLeverageRange: string;
     selectedReason: string | null;
     rejectionReason: SignalRejectionReason | null;
   }> = [];
@@ -1045,7 +992,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         isRunning: false,
         activeMode: "signal",
         killSwitchActive: false,
-        allowedSymbols: ["ETHUSDT"]
+        allowedSymbols: buildRuntimeSymbols(config).map((entry) => entry.symbol)
       }
     });
     systemControl = {
@@ -1344,23 +1291,37 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       marketContext,
       regime,
       candidateCount: 1,
-      signal: {
-        ...seedSignal,
-        score: quality.signalScore,
-        confidence: 0.7,
-        setupGrade: quality.tier,
-        metadata: {
-          previewOnly: !(runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT),
-          signalScore: quality.signalScore,
-          tier: quality.tier,
-          scoring: quality.components,
-          rationale: [
-            ...quality.reasons,
-            `regime=${regime.regime}`,
-            `symbol=${marketContext.symbol}`
-          ]
-        }
-      }
+      signal: (() => {
+        const scoredSignal: BreakoutSignal = {
+          ...seedSignal,
+          score: quality.signalScore,
+          confidence: 0.7,
+          setupGrade: quality.tier
+        };
+        const recommendation = operatorManualRecommendation(scoredSignal);
+        return {
+          ...scoredSignal,
+          metadata: {
+            previewOnly: !(runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT),
+            strategyBackbone: "trusted_a_plus_breakout_core",
+            setupVariant: "trusted_a_plus_breakout_core_v1",
+            feedActionability: symbolContext.marketType === "crypto"
+              ? "live_actionable"
+              : config.SIGNAL_ENABLE_FOREX
+                ? "live_actionable"
+                : "readiness_only",
+            signalScore: quality.signalScore,
+            tier: quality.tier,
+            scoring: quality.components,
+            ...recommendation,
+            rationale: [
+              ...quality.reasons,
+              `regime=${regime.regime}`,
+              `symbol=${marketContext.symbol}`
+            ]
+          }
+        };
+      })()
     });
   }
   candidateCount = cycleCandidates.length;
@@ -1371,12 +1332,15 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   }
 
   let finalSelectedCandidates: typeof cycleCandidates = [];
-  const selectedSizingBySymbol = new Map<string, PaperPositionSizingResult>();
   const selectedReasonBySymbol = new Map<string, string>();
   let diversificationNotes: string[] = [];
-  const effectiveRequireAPlusOnly = config.SIGNAL_REQUIRE_A_PLUS_ONLY || config.SIGNAL_MIN_TIER === "A+";
+  const effectiveRequireAPlusOnly = runtimeMode === "signal"
+    ? true
+    : (config.SIGNAL_REQUIRE_A_PLUS_ONLY || config.SIGNAL_MIN_TIER === "A+");
   const minTierScore = minScoreForTier(config.SIGNAL_MIN_TIER);
-  const effectiveMinScore = Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
+  const effectiveMinScore = runtimeMode === "signal"
+    ? Math.max(config.SIGNAL_MIN_SCORE, minTierScore, 85)
+    : Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
   if (prismaClient && runtimeMode === "signal" && cycleCandidates.length > 0) {
     const candidateSymbols = Array.from(new Set(cycleCandidates.map((entry) => entry.signal.symbol)));
     const dedupeWindowStart = new Date(Date.now() - 60_000);
@@ -1459,7 +1423,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       if (!passesMinTier({
         candidateTier: candidate.signal.setupGrade,
         minTier: config.SIGNAL_MIN_TIER,
-        requireAPlusOnly: config.SIGNAL_REQUIRE_A_PLUS_ONLY
+        requireAPlusOnly: effectiveRequireAPlusOnly
       })) {
         skippedCount += 1;
         rejectionCounts.below_min_tier += 1;
@@ -1583,27 +1547,29 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       diversificationNotes = diversifiedRanking.notes;
       const rankedForSelection = diversifiedRanking.rankedForSelection;
 
-      const snapshot = buildPaperPortfolioSnapshot({
-        openTrades: openSignalTrades,
-        paperEquity: config.SIGNAL_PAPER_EQUITY,
-        configuredLeverage: config.SIGNAL_PAPER_LEVERAGE,
-        maxTotalNotionalMultiplier: config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT,
-        maxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT,
-        maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS
-      });
-      let remainingNotionalCapacity = Math.max((snapshot.paperEquity * snapshot.maxTotalNotionalMultiplier) - snapshot.usedNotional, 0);
-      let remainingOpenRiskBudget = Math.max((snapshot.paperEquity * snapshot.maxOpenRiskPct) - snapshot.usedRiskBudget, 0);
-      let remainingSlots = Math.max(config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS - currentOpenTradeCount, 0);
       const selectedCap = config.SIGNAL_MAX_SELECTED_PER_CYCLE;
 
       cycleRankingAllocation = rankedForSelection.map((candidate, index) => ({
         symbol: candidate.signal.symbol,
+        marketType: candidate.signal.marketType,
         side: candidate.signal.side,
         score: candidate.signal.score,
         rank: index + 1,
         tier: candidate.signal.setupGrade,
+        setupVariant: typeof candidate.signal.metadata?.setupVariant === "string"
+          ? candidate.signal.metadata.setupVariant
+          : "trusted_a_plus_breakout_core_v1",
         selected: false,
         diversificationGroup: candidate.signal.marketType === "crypto" ? cryptoDiversificationGroup(candidate.signal.symbol) : "other",
+        riskRecommendationLabel: typeof candidate.signal.metadata?.riskRecommendationLabel === "string"
+          ? candidate.signal.metadata.riskRecommendationLabel
+          : "standard_a_plus_core",
+        suggestedManualRiskPctRange: typeof candidate.signal.metadata?.suggestedManualRiskPctRange === "string"
+          ? candidate.signal.metadata.suggestedManualRiskPctRange
+          : "0.50%–0.75%",
+        suggestedManualLeverageRange: typeof candidate.signal.metadata?.suggestedManualLeverageRange === "string"
+          ? candidate.signal.metadata.suggestedManualLeverageRange
+          : "3x–5x",
         selectedReason: null,
         rejectionReason: null
       }));
@@ -1618,72 +1584,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           }
           continue;
         }
-        if (remainingSlots <= 0) {
-          skippedCount += 1;
-          maxConcurrentBlockedCount += 1;
-          maxConcurrentBlockedThisCycle = true;
-          const summary = symbolSummaries.get(candidate.signal.symbol);
-          if (summary) summary.skipReason = "blocked_max_concurrent_positions";
-          if (rankingEntry) {
-            rankingEntry.selected = false;
-            rankingEntry.rejectionReason = "blocked_max_concurrent_positions";
-          }
-          continue;
-        }
-
-        if (remainingNotionalCapacity <= 0 || remainingOpenRiskBudget <= 0) {
-          skippedCount += 1;
-          const summary = symbolSummaries.get(candidate.signal.symbol);
-          if (summary) summary.skipReason = "not_selected_portfolio_priority";
-          if (rankingEntry) {
-            rankingEntry.selected = false;
-            rankingEntry.rejectionReason = "not_selected_portfolio_priority";
-          }
-          continue;
-        }
-
-        const sized = computePaperPosition({
-          entryPrice: candidate.signal.entryPrice,
-          stopPrice: candidate.signal.stopPrice,
-          paperEquity: config.SIGNAL_PAPER_EQUITY,
-          paperRiskPct: config.SIGNAL_PAPER_RISK_PCT,
-          leverage: config.SIGNAL_PAPER_LEVERAGE,
-          remainingNotionalCapacity,
-          remainingOpenRiskBudget
-        });
-        if (sized.blockedReason) {
-          skippedCount += 1;
-          const summary = symbolSummaries.get(candidate.signal.symbol);
-          if (summary) summary.skipReason = sized.blockedReason;
-          await prismaClient.runtimeEvent.create({
-            data: {
-              type: "signal_skipped_portfolio_allocator",
-              mode: "signal",
-              symbol: candidate.signal.symbol,
-              message: `Skipped due to ${sized.blockedReason}`,
-              payload: {
-                blockedReason: sized.blockedReason,
-                remainingNotionalCapacity,
-                remainingOpenRiskBudget,
-                configuredPerTradeRiskPct: config.SIGNAL_PAPER_RISK_PCT,
-                configuredLeverageCap: config.SIGNAL_PAPER_LEVERAGE,
-                configuredMaxTotalNotionalMult: config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT,
-                configuredMaxOpenRiskPct: config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT
-              }
-            }
-          });
-          if (rankingEntry) {
-            rankingEntry.selected = false;
-            rankingEntry.rejectionReason = sized.blockedReason;
-          }
-          continue;
-        }
-
-        remainingNotionalCapacity = sized.remainingNotionalCapacity;
-        remainingOpenRiskBudget = sized.remainingOpenRiskBudget;
-        remainingSlots = Math.max(remainingSlots - 1, 0);
         finalSelectedCandidates.push(candidate);
-        selectedSizingBySymbol.set(candidate.signal.symbol, sized);
         if (rankingEntry) {
           rankingEntry.selected = true;
           rankingEntry.selectedReason = `selected rank=${rankingEntry.rank} tier=${candidate.signal.setupGrade} score=${candidate.signal.score.toFixed(2)} via_threshold_and_portfolio_fit`;
@@ -1812,32 +1713,112 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     });
 
     if (runtimeMode === "signal") {
-      for (const event of persistedSignalEvents) {
-        const sized = selectedSizingBySymbol.get(event.symbol) ?? {
-          quantity: 0,
-          notional: 0,
-          riskAmount: 0,
-          blockedReason: "blocked_invalid_qty_after_caps" as const,
-          remainingNotionalCapacity: 0,
-          remainingOpenRiskBudget: 0
-        };
+      const [currentOpenTrades, currentClosedTrades] = await Promise.all([
+        prismaClient.signalTrade.findMany({
+          where: activeSignalTradeWhereClause(),
+          select: {
+            id: true,
+            symbol: true,
+            side: true,
+            entryPrice: true,
+            currentPrice: true,
+            stopPrice: true,
+            tp1Price: true,
+            tp2Price: true,
+            quantity: true,
+            notional: true,
+            leverage: true,
+            riskAmount: true,
+            status: true,
+            openedAt: true,
+            closedAt: true,
+            signalEventId: true,
+            unrealizedPnl: true,
+            realizedPnl: true
+          }
+        }),
+        prismaClient.signalTrade.findMany({
+          where: { closedAt: { not: null } },
+          select: { realizedPnl: true }
+        })
+      ]);
 
-        if (sized.blockedReason) {
-          await prismaClient.runtimeEvent.create({
-            data: {
-              type: "signal_skipped_portfolio_allocator",
-              mode: "signal",
-              symbol: event.symbol,
-              message: `Skipped late-fill due to ${sized.blockedReason}`,
-              payload: {
-                blockedReason: sized.blockedReason,
-                signalEventId: event.id,
-                selectedSetSizingMissing: !selectedSizingBySymbol.has(event.symbol)
-              }
+      const mutableOpenPositions: PaperPosition[] = currentOpenTrades.map((trade) => ({
+        id: trade.id,
+        symbol: trade.symbol,
+        side: trade.side.toUpperCase() === "SHORT" ? "SHORT" : "LONG",
+        entryPrice: trade.entryPrice,
+        markPrice: trade.currentPrice ?? trade.entryPrice,
+        stopPrice: trade.stopPrice,
+        tp1Price: trade.tp1Price,
+        tp2Price: trade.tp2Price,
+        qty: trade.quantity ?? 0,
+        notional: trade.notional ?? 0,
+        leverage: trade.leverage ?? config.SIGNAL_PAPER_LEVERAGE,
+        marginUsed: trade.leverage && trade.leverage > 0 && trade.notional ? trade.notional / trade.leverage : 0,
+        riskAmountAtEntry: trade.riskAmount ?? 0,
+        status: toPaperPositionStatus(trade.status, trade.closedAt),
+        openedAt: trade.openedAt.toISOString(),
+        closedAt: trade.closedAt ? trade.closedAt.toISOString() : null,
+        sourceSignalId: trade.signalEventId,
+        sourceCandidateId: trade.signalEventId,
+        selectedReason: null,
+        rejectedReason: null,
+        closeReason: closeReasonFromTradeStatus(trade.status),
+        unrealizedPnl: trade.unrealizedPnl ?? 0,
+        realizedPnl: trade.realizedPnl ?? 0
+      }));
+
+      const closedPositionsForAccount: Array<Pick<PaperPosition, "realizedPnl">> = currentClosedTrades.map((trade) => ({
+        realizedPnl: trade.realizedPnl ?? 0
+      }));
+
+      for (const event of persistedSignalEvents) {
+        const account = buildPaperAccountSnapshot({
+          startingBalance: config.SIGNAL_PAPER_EQUITY,
+          configuredLeverage: config.SIGNAL_PAPER_LEVERAGE,
+          maxConcurrentPositions: 5,
+          openPositions: mutableOpenPositions,
+          closedPositions: closedPositionsForAccount
+        });
+
+        const decision: PaperExecutionDecision = computePaperExecutionDecision({
+          account,
+          candidate: {
+            entryPrice: event.entry,
+            stopPrice: event.stop
+          },
+          configuredLeverage: config.SIGNAL_PAPER_LEVERAGE,
+          riskPct: config.SIGNAL_PAPER_RISK_PCT
+        });
+
+        await prismaClient.runtimeEvent.create({
+          data: {
+            type: "signal_paper_execution_decision",
+            mode: "signal",
+            symbol: event.symbol,
+            message: decision.accepted ? "paper_order_accepted" : `paper_order_rejected:${decision.rejectionReason}`,
+            payload: {
+              signalEventId: event.id,
+              sourceCandidateId: event.id,
+              selectedReason: selectedReasonBySymbol.get(event.symbol) ?? null,
+              decision,
+              accountSnapshot: account
             }
-          });
+          }
+        });
+
+        if (!decision.accepted) {
+          if (decision.rejectionReason) {
+            rejectionCounts[decision.rejectionReason] = (rejectionCounts[decision.rejectionReason] ?? 0) + 1;
+          }
+          if (decision.rejectionReason === "blocked_max_concurrent_positions") {
+            maxConcurrentBlockedCount += 1;
+            maxConcurrentBlockedThisCycle = true;
+          }
           continue;
         }
+
         await prismaClient.signalTrade.upsert({
           where: { signalEventId: event.id },
           update: {},
@@ -1850,12 +1831,12 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             stopPrice: event.stop,
             tp1Price: event.tp1,
             tp2Price: event.tp2,
-            paperEquityBase: config.SIGNAL_PAPER_EQUITY,
+            paperEquityBase: account.balance,
             leverage: config.SIGNAL_PAPER_LEVERAGE,
             riskPct: config.SIGNAL_PAPER_RISK_PCT,
-            riskAmount: sized.riskAmount,
-            quantity: sized.quantity,
-            notional: sized.notional,
+            riskAmount: decision.computedRiskAmount,
+            quantity: decision.computedQty,
+            notional: decision.computedNotional,
             status: "open",
             currentPrice: event.entry,
             openedAt: cycleNow,
@@ -1863,6 +1844,32 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             unrealizedPnl: 0,
             realizedPnl: 0
           }
+        });
+
+        mutableOpenPositions.push({
+          id: event.id,
+          symbol: event.symbol,
+          side: event.side.toUpperCase() === "SHORT" ? "SHORT" : "LONG",
+          entryPrice: event.entry,
+          markPrice: event.entry,
+          stopPrice: event.stop,
+          tp1Price: event.tp1,
+          tp2Price: event.tp2,
+          qty: decision.computedQty,
+          notional: decision.computedNotional,
+          leverage: config.SIGNAL_PAPER_LEVERAGE,
+          marginUsed: decision.computedMargin,
+          riskAmountAtEntry: decision.computedRiskAmount,
+          status: "open",
+          openedAt: cycleNow.toISOString(),
+          closedAt: null,
+          sourceSignalId: event.id,
+          sourceCandidateId: event.id,
+          selectedReason: selectedReasonBySymbol.get(event.symbol) ?? null,
+          rejectedReason: null,
+          closeReason: null,
+          unrealizedPnl: 0,
+          realizedPnl: 0
         });
       }
     }
@@ -1873,55 +1880,162 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       where: activeSignalTradeWhereClause()
     });
 
+    const markPriceBySymbol = new Map<string, number>();
+    for (const trade of openSignalTrades) {
+      const latestPrice = latestPriceBySymbol.get(trade.symbol);
+      if (latestPrice !== undefined) {
+        markPriceBySymbol.set(trade.symbol, latestPrice);
+      }
+    }
+
     for (const trade of openSignalTrades) {
       const latestPrice = latestPriceBySymbol.get(trade.symbol);
       if (latestPrice === undefined) continue;
 
-      const unrealizedPnl = pnlForSide(trade.side, trade.entryPrice, latestPrice, trade.quantity ?? 0);
+      const paperPosition: PaperPosition = {
+        id: trade.id,
+        symbol: trade.symbol,
+        side: trade.side.toUpperCase() === "SHORT" ? "SHORT" : "LONG",
+        entryPrice: trade.entryPrice,
+        markPrice: trade.currentPrice ?? trade.entryPrice,
+        stopPrice: trade.stopPrice,
+        tp1Price: trade.tp1Price,
+        tp2Price: trade.tp2Price,
+        qty: trade.quantity ?? 0,
+        notional: trade.notional ?? 0,
+        leverage: trade.leverage ?? config.SIGNAL_PAPER_LEVERAGE,
+        marginUsed: trade.leverage && trade.leverage > 0 && trade.notional ? trade.notional / trade.leverage : 0,
+        riskAmountAtEntry: trade.riskAmount ?? 0,
+        status: toPaperPositionStatus(trade.status, trade.closedAt),
+        openedAt: trade.openedAt.toISOString(),
+        closedAt: trade.closedAt ? trade.closedAt.toISOString() : null,
+        sourceSignalId: trade.signalEventId,
+        sourceCandidateId: trade.signalEventId,
+        selectedReason: null,
+        rejectedReason: null,
+        closeReason: closeReasonFromTradeStatus(trade.status),
+        unrealizedPnl: trade.unrealizedPnl ?? 0,
+        realizedPnl: trade.realizedPnl ?? 0
+      };
+      const marked = markOpenPaperPositions({
+        positions: [paperPosition],
+        markPriceBySymbol
+      })[0] ?? paperPosition;
+
       const updates: Partial<{
         status: PersistedSignalTradeStatus;
         outcome: PersistedSignalTradeOutcome;
         currentPrice: number;
+        stopPrice: number;
         unrealizedPnl: number;
         realizedPnl: number;
+        quantity: number;
+        notional: number;
+        riskAmount: number;
         tp1HitAt: Date;
         tp2HitAt: Date;
         stopHitAt: Date;
         closedAt: Date;
       }> = {
-        currentPrice: latestPrice,
-        unrealizedPnl
+        currentPrice: marked.markPrice,
+        unrealizedPnl: marked.unrealizedPnl
       };
 
       const isShort = trade.side.toUpperCase() === "SHORT";
       const stopTriggered = isShort ? latestPrice >= trade.stopPrice : latestPrice <= trade.stopPrice;
       const tp2Triggered = isShort ? latestPrice <= trade.tp2Price : latestPrice >= trade.tp2Price;
       const tp1Triggered = isShort ? latestPrice <= trade.tp1Price : latestPrice >= trade.tp1Price;
+      const tradeAgeSeconds = Math.floor((Date.now() - trade.openedAt.getTime()) / 1000);
 
       if (stopTriggered) {
-        const stopPnl = pnlForSide(trade.side, trade.entryPrice, trade.stopPrice, trade.quantity ?? 0);
+        const closed = closePaperPosition({
+          position: marked,
+          exitPrice: trade.stopPrice,
+          closeReason: "stop_hit",
+          closedAtIso: cycleNow.toISOString()
+        });
         updates.status = "stop_hit";
         updates.stopHitAt = cycleNow;
         updates.closedAt = cycleNow;
         updates.currentPrice = trade.stopPrice;
-        updates.unrealizedPnl = 0;
-        updates.realizedPnl = stopPnl;
+        updates.unrealizedPnl = closed.position.unrealizedPnl;
+        updates.realizedPnl = closed.position.realizedPnl;
+        updates.quantity = closed.position.qty;
+        updates.notional = closed.position.notional;
+        updates.riskAmount = 0;
         updates.outcome = trade.tp1HitAt ? "partial_win" : "loss";
         closedSignalsThisCycle += 1;
       } else if (tp2Triggered) {
-        const tp2Pnl = pnlForSide(trade.side, trade.entryPrice, trade.tp2Price, trade.quantity ?? 0);
+        const closed = closePaperPosition({
+          position: marked,
+          exitPrice: trade.tp2Price,
+          closeReason: "tp2_hit",
+          closedAtIso: cycleNow.toISOString()
+        });
         updates.status = "tp2_hit";
         updates.tp2HitAt = cycleNow;
         updates.closedAt = cycleNow;
         updates.currentPrice = trade.tp2Price;
-        updates.unrealizedPnl = 0;
-        updates.realizedPnl = tp2Pnl;
+        updates.unrealizedPnl = closed.position.unrealizedPnl;
+        updates.realizedPnl = closed.position.realizedPnl;
+        updates.quantity = closed.position.qty;
+        updates.notional = closed.position.notional;
+        updates.riskAmount = 0;
         updates.outcome = "win";
         closedSignalsThisCycle += 1;
       } else if (tp1Triggered && !trade.tp1HitAt) {
         updates.status = "tp1_hit";
         updates.tp1HitAt = cycleNow;
         updates.outcome = "partial_win";
+        updates.stopPrice = computeProtectedStopPrice({
+          side: trade.side.toUpperCase() === "SHORT" ? "SHORT" : "LONG",
+          entryPrice: trade.entryPrice,
+          initialStopPrice: trade.stopPrice,
+          tp1ProtectMode: config.SIGNAL_TP1_PROTECT_MODE,
+          tp1ProtectOffsetR: config.SIGNAL_TP1_PROTECT_OFFSET_R,
+          breakevenBufferR: config.SIGNAL_BREAKEVEN_BUFFER_R
+        });
+        if (config.SIGNAL_PARTIAL_AT_TP1_ENABLED && (trade.quantity ?? 0) > 0) {
+          const closeQty = (trade.quantity ?? 0) * config.SIGNAL_PARTIAL_PCT;
+          const partial = partiallyClosePaperPosition({
+            position: marked,
+            exitPrice: trade.tp1Price,
+            closeQty,
+            closeReason: "tp1_hit",
+            closedAtIso: cycleNow.toISOString()
+          });
+          updates.currentPrice = trade.tp1Price;
+          updates.unrealizedPnl = partial.position.unrealizedPnl;
+          updates.realizedPnl = partial.position.realizedPnl;
+          updates.quantity = partial.position.qty;
+          updates.notional = partial.position.notional;
+          const startingQty = trade.quantity ?? 0;
+          const riskAmountAtEntry = trade.riskAmount ?? 0;
+          updates.riskAmount = startingQty > 0 ? riskAmountAtEntry * (partial.remainingQty / startingQty) : 0;
+          if (partial.remainingQty <= 0) {
+            updates.status = "tp2_hit";
+            updates.tp2HitAt = cycleNow;
+            updates.closedAt = cycleNow;
+            closedSignalsThisCycle += 1;
+          }
+        }
+      } else if (tradeAgeSeconds > config.SIGNAL_OUTCOME_MAX_AGE_SECONDS) {
+        const closed = closePaperPosition({
+          position: marked,
+          exitPrice: marked.markPrice,
+          closeReason: "time_stop",
+          closedAtIso: cycleNow.toISOString()
+        });
+        updates.status = "closed";
+        updates.closedAt = cycleNow;
+        updates.currentPrice = marked.markPrice;
+        updates.unrealizedPnl = 0;
+        updates.realizedPnl = closed.position.realizedPnl;
+        updates.quantity = 0;
+        updates.notional = 0;
+        updates.riskAmount = 0;
+        updates.outcome = closed.position.realizedPnl > 0 ? "win" : closed.position.realizedPnl < 0 ? "loss" : "partial_win";
+        closedSignalsThisCycle += 1;
       }
 
       await prismaClient.signalTrade.update({
@@ -1939,7 +2053,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             signalTradeId: trade.id,
             status: updates.status ?? trade.status,
             outcome: updates.outcome ?? trade.outcome,
-            currentPrice: updates.currentPrice ?? trade.currentPrice
+            currentPrice: updates.currentPrice ?? trade.currentPrice,
+            closeReason: closeReasonFromTradeStatus(updates.status ?? trade.status),
+            remainingQty: updates.quantity ?? trade.quantity ?? 0,
+            remainingNotional: updates.notional ?? trade.notional ?? 0,
+            stopPrice: updates.stopPrice ?? trade.stopPrice
           }
         }
       });
@@ -2975,18 +3093,23 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
   let reconciliation: SignalCycleReconciliation | null = null;
   if (prismaClient && runtimeMode === "signal") {
-    const rankingBySymbol = new Map(cycleRankingAllocation.map((entry) => [entry.symbol, entry]));
+    const rankingBySymbol = new Map(cycleRankingAllocation.map((entry) => [`${entry.marketType}:${entry.symbol}`, entry]));
     const actionableSelectedThisCycle = finalSelectedCandidates.map((entry) => {
-      const ranking = rankingBySymbol.get(entry.signal.symbol);
+      const ranking = rankingBySymbol.get(`${entry.signal.marketType}:${entry.signal.symbol}`);
       const summary = symbolSummaries.get(entry.signal.symbol);
       return {
         symbol: entry.signal.symbol,
+        marketType: entry.signal.marketType,
         side: entry.signal.side,
         score: entry.signal.score,
         rank: ranking?.rank ?? 0,
         tier: entry.signal.setupGrade,
+        setupVariant: ranking?.setupVariant ?? "trusted_a_plus_breakout_core_v1",
         selected: true as const,
         diversificationGroup: ranking?.diversificationGroup ?? (entry.signal.marketType === "crypto" ? cryptoDiversificationGroup(entry.signal.symbol) : "other"),
+        riskRecommendationLabel: ranking?.riskRecommendationLabel ?? "standard_a_plus_core",
+        suggestedManualRiskPctRange: ranking?.suggestedManualRiskPctRange ?? "0.50%–0.75%",
+        suggestedManualLeverageRange: ranking?.suggestedManualLeverageRange ?? "3x–5x",
         selectedReason: ranking?.selectedReason ?? selectedReasonBySymbol.get(entry.signal.symbol) ?? "selected_by_global_rank_and_portfolio_fit",
         telegramDispatchStatus: summary?.telegramDispatchStatus ?? "unknown",
         paperTradeStatus: "opened" as const
@@ -2994,12 +3117,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     });
     const auditCandidatesThisCycle = cycleRankingAllocation.map((entry) => ({
       symbol: entry.symbol,
+      marketType: entry.marketType,
       side: entry.side,
       score: entry.score,
       rank: entry.rank,
       tier: entry.tier,
+      setupVariant: entry.setupVariant,
       selected: entry.selected,
       diversificationGroup: entry.diversificationGroup,
+      riskRecommendationLabel: entry.riskRecommendationLabel,
+      suggestedManualRiskPctRange: entry.suggestedManualRiskPctRange,
+      suggestedManualLeverageRange: entry.suggestedManualLeverageRange,
       selectedReason: entry.selectedReason,
       rejectionReason: entry.rejectionReason
     }));
@@ -3026,17 +3154,43 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       prismaClient.transportEvent.count({ where: { channel: "telegram" } }),
       prismaClient.signalEvent.count()
     ]);
-    const openTradesForPortfolio = await prismaClient.signalTrade.findMany({
-      where: activeSignalTradeWhereClause(),
-      select: {
-        notional: true,
-        riskAmount: true
-      }
-    });
+    const [openTradesForPortfolio, closedTradesForPortfolio] = await Promise.all([
+      prismaClient.signalTrade.findMany({
+        where: activeSignalTradeWhereClause(),
+        select: {
+          status: true,
+          notional: true,
+          leverage: true,
+          unrealizedPnl: true,
+          riskAmount: true
+        }
+      }),
+      prismaClient.signalTrade.findMany({
+        where: { closedAt: { not: null } },
+        select: {
+          realizedPnl: true
+        }
+      })
+    ]);
     const usedNotional = openTradesForPortfolio.reduce((sum, trade) => sum + Math.max(trade.notional ?? 0, 0), 0);
     const usedRiskBudget = openTradesForPortfolio.reduce((sum, trade) => sum + Math.max(trade.riskAmount ?? 0, 0), 0);
-    const availableNotionalCapacity = Math.max((config.SIGNAL_PAPER_EQUITY * config.SIGNAL_PAPER_MAX_TOTAL_NOTIONAL_MULT) - usedNotional, 0);
-    const availableRiskBudget = Math.max((config.SIGNAL_PAPER_EQUITY * config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT) - usedRiskBudget, 0);
+    const paperSnapshot = buildPaperAccountSnapshot({
+      startingBalance: config.SIGNAL_PAPER_EQUITY,
+      configuredLeverage: config.SIGNAL_PAPER_LEVERAGE,
+      maxConcurrentPositions: 5,
+      openPositions: openTradesForPortfolio.map((trade) => ({
+        status: trade.status === "tp1_hit" ? "partially_closed" : "open",
+        notional: trade.notional ?? 0,
+        leverage: trade.leverage ?? config.SIGNAL_PAPER_LEVERAGE,
+        unrealizedPnl: trade.unrealizedPnl ?? 0
+      })),
+      closedPositions: closedTradesForPortfolio.map((trade) => ({
+        realizedPnl: trade.realizedPnl ?? 0
+      }))
+    });
+    const slotEquity = paperSnapshot.equity / 5;
+    const availableNotionalCapacity = Math.max((slotEquity * config.SIGNAL_PAPER_LEVERAGE * 5) - usedNotional, 0);
+    const availableRiskBudget = Math.max((paperSnapshot.equity * config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT) - usedRiskBudget, 0);
 
     reconciliation = {
       cycleTruth: {
@@ -3052,8 +3206,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         telegramSignalsDispatchedThisCycle: dispatchedTelegramCount,
         closedSignalsThisCycle,
         currentOpenPositionsCount: totalOpenSignals,
-        paperMaxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
-        paperEquity: config.SIGNAL_PAPER_EQUITY,
+        paperMaxConcurrentPositions: 5,
+        paperEquity: paperSnapshot.equity,
         usedNotional,
         availableNotionalCapacity,
         usedRiskBudget,
@@ -3065,9 +3219,22 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         cycleRankingAllocation,
         evaluatedCandidatesThisCycle: cycleCandidates.map((entry) => ({
           symbol: entry.signal.symbol,
+          marketType: entry.signal.marketType,
           side: entry.signal.side,
           score: entry.signal.score,
-          tier: entry.signal.setupGrade
+          tier: entry.signal.setupGrade,
+          setupVariant: typeof entry.signal.metadata?.setupVariant === "string"
+            ? entry.signal.metadata.setupVariant
+            : "trusted_a_plus_breakout_core_v1",
+          riskRecommendationLabel: typeof entry.signal.metadata?.riskRecommendationLabel === "string"
+            ? entry.signal.metadata.riskRecommendationLabel
+            : "standard_a_plus_core",
+          suggestedManualRiskPctRange: typeof entry.signal.metadata?.suggestedManualRiskPctRange === "string"
+            ? entry.signal.metadata.suggestedManualRiskPctRange
+            : "0.50%–0.75%",
+          suggestedManualLeverageRange: typeof entry.signal.metadata?.suggestedManualLeverageRange === "string"
+            ? entry.signal.metadata.suggestedManualLeverageRange
+            : "3x–5x"
         })),
         actionableSelectedThisCycle,
         auditCandidatesThisCycle,
@@ -3082,7 +3249,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         thresholdPolicy: {
           minTier: config.SIGNAL_MIN_TIER,
           minScore: config.SIGNAL_MIN_SCORE,
-          requireAPlusOnly: config.SIGNAL_REQUIRE_A_PLUS_ONLY,
+          requireAPlusOnly: effectiveRequireAPlusOnly,
           effectiveMinScore
         },
         marketModePolicy: {
@@ -3133,7 +3300,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           signalsPersistedThisCycle: persistedSignalCount,
           telegramSignalsDispatchedThisCycle: dispatchedTelegramCount,
           closedSignalsThisCycle,
-          paperMaxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+          paperMaxConcurrentPositions: 5,
           currentOpenPositionsCount: totalOpenSignals,
           maxConcurrentBlockedThisCycle,
           perSymbol: Array.from(symbolSummaries.values())
