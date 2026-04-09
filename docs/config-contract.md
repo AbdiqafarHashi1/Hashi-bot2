@@ -43,9 +43,9 @@ For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
 | WORKER_LOOP_INTERVAL_SECONDS | OPTIONAL_RUNTIME_WITH_DEFAULT | `15` | Yes | Worker cycle interval. |
 | MARKET_TYPE | OPTIONAL_RUNTIME_WITH_DEFAULT | `crypto` | Yes | Non-signal modes: chooses crypto vs forex symbol build path. |
 | DEFAULT_SYMBOL | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT` | Yes | UI/control-room default single symbol. |
-| DEFAULT_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT,...` | Yes | Primary multi-symbol list consumed by worker runtime. |
-| DEFAULT_CRYPTO_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT,BTCUSDT,SOLUSDT` | Yes | Fallback crypto universe when DEFAULT_SYMBOLS absent. |
-| DEFAULT_FOREX_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | `EURUSD,GBPUSD` | Yes | Forex universe list. |
+| DEFAULT_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | `ETHUSDT,BTCUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT` | Yes | Primary multi-symbol crypto list consumed by worker runtime. |
+| DEFAULT_CRYPTO_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | empty | Yes | Optional override crypto universe when DEFAULT_SYMBOLS absent. |
+| DEFAULT_FOREX_SYMBOLS | OPTIONAL_RUNTIME_WITH_DEFAULT | empty | Yes | Optional forex universe override (runtime fallback: EURUSD, GBPUSD, USDJPY, XAUUSD). |
 | DEFAULT_EXECUTION_TIMEFRAME | OPTIONAL_RUNTIME_WITH_DEFAULT | `15m` | Yes | Analyzer timeframe default. |
 | DEFAULT_HTF_1 | OPTIONAL_RUNTIME_WITH_DEFAULT | `1h` | Yes | HTF context default. |
 | DEFAULT_HTF_2 | OPTIONAL_RUNTIME_WITH_DEFAULT | `4h` | Yes | HTF context default. |

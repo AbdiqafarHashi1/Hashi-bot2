@@ -216,24 +216,34 @@ export type SignalRoomPayload = {
   };
   selectedThisCycle: Array<{
     symbol: string;
+    marketType: "crypto" | "forex";
     side: string;
     score: number;
     rank: number;
     tier: string;
+    setupVariant: string;
     selected: boolean;
     diversificationGroup: string;
+    riskRecommendationLabel: string;
+    suggestedManualRiskPctRange: string;
+    suggestedManualLeverageRange: string;
     selectedReason: string;
     telegramDispatchStatus: string;
     paperTradeStatus: string;
   }>;
   rejectedThisCycle: Array<{
     symbol: string;
+    marketType: "crypto" | "forex";
     side: string;
     score: number;
     rank: number;
     tier: string;
+    setupVariant: string;
     selected: boolean;
     diversificationGroup: string;
+    riskRecommendationLabel: string;
+    suggestedManualRiskPctRange: string;
+    suggestedManualLeverageRange: string;
     rejectionReason: string | null;
   }>;
   cycleTruth: {
@@ -246,6 +256,7 @@ export type SignalRoomPayload = {
     maxConcurrentBlockedCount?: number;
     cycleRankingAllocation?: Array<{
       symbol: string;
+      marketType?: "crypto" | "forex";
       score: number;
       rank: number;
       selected: boolean;
