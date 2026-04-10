@@ -142,7 +142,8 @@ Those belong to Phase 4.
 
 Single source of truth for local runtime config:
 
-- Use one file only: `./.env` (repo root).
+- Runtime now supports `HASHI_ENV_FILE` for local and docker runs.
+- If `HASHI_ENV_FILE` is unset, default file remains `./.env` (repo root).
 - Start from `.env.example`:
 
 ```bash
@@ -153,6 +154,18 @@ Dedicated signal operator preset:
 
 ```bash
 cp .env.signal .env
+```
+
+Run worker with `.env.signal` directly (no file copy):
+
+```bash
+HASHI_ENV_FILE=.env.signal pnpm --filter @hashi/worker dev
+```
+
+Run B6 local-run readiness validation hook:
+
+```bash
+pnpm validate:phase-b6
 ```
 
 `./.env.signal` is a complete signal-mode env contract (signal-only execution, paper model, portfolio allocator caps, restart/reset policy, and Telegram placeholders).

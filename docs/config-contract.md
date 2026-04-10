@@ -7,10 +7,11 @@ For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
 ## Runtime loading model
 
 - `packages/config` parses and normalizes most runtime env values via a Zod schema and is used by worker and parts of web runtime.
-- `packages/config/loadLocalRuntimeEnv` auto-loads root `.env` for local non-docker `pnpm` runs.
+- `packages/config/loadLocalRuntimeEnv` auto-loads env from `${HASHI_ENV_FILE}` when set, otherwise root `.env`, for local non-docker `pnpm` runs.
 - `docker-compose.yml` loads `${HASHI_ENV_FILE:-.env}` as each app service env file and injects `DATABASE_URL` and `REDIS_URL` container-host overrides for `web` and `worker`.
 - Recommended signal-mode launch:
-  - local pnpm: `cp .env.signal .env`
+  - local pnpm (direct): `HASHI_ENV_FILE=.env.signal pnpm --filter @hashi/worker dev`
+  - local pnpm (legacy copy): `cp .env.signal .env`
   - docker compose: `HASHI_ENV_FILE=.env.signal docker compose up -d`
 
 ## Classification labels
@@ -167,3 +168,22 @@ For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
   - stop / TP2 full closes,
   - time-stop full closes.
 - TP1 protective stop movement now mutates persisted open paper position stop via shared protected-stop computation.
+
+
+## B6 local-run-ready signal-mode status (2026-04-09)
+
+- Trusted A+ core lock for signal mode is explicit in `.env.signal` / `.env.example`:
+  - `SIGNAL_MIN_TIER=A+`
+  - `SIGNAL_MIN_SCORE=85`
+  - `SIGNAL_REQUIRE_A_PLUS_ONLY=1`
+- Target universe presets:
+  - crypto: `ETHUSDT,BTCUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT`
+  - forex readiness: `EURUSD,GBPUSD,USDJPY,XAUUSD`
+- Crypto live-feed path in worker:
+  - `CryptoLiveKlineAdapter` over primary (`DEFAULT_PRIMARY_PROVIDER`) with fallback (`DEFAULT_BACKUP_PROVIDER`) providers.
+- Forex live/readiness path in worker:
+  - `Mt5ForexLiveBarAdapter` via `MT5_BRIDGE_BASE_URL` and optional `MT5_BRIDGE_API_KEY`.
+  - When `SIGNAL_ENABLE_FOREX=0` and `SIGNAL_FOREX_READINESS_ONLY=1`, forex stays readiness-only and cannot open signal-mode paper positions.
+- B6 validation hook:
+  - `pnpm validate:phase-b6`
+  - emits `reports/phase-b6-local-run-ready-validation.json`.
