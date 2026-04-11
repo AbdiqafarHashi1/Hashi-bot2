@@ -399,6 +399,10 @@ type SymbolCycleSummary = {
   skipReason: string | null;
 };
 
+function symbolRuntimeKey(input: Pick<SymbolMetadata, "symbol" | "marketType">) {
+  return `${input.marketType}:${input.symbol}`;
+}
+
 function sleep(ms: number) {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -628,20 +632,34 @@ async function generateUnifiedSignalsForContext(params: {
   regime: ReturnType<typeof classifyRegime>;
   config: ReturnType<typeof getConfig>;
   runtimeMode: RuntimeMode;
-}): Promise<BreakoutSignal[]> {
+}): Promise<{
+  signals: BreakoutSignal[];
+  evaluation: {
+    strategyCount: number;
+    strategyAttempted: string[];
+    rawCandidateCount: number;
+    postValidationCount: number;
+  };
+}> {
   const { marketContext, regime, config, runtimeMode } = params;
   const strategyIds = resolveRuntimeStrategyIds(config);
   const signals: BreakoutSignal[] = [];
+  let rawCandidateCount = 0;
+  let postValidationCount = 0;
+  const strategyAttempted: string[] = [];
 
   for (const strategyId of strategyIds) {
     const entry = getStrategyById(strategyId);
     if (!entry) continue;
+    strategyAttempted.push(strategyId);
     const strategy = entry.create();
     const candidates = await strategy.generateCandidates(marketContext);
+    rawCandidateCount += candidates.length;
     for (const candidate of candidates) {
       const scored = await strategy.scoreCandidate(candidate, marketContext);
       const validation = await strategy.validateCandidate(candidate, marketContext);
       if (!validation.valid) continue;
+      postValidationCount += 1;
       const plan = await strategy.buildTradePlan(candidate, marketContext);
       if (plan.side === "NONE") continue;
 
@@ -696,7 +714,15 @@ async function generateUnifiedSignalsForContext(params: {
     }
   }
 
-  return signals;
+  return {
+    signals,
+    evaluation: {
+      strategyCount: strategyIds.length,
+      strategyAttempted,
+      rawCandidateCount,
+      postValidationCount
+    }
+  };
 }
 
 async function sendTelegramMessage(params: {
@@ -1379,7 +1405,26 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         htf2: config.DEFAULT_HTF_2,
         candleLimit: preloadCandleLimit
       });
-      preloadedContextBySymbol.set(symbolContext.symbol, marketContext);
+      const preloadKey = symbolRuntimeKey(symbolContext);
+      preloadedContextBySymbol.set(preloadKey, marketContext);
+      console.log(
+        JSON.stringify(
+          {
+            event: "analysis_preload_context_created",
+            cycleNumber,
+            symbol: symbolContext.symbol,
+            marketType: symbolContext.marketType,
+            contextKey: preloadKey,
+            candleCount: {
+              "15m": marketContext.candles["15m"].length,
+              "1h": marketContext.candles["1h"].length,
+              "4h": marketContext.candles["4h"].length
+            }
+          },
+          null,
+          2
+        )
+      );
       symbolReadiness.push(
         computeAnalysisReadiness({
           symbolContext,
@@ -1446,7 +1491,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   }
 
   for (const symbolContext of runtimeSymbols) {
-    const readiness = symbolReadiness.find((entry) => entry.symbol === symbolContext.symbol);
+    const contextKey = symbolRuntimeKey(symbolContext);
+    const readiness = symbolReadiness.find((entry) => symbolRuntimeKey(entry) === contextKey);
     if (warmupIncomplete || !readiness?.analysisReady) {
       skippedCount += 1;
       rejectionCounts.analysis_feed_unavailable += 1;
@@ -1463,7 +1509,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       });
       continue;
     }
-    const marketContext = preloadedContextBySymbol.get(symbolContext.symbol);
+    const marketContext = preloadedContextBySymbol.get(contextKey);
     if (!marketContext) {
       skippedCount += 1;
       rejectionCounts.analysis_feed_unavailable += 1;
@@ -1478,6 +1524,22 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       });
       continue;
     }
+
+    console.log(
+      JSON.stringify(
+        {
+          event: "analysis_preload_context_attached_to_evaluation",
+          cycleNumber,
+          symbol: symbolContext.symbol,
+          marketType: symbolContext.marketType,
+          contextKey,
+          analysisReady: readiness.analysisReady,
+          candleCount: readiness.candleCount
+        },
+        null,
+        2
+      )
+    );
 
     console.log(
       JSON.stringify(
@@ -1497,25 +1559,55 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     );
 
     const regime = classifyRegime(marketContext);
-    const generatedSignals = await generateUnifiedSignalsForContext({
+    const { signals: generatedSignals, evaluation } = await generateUnifiedSignalsForContext({
       marketContext,
       regime,
       config,
       runtimeMode
     });
+    console.log(
+      JSON.stringify(
+        {
+          event: "directional_candidate_generation_attempted",
+          cycleNumber,
+          symbol: symbolContext.symbol,
+          marketType: symbolContext.marketType,
+          contextKey,
+          analysisReady: readiness.analysisReady,
+          strategyCount: evaluation.strategyCount,
+          strategyAttempted: evaluation.strategyAttempted,
+          rawCandidateCount: evaluation.rawCandidateCount,
+          postValidationCount: evaluation.postValidationCount,
+          generatedSignalCount: generatedSignals.length
+        },
+        null,
+        2
+      )
+    );
     if (generatedSignals.length === 0) {
       skippedCount += 1;
-      rejectionCounts.analysis_feed_unavailable += 1;
+      rejectionCounts.not_actionable_not_in_final_selected_set += 1;
       const summary = symbolSummaries.get(symbolContext.symbol);
       if (summary) {
         summary.candidateFound = false;
-        summary.skipReason = "analysis_feed_unavailable";
+        summary.skipReason = "no_setup_found";
       }
-      unavailableFeeds.push({
-        symbol: symbolContext.symbol,
-        marketType: symbolContext.marketType,
-        reason: "insufficient_candle_context_for_directional_candidate"
-      });
+      console.log(
+        JSON.stringify(
+          {
+            event: "directional_candidate_rejected_real_reason",
+            cycleNumber,
+            symbol: symbolContext.symbol,
+            marketType: symbolContext.marketType,
+            contextKey,
+            reason: "no_setup_found",
+            analysisReady: readiness.analysisReady,
+            staleFeedUnavailableSuppressed: true
+          },
+          null,
+          2
+        )
+      );
       continue;
     }
     const summary = symbolSummaries.get(symbolContext.symbol);
