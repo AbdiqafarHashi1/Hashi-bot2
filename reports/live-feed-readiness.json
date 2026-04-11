@@ -1,0 +1,135 @@
+{
+  "generatedAt": "2026-04-11T02:10:27.561Z",
+  "transportReadiness": {
+    "marketType": "crypto",
+    "adapterPresent": true,
+    "transportConnected": false,
+    "reason": "primary and backup crypto providers failed health checks",
+    "symbolsReady": [],
+    "symbolsNotReady": [
+      "ETHUSDT",
+      "BTCUSDT",
+      "SOLUSDT",
+      "BNBUSDT",
+      "XRPUSDT",
+      "DOGEUSDT"
+    ]
+  },
+  "preloadCandleLimit": 320,
+  "minDirectionalContextBars": 250,
+  "symbolsEvaluated": 6,
+  "symbolsAnalysisReady": 0,
+  "workerWarmupWouldBlock": true,
+  "fallbackProviderPathObserved": false,
+  "afterReadinessCandidateEvaluationPossible": false,
+  "symbols": [
+    {
+      "symbol": "ETHUSDT",
+      "transportReady": false,
+      "preloadAttempted": false,
+      "preloadSucceeded": false,
+      "analysisReady": false,
+      "blockedReason": "transport_not_ready",
+      "minRequired": {
+        "15m": 250,
+        "1h": 63,
+        "4h": 20
+      },
+      "candleCount": {
+        "15m": 0,
+        "1h": 0,
+        "4h": 0
+      }
+    },
+    {
+      "symbol": "BTCUSDT",
+      "transportReady": false,
+      "preloadAttempted": false,
+      "preloadSucceeded": false,
+      "analysisReady": false,
+      "blockedReason": "transport_not_ready",
+      "minRequired": {
+        "15m": 250,
+        "1h": 63,
+        "4h": 20
+      },
+      "candleCount": {
+        "15m": 0,
+        "1h": 0,
+        "4h": 0
+      }
+    },
+    {
+      "symbol": "SOLUSDT",
+      "transportReady": false,
+      "preloadAttempted": false,
+      "preloadSucceeded": false,
+      "analysisReady": false,
+      "blockedReason": "transport_not_ready",
+      "minRequired": {
+        "15m": 250,
+        "1h": 63,
+        "4h": 20
+      },
+      "candleCount": {
+        "15m": 0,
+        "1h": 0,
+        "4h": 0
+      }
+    },
+    {
+      "symbol": "BNBUSDT",
+      "transportReady": false,
+      "preloadAttempted": false,
+      "preloadSucceeded": false,
+      "analysisReady": false,
+      "blockedReason": "transport_not_ready",
+      "minRequired": {
+        "15m": 250,
+        "1h": 63,
+        "4h": 20
+      },
+      "candleCount": {
+        "15m": 0,
+        "1h": 0,
+        "4h": 0
+      }
+    },
+    {
+      "symbol": "XRPUSDT",
+      "transportReady": false,
+      "preloadAttempted": false,
+      "preloadSucceeded": false,
+      "analysisReady": false,
+      "blockedReason": "transport_not_ready",
+      "minRequired": {
+        "15m": 250,
+        "1h": 63,
+        "4h": 20
+      },
+      "candleCount": {
+        "15m": 0,
+        "1h": 0,
+        "4h": 0
+      }
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "transportReady": false,
+      "preloadAttempted": false,
+      "preloadSucceeded": false,
+      "analysisReady": false,
+      "blockedReason": "transport_not_ready",
+      "minRequired": {
+        "15m": 250,
+        "1h": 63,
+        "4h": 20
+      },
+      "candleCount": {
+        "15m": 0,
+        "1h": 0,
+        "4h": 0
+      }
+    }
+  ]
+}
