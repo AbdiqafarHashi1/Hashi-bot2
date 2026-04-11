@@ -229,6 +229,11 @@ type SignalRejectionReason =
   | "not_selected_portfolio_priority"
   | "not_selected_diversification_preference"
   | "not_selected_selected_set_cap"
+  | "not_selected_brain_same_symbol_duplication"
+  | "not_selected_brain_opposite_side_conflict"
+  | "not_selected_brain_engine_finalist_lower_priority"
+  | "not_selected_brain_portfolio_capacity"
+  | "not_selected_brain_redundancy"
   | "not_actionable_not_in_final_selected_set"
   | PaperExecutionRejectionReason
   | "not_selected_telegram_cap"
@@ -553,6 +558,25 @@ function applySimpleCryptoDiversification(params: {
 function atrFromContext(marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>) {
   const maybe = marketContext as unknown as { atr?: number; indicators?: { atr?: number } };
   return maybe.atr ?? maybe.indicators?.atr ?? null;
+}
+
+type RuntimeCandidate = {
+  symbolContext: SymbolMetadata;
+  marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
+  regime: ReturnType<typeof classifyRegime>;
+  candidateCount: number;
+  signal: BreakoutSignal;
+};
+
+function resolveCandidateEngineLabel(candidate: RuntimeCandidate, config: ReturnType<typeof getConfig>) {
+  const strategyId = typeof candidate.signal.metadata?.strategyId === "string" ? candidate.signal.metadata.strategyId : "";
+  if (strategyId === config.ACTIVE_PRODUCTION_STRATEGY) return "engine1";
+  if (strategyId === config.ENGINE2_STRATEGY) return "engine2";
+  if (strategyId === config.ENGINE3_STRATEGY) return "engine3";
+  const setupVariant = typeof candidate.signal.metadata?.setupVariant === "string" ? candidate.signal.metadata.setupVariant : "";
+  if (setupVariant.includes("expansion_reload")) return "engine2";
+  if (setupVariant.includes("continuation_reclaim")) return "engine3";
+  return "engine1";
 }
 
 function boundedScore(value: number, min: number, max: number) {
@@ -1500,13 +1524,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     )
   );
 
-  const cycleCandidates: Array<{
-    symbolContext: SymbolMetadata;
-    marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
-    regime: ReturnType<typeof classifyRegime>;
-    candidateCount: number;
-    signal: BreakoutSignal;
-  }> = [];
+  const cycleCandidates: RuntimeCandidate[] = [];
   const unavailableFeeds: Array<{ symbol: string; marketType: SymbolMetadata["marketType"]; reason: string }> = [];
   if (warmupIncomplete) {
     console.log(
@@ -1711,7 +1729,6 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     const activeSymbolSet = new Set(activeOutcomes.map((row) => row.symbol));
     const recentSymbolSet = new Set(recentOutcomes.map((row) => row.symbol));
     const cooldownSymbolSet = new Set(cooldownStops.map((row) => row.symbol));
-    const seenSymbols = new Set<string>();
     const skippedByReason: Record<string, Set<string>> = {
       signal_skipped_active_symbol: new Set<string>(),
       signal_skipped_rr_filter: new Set<string>(),
@@ -1724,15 +1741,6 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
     for (const candidate of rankedCycleCandidates) {
       const symbol = candidate.signal.symbol;
-      if (seenSymbols.has(symbol)) {
-        skippedCount += 1;
-        rejectionCounts.active_symbol_gate += 1;
-        const summary = symbolSummaries.get(symbol);
-        if (summary) summary.skipReason = "active_symbol_gate";
-        skippedByReason.signal_skipped_active_symbol.add(symbol);
-        continue;
-      }
-      seenSymbols.add(symbol);
       if (activeSymbolSet.has(symbol)) {
         skippedCount += 1;
         rejectionCounts.active_symbol_gate += 1;
@@ -1883,9 +1891,86 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       });
       diversificationNotes = diversifiedRanking.notes;
       const rankedForSelection = diversifiedRanking.rankedForSelection;
-
       const selectedCap = config.SIGNAL_MAX_SELECTED_PER_CYCLE;
+      const availableSlots = Math.max(selectedCap - currentOpenTradeCount, 0);
 
+      const finalistsByEngine = new Map<string, RuntimeCandidate>();
+      for (const candidate of rankedForSelection) {
+        const engine = resolveCandidateEngineLabel(candidate, config);
+        const current = finalistsByEngine.get(engine);
+        if (!current || candidate.signal.score > current.signal.score) {
+          finalistsByEngine.set(engine, candidate);
+        }
+      }
+      const engineFinalists = [...finalistsByEngine.entries()]
+        .map(([engine, candidate]) => ({ engine, candidate }))
+        .sort((a, b) => b.candidate.signal.score - a.candidate.signal.score);
+
+      console.log(
+        JSON.stringify({
+          event: "brain_cycle_input",
+          cycleNumber,
+          candidateCount: cycleCandidates.length,
+          eligibleCount: eligibleCandidates.length,
+          engineCounts: rankedForSelection.reduce<Record<string, number>>((acc, candidate) => {
+            const engine = resolveCandidateEngineLabel(candidate, config);
+            acc[engine] = (acc[engine] ?? 0) + 1;
+            return acc;
+          }, {})
+        }, null, 2)
+      );
+      console.log(
+        JSON.stringify({
+          event: "brain_engine_finalists",
+          cycleNumber,
+          finalists: engineFinalists.map((entry) => ({
+            engine: entry.engine,
+            symbol: entry.candidate.signal.symbol,
+            side: entry.candidate.signal.side,
+            score: entry.candidate.signal.score
+          }))
+        }, null, 2)
+      );
+      await prismaClient.runtimeEvent.create({
+        data: {
+          type: "brain_engine_finalists",
+          mode: "signal",
+          message: "Brain finalists extracted per engine",
+          payload: {
+            finalists: engineFinalists.map((entry) => ({
+              engine: entry.engine,
+              symbol: entry.candidate.signal.symbol,
+              side: entry.candidate.signal.side,
+              score: entry.candidate.signal.score
+            }))
+          }
+        }
+      });
+
+      const brainRejections = new Map<RuntimeCandidate, SignalRejectionReason>();
+      const selectedBrainCandidates: RuntimeCandidate[] = [];
+      for (const entry of engineFinalists) {
+        const candidate = entry.candidate;
+        if (selectedBrainCandidates.length >= availableSlots) {
+          brainRejections.set(candidate, "not_selected_brain_portfolio_capacity");
+          continue;
+        }
+        const sameSymbolSelected = selectedBrainCandidates.find((selected) => selected.signal.symbol === candidate.signal.symbol);
+        if (sameSymbolSelected) {
+          if (sameSymbolSelected.signal.side !== candidate.signal.side) {
+            brainRejections.set(candidate, "not_selected_brain_opposite_side_conflict");
+          } else {
+            const scoreDiff = Math.abs(sameSymbolSelected.signal.score - candidate.signal.score);
+            brainRejections.set(candidate, scoreDiff <= 5
+              ? "not_selected_brain_same_symbol_duplication"
+              : "not_selected_brain_redundancy");
+          }
+          continue;
+        }
+        selectedBrainCandidates.push(candidate);
+      }
+
+      finalSelectedCandidates = selectedBrainCandidates;
       cycleRankingAllocation = rankedForSelection.map((candidate, index) => ({
         symbol: candidate.signal.symbol,
         marketType: candidate.signal.marketType,
@@ -1913,42 +1998,91 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
       for (const [index, candidate] of rankedForSelection.entries()) {
         const rankingEntry = cycleRankingAllocation[index];
-        if (finalSelectedCandidates.length >= selectedCap) {
+        const selected = finalSelectedCandidates.some((selectedCandidate) =>
+          selectedCandidate.signal.symbol === candidate.signal.symbol
+          && selectedCandidate.signal.side === candidate.signal.side
+          && selectedCandidate.signal.score === candidate.signal.score
+        );
+        const engine = resolveCandidateEngineLabel(candidate, config);
+        const isEngineFinalist = finalistsByEngine.get(engine) === candidate;
+        if (!selected) {
           skippedCount += 1;
           if (rankingEntry) {
             rankingEntry.selected = false;
-            rankingEntry.rejectionReason = "not_selected_selected_set_cap";
+            rankingEntry.rejectionReason = brainRejections.get(candidate)
+              ?? (isEngineFinalist ? "not_selected_brain_engine_finalist_lower_priority" : "not_selected_portfolio_priority");
           }
           continue;
         }
-        finalSelectedCandidates.push(candidate);
         if (rankingEntry) {
           rankingEntry.selected = true;
-          rankingEntry.selectedReason = `selected rank=${rankingEntry.rank} tier=${candidate.signal.setupGrade} score=${candidate.signal.score.toFixed(2)} via_threshold_and_portfolio_fit`;
+          rankingEntry.selectedReason = `selected brain_admission engine=${engine} rank=${rankingEntry.rank} score=${candidate.signal.score.toFixed(2)}`;
           rankingEntry.rejectionReason = null;
         }
         selectedReasonBySymbol.set(
           candidate.signal.symbol,
-          `selected rank=${index + 1} tier=${candidate.signal.setupGrade} score=${candidate.signal.score.toFixed(2)} via_threshold_and_portfolio_fit`
+          `selected brain_admission engine=${engine} rank=${index + 1} score=${candidate.signal.score.toFixed(2)}`
         );
       }
-      const selectedSymbols = new Set(finalSelectedCandidates.map((entry) => entry.signal.symbol));
       for (const entry of cycleRankingAllocation) {
-        if (!entry.selected && !entry.rejectionReason) {
-          const higherSelectedCount = cycleRankingAllocation.filter((e) => e.rank < entry.rank && selectedSymbols.has(e.symbol)).length;
-          entry.rejectionReason = higherSelectedCount >= selectedCap ? "not_selected_selected_set_cap" : "not_selected_portfolio_priority";
-        }
-        if (!entry.selected && diversificationNotes.length > 0 && entry.rejectionReason === "not_selected_portfolio_priority") {
-          const group = entry.diversificationGroup;
-          const sameSideSelected = cycleRankingAllocation.some((e) => e.selected && e.side === entry.side && e.diversificationGroup === group);
-          if (sameSideSelected) {
-            entry.rejectionReason = "not_selected_diversification_preference";
-          }
-        }
+        if (!entry.selected && !entry.rejectionReason) entry.rejectionReason = "not_selected_portfolio_priority";
         if (entry.rejectionReason) {
           rejectionCounts[entry.rejectionReason] = (rejectionCounts[entry.rejectionReason] ?? 0) + 1;
         }
       }
+      console.log(JSON.stringify({
+        event: "brain_conflict_resolution",
+        cycleNumber,
+        selectedCount: finalSelectedCandidates.length,
+        availableSlots,
+        rejectedFinalists: engineFinalists
+          .map((entry) => ({ entry, reason: brainRejections.get(entry.candidate) ?? null }))
+          .filter((entry) => entry.reason !== null)
+          .map((entry) => ({
+            engine: entry.entry.engine,
+            symbol: entry.entry.candidate.signal.symbol,
+            side: entry.entry.candidate.signal.side,
+            score: entry.entry.candidate.signal.score,
+            reason: entry.reason
+          }))
+      }, null, 2));
+      console.log(JSON.stringify({
+        event: "brain_admission_decision",
+        cycleNumber,
+        selected: finalSelectedCandidates.map((entry) => ({
+          engine: resolveCandidateEngineLabel(entry, config),
+          symbol: entry.signal.symbol,
+          side: entry.signal.side,
+          score: entry.signal.score
+        }))
+      }, null, 2));
+      console.log(JSON.stringify({
+        event: "brain_selected_actionable_set",
+        cycleNumber,
+        selectedCount: finalSelectedCandidates.length,
+        selected: finalSelectedCandidates.map((entry) => ({
+          engine: resolveCandidateEngineLabel(entry, config),
+          symbol: entry.signal.symbol,
+          side: entry.signal.side,
+          score: entry.signal.score
+        }))
+      }, null, 2));
+      await prismaClient.runtimeEvent.create({
+        data: {
+          type: "brain_selected_actionable_set",
+          mode: "signal",
+          message: "Brain final selected actionable set",
+          payload: {
+            selected: finalSelectedCandidates.map((entry) => ({
+              engine: resolveCandidateEngineLabel(entry, config),
+              symbol: entry.signal.symbol,
+              side: entry.signal.side,
+              score: entry.signal.score
+            })),
+            availableSlots
+          }
+        }
+      });
     }
 
   }
