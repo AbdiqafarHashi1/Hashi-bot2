@@ -64,6 +64,8 @@ const envSchema = z.object({
   SIGNAL_ENABLE_CRYPTO: booleanFlagSchema.default(true),
   SIGNAL_ENABLE_FOREX: booleanFlagSchema.default(false),
   SIGNAL_FOREX_READINESS_ONLY: booleanFlagSchema.default(true),
+  SIGNAL_LIVE_PRELOAD_CANDLE_LIMIT: z.coerce.number().int().positive().default(320),
+  SIGNAL_MIN_DIRECTIONAL_CONTEXT_BARS: z.coerce.number().int().positive().default(250),
   SIGNAL_DATASET_MODE_ENABLED: booleanFlagSchema.default(false),
   SIGNAL_DATASET_SYMBOL_PATHS_JSON: jsonRecordSchema,
   SIGNAL_DATASET_WINDOW_OFFSET: z.coerce.number().int().min(0).default(0),

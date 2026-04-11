@@ -203,6 +203,20 @@ type SystemControlState = {
   allowedSymbols: string[];
 };
 type SignalTier = "A+" | "A" | "B";
+type SymbolAnalysisReadiness = {
+  symbol: string;
+  marketType: SymbolMetadata["marketType"];
+  transportReady: boolean;
+  preloadAttempted: boolean;
+  preloadSucceeded: boolean;
+  preloadFallbackUsed: boolean;
+  preloadSourceUsed?: string;
+  minRequired: Record<Timeframe, number>;
+  candleCount: Record<Timeframe, number>;
+  indicatorsComputable: boolean;
+  analysisReady: boolean;
+  blockedReason?: string;
+};
 type SignalRejectionReason =
   | "analysis_feed_unavailable"
   | "below_min_tier"
@@ -220,6 +234,12 @@ type SignalRejectionReason =
   | "not_selected_telegram_cap"
   | "forex_readiness_only_mode"
   | "no_message_payload";
+
+const timeframeToMinutes: Record<Timeframe, number> = {
+  "15m": 15,
+  "1h": 60,
+  "4h": 240
+};
 type ScoreComponentName = "trend" | "breakout" | "volatility" | "structure" | "entry";
 type TelegramDispatchResult = {
   messageNumber: number;
@@ -939,6 +959,73 @@ function priceForR(side: string, entry: number, riskDistance: number, rValue: nu
     : entry + riskDistance * rValue;
 }
 
+function minBarsForTimeframe(params: {
+  executionTimeframe: Timeframe;
+  targetTimeframe: Timeframe;
+  minExecutionBars: number;
+}) {
+  const execMinutes = timeframeToMinutes[params.executionTimeframe];
+  const targetMinutes = timeframeToMinutes[params.targetTimeframe];
+  const scaled = Math.ceil((params.minExecutionBars * execMinutes) / targetMinutes);
+  return Math.max(20, scaled);
+}
+
+function computeAnalysisReadiness(params: {
+  symbolContext: SymbolMetadata;
+  marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
+  transportReady: boolean;
+  minExecutionBars: number;
+}): SymbolAnalysisReadiness {
+  const { symbolContext, marketContext, transportReady, minExecutionBars } = params;
+  const minRequired: Record<Timeframe, number> = {
+    "15m": minBarsForTimeframe({
+      executionTimeframe: marketContext.executionTimeframe,
+      targetTimeframe: "15m",
+      minExecutionBars
+    }),
+    "1h": minBarsForTimeframe({
+      executionTimeframe: marketContext.executionTimeframe,
+      targetTimeframe: "1h",
+      minExecutionBars
+    }),
+    "4h": minBarsForTimeframe({
+      executionTimeframe: marketContext.executionTimeframe,
+      targetTimeframe: "4h",
+      minExecutionBars
+    })
+  };
+  const candleCount: Record<Timeframe, number> = {
+    "15m": marketContext.candles["15m"]?.length ?? 0,
+    "1h": marketContext.candles["1h"]?.length ?? 0,
+    "4h": marketContext.candles["4h"]?.length ?? 0
+  };
+  const indicatorsComputable = candleCount["15m"] >= 50 && candleCount["1h"] >= 20 && candleCount["4h"] >= 20;
+  const insufficient = (["15m", "1h", "4h"] as Timeframe[]).find((tf) => candleCount[tf] < minRequired[tf]);
+  const analysisReady = transportReady && indicatorsComputable && !insufficient;
+  const blockedReason = !transportReady
+    ? "transport_not_ready"
+    : insufficient
+      ? `insufficient_${insufficient}_candles`
+      : !indicatorsComputable
+        ? "insufficient_indicator_context"
+        : undefined;
+
+  return {
+    symbol: symbolContext.symbol,
+    marketType: symbolContext.marketType,
+    transportReady,
+    preloadAttempted: true,
+    preloadSucceeded: true,
+    preloadFallbackUsed: Boolean(marketContext.source?.fallbackUsed),
+    preloadSourceUsed: marketContext.source?.used,
+    minRequired,
+    candleCount,
+    indicatorsComputable,
+    analysisReady,
+    blockedReason
+  };
+}
+
 async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> {
   const cycleStartedAtMs = Date.now();
   const cycleStartedAtIso = new Date(cycleStartedAtMs).toISOString();
@@ -1243,6 +1330,98 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     )
   );
 
+  const minDirectionalContextBars = config.SIGNAL_MIN_DIRECTIONAL_CONTEXT_BARS;
+  const preloadCandleLimit = Math.max(config.SIGNAL_LIVE_PRELOAD_CANDLE_LIMIT, minDirectionalContextBars);
+  const cryptoTransportReady = cryptoReadiness.transportConnected;
+  const forexTransportReady = forexReadiness.transportConnected;
+  const preloadedContextBySymbol = new Map<string, Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>>();
+  const symbolReadiness: SymbolAnalysisReadiness[] = [];
+
+  console.log(
+    JSON.stringify(
+      {
+        event: "analysis_preload_started",
+        cycleNumber,
+        preloadCandleLimit,
+        minDirectionalContextBars,
+        symbols: runtimeSymbols.map((entry) => ({ symbol: entry.symbol, marketType: entry.marketType }))
+      },
+      null,
+      2
+    )
+  );
+
+  for (const symbolContext of runtimeSymbols) {
+    const transportReady = symbolContext.marketType === "crypto" ? cryptoTransportReady : forexTransportReady;
+    if (!transportReady) {
+      symbolReadiness.push({
+        symbol: symbolContext.symbol,
+        marketType: symbolContext.marketType,
+        transportReady: false,
+        preloadAttempted: false,
+        preloadSucceeded: false,
+        preloadFallbackUsed: false,
+        minRequired: { "15m": 0, "1h": 0, "4h": 0 },
+        candleCount: { "15m": 0, "1h": 0, "4h": 0 },
+        indicatorsComputable: false,
+        analysisReady: false,
+        blockedReason: "transport_not_ready"
+      });
+      continue;
+    }
+
+    try {
+      const marketContext = await marketTypeLoader.loadContext({
+        symbol: symbolContext.symbol,
+        marketType: symbolContext.marketType,
+        executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
+        htf1: config.DEFAULT_HTF_1,
+        htf2: config.DEFAULT_HTF_2,
+        candleLimit: preloadCandleLimit
+      });
+      preloadedContextBySymbol.set(symbolContext.symbol, marketContext);
+      symbolReadiness.push(
+        computeAnalysisReadiness({
+          symbolContext,
+          marketContext,
+          transportReady,
+          minExecutionBars: minDirectionalContextBars
+        })
+      );
+    } catch (error) {
+      symbolReadiness.push({
+        symbol: symbolContext.symbol,
+        marketType: symbolContext.marketType,
+        transportReady,
+        preloadAttempted: true,
+        preloadSucceeded: false,
+        preloadFallbackUsed: false,
+        minRequired: { "15m": 0, "1h": 0, "4h": 0 },
+        candleCount: { "15m": 0, "1h": 0, "4h": 0 },
+        indicatorsComputable: false,
+        analysisReady: false,
+        blockedReason: error instanceof Error ? error.message : "preload_failed"
+      });
+    }
+  }
+
+  const analysisReadySymbols = symbolReadiness.filter((entry) => entry.analysisReady).map((entry) => entry.symbol);
+  const warmupIncomplete = analysisReadySymbols.length === 0;
+  console.log(
+    JSON.stringify(
+      {
+        event: "analysis_preload_finished",
+        cycleNumber,
+        warmupIncomplete,
+        symbolsReadyCount: analysisReadySymbols.length,
+        symbolsTotal: symbolReadiness.length,
+        symbolReadiness
+      },
+      null,
+      2
+    )
+  );
+
   const cycleCandidates: Array<{
     symbolContext: SymbolMetadata;
     marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
@@ -1251,18 +1430,24 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     signal: BreakoutSignal;
   }> = [];
   const unavailableFeeds: Array<{ symbol: string; marketType: SymbolMetadata["marketType"]; reason: string }> = [];
+  if (warmupIncomplete) {
+    console.log(
+      JSON.stringify(
+        {
+          event: "evaluation_blocked_warmup_incomplete",
+          cycleNumber,
+          reason: "no_analysis_ready_symbols",
+          minDirectionalContextBars
+        },
+        null,
+        2
+      )
+    );
+  }
+
   for (const symbolContext of runtimeSymbols) {
-    let marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
-    try {
-      marketContext = await marketTypeLoader.loadContext({
-        symbol: symbolContext.symbol,
-        marketType: symbolContext.marketType,
-        executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
-        htf1: config.DEFAULT_HTF_1,
-        htf2: config.DEFAULT_HTF_2,
-        candleLimit: 200
-      });
-    } catch (error) {
+    const readiness = symbolReadiness.find((entry) => entry.symbol === symbolContext.symbol);
+    if (warmupIncomplete || !readiness?.analysisReady) {
       skippedCount += 1;
       rejectionCounts.analysis_feed_unavailable += 1;
       const summary = symbolSummaries.get(symbolContext.symbol);
@@ -1272,10 +1457,44 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       unavailableFeeds.push({
         symbol: symbolContext.symbol,
         marketType: symbolContext.marketType,
-        reason: error instanceof Error ? error.message : "analysis_feed_unavailable"
+        reason: warmupIncomplete
+          ? "worker_warmup_incomplete_no_analysis_ready_symbols"
+          : readiness?.blockedReason ?? "analysis_context_not_ready"
       });
       continue;
     }
+    const marketContext = preloadedContextBySymbol.get(symbolContext.symbol);
+    if (!marketContext) {
+      skippedCount += 1;
+      rejectionCounts.analysis_feed_unavailable += 1;
+      const summary = symbolSummaries.get(symbolContext.symbol);
+      if (summary) {
+        summary.skipReason = "analysis_feed_unavailable";
+      }
+      unavailableFeeds.push({
+        symbol: symbolContext.symbol,
+        marketType: symbolContext.marketType,
+        reason: "analysis_context_missing_after_preload"
+      });
+      continue;
+    }
+
+    console.log(
+      JSON.stringify(
+        {
+          event: "evaluation_allowed_after_warmup",
+          cycleNumber,
+          symbol: symbolContext.symbol,
+          marketType: symbolContext.marketType,
+          candleCount: readiness.candleCount,
+          minRequired: readiness.minRequired,
+          preloadFallbackUsed: readiness.preloadFallbackUsed,
+          preloadSourceUsed: readiness.preloadSourceUsed
+        },
+        null,
+        2
+      )
+    );
 
     const regime = classifyRegime(marketContext);
     const generatedSignals = await generateUnifiedSignalsForContext({
