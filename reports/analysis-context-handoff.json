@@ -1,0 +1,60 @@
+{
+  "generatedAt": "2026-04-11T03:31:15.291Z",
+  "questionMismatchObserved": false,
+  "mismatchCount": 0,
+  "rootCause": "analysis-ready contexts that generated zero signals were still classified as analysis_feed_unavailable/insufficient_candle_context_for_directional_candidate in worker flow",
+  "stalePath": "post-readiness branch treated generatedSignals.length === 0 as feed unavailable instead of real strategy outcome",
+  "postFixExpectedBehavior": "analysis-ready symbols always attempt directional generation; empty result is no_setup_found",
+  "analysisReadyCount": 0,
+  "symbolsEvaluated": 6,
+  "rows": [
+    {
+      "symbol": "ETHUSDT",
+      "marketType": "crypto",
+      "transportReady": false,
+      "analysisReady": false,
+      "candidateAttempted": false,
+      "reason": "transport_not_ready"
+    },
+    {
+      "symbol": "BTCUSDT",
+      "marketType": "crypto",
+      "transportReady": false,
+      "analysisReady": false,
+      "candidateAttempted": false,
+      "reason": "transport_not_ready"
+    },
+    {
+      "symbol": "SOLUSDT",
+      "marketType": "crypto",
+      "transportReady": false,
+      "analysisReady": false,
+      "candidateAttempted": false,
+      "reason": "transport_not_ready"
+    },
+    {
+      "symbol": "BNBUSDT",
+      "marketType": "crypto",
+      "transportReady": false,
+      "analysisReady": false,
+      "candidateAttempted": false,
+      "reason": "transport_not_ready"
+    },
+    {
+      "symbol": "XRPUSDT",
+      "marketType": "crypto",
+      "transportReady": false,
+      "analysisReady": false,
+      "candidateAttempted": false,
+      "reason": "transport_not_ready"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "marketType": "crypto",
+      "transportReady": false,
+      "analysisReady": false,
+      "candidateAttempted": false,
+      "reason": "transport_not_ready"
+    }
+  ]
+}
