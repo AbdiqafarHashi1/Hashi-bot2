@@ -1,0 +1,28 @@
+{
+  "generatedAt": "2026-04-11T01:00:04.868Z",
+  "phase": "E2Z-B",
+  "dataset": "data/ETHUSDT_15m.csv",
+  "lockedWinner": "expansion_reload_v2_wide",
+  "staticChecks": {
+    "engine2ConfigGatesPresent": true,
+    "lockedWinnerDefaulted": true,
+    "envSignalDefaultsSafeDisabled": true,
+    "envExampleDefaultsSafeDisabled": true,
+    "unifiedGeneratorHooked": true,
+    "selectorUsesGlobalSelectedSet": true,
+    "paperUsesGlobalSelectedSet": true,
+    "persistedStrategyFromSelectedSignal": true,
+    "noSilentEngine2Activation": true
+  },
+  "runtimeChecks": {
+    "breakoutCandidateCycles": 61,
+    "engine2CandidateCycles": 93,
+    "bothCandidateCycles": 1,
+    "unifiedCompetitionSamples": 1,
+    "engine2VariantLocked": true,
+    "engine2MetadataLocked": true
+  },
+  "verdict": "READY TO MERGE",
+  "explicitQuestion": "Is Engine 2 (expansion_reload_v2_wide) now safely integrated into the system, config-gated, and flowing through the same authoritative selector + signal + paper-trader truth path as Engine 1?",
+  "explicitAnswer": "Yes"
+}

@@ -19,6 +19,7 @@ export * from "./backtest/mock-breakout-strategy";
 export * from "./backtest/strategies/trend-pullback-continuation";
 export * from "./backtest/strategies/compression-breakout-retest";
 export * from "./backtest/strategies/swing-continuation";
+export * from "./backtest/strategies/expansion-reload-continuation";
 export * from "./backtest/strategies/combined-breakout-swing-arbitrated";
 export * from "./backtest/strategy-registry";
 export * from "./execution/breakout-signal-adapter";

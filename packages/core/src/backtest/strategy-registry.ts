@@ -5,10 +5,11 @@ import { CompressionBreakoutRetestStrategy, type BreakoutProfileConfig, BREAKOUT
 import { TrendPullbackContinuationStrategy, type TrendProfileConfig, TREND_MODULE_FAMILY } from "./strategies/trend-pullback-continuation";
 import { SwingContinuationStrategy, type SwingProfileConfig, SWING_MODULE_FAMILY } from "./strategies/swing-continuation";
 import { MeanReversionSnapbackStrategy, type MeanReversionProfileConfig, MEAN_REVERSION_MODULE_FAMILY } from "./strategies/mean-reversion-snapback";
+import { ExpansionReloadContinuationStrategy, type ExpansionReloadProfileConfig, CONTINUATION_MODULE_FAMILY } from "./strategies/expansion-reload-continuation";
 import { CombinedBreakoutSwingArbitratedStrategy } from "./strategies/combined-breakout-swing-arbitrated";
 
 export type StrategyRegistryEntry = {
-  id: "trend_pullback_strict" | "trend_pullback_balanced" | "swing_continuation_strict" | "swing_continuation_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced" | "combined_breakout_swing_arbitrated";
+  id: "trend_pullback_strict" | "trend_pullback_balanced" | "swing_continuation_strict" | "swing_continuation_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced" | "expansion_reload_balanced" | "expansion_reload_v2_balanced" | "expansion_reload_v2_early" | "expansion_reload_v2_wide" | "combined_breakout_swing_arbitrated";
   label: string;
   moduleFamily: string;
   profileType: StrategyProfileType;
@@ -24,6 +25,10 @@ export type ProductionActivationState = "active" | "silenced" | "research_only";
 
 export const PRODUCTION_STRATEGY_ACTIVATION: Record<StrategyRegistryEntry["id"], ProductionActivationState> = {
   combined_breakout_swing_arbitrated: "research_only",
+  expansion_reload_balanced: "research_only",
+  expansion_reload_v2_balanced: "research_only",
+  expansion_reload_v2_early: "research_only",
+  expansion_reload_v2_wide: "research_only",
   trend_pullback_strict: "silenced",
   trend_pullback_balanced: "silenced",
   swing_continuation_strict: "silenced",
@@ -91,6 +96,7 @@ const resolveBreakoutProfile = (cfg: BreakoutProfileConfig): BreakoutProfileConf
 const breakout = (cfg: BreakoutProfileConfig) => () => new CompressionBreakoutRetestStrategy(resolveBreakoutProfile(cfg));
 const swing = (cfg: SwingProfileConfig) => () => new SwingContinuationStrategy(cfg);
 const meanReversion = (cfg: MeanReversionProfileConfig) => () => new MeanReversionSnapbackStrategy(cfg);
+const expansionReload = (cfg: ExpansionReloadProfileConfig) => () => new ExpansionReloadContinuationStrategy(cfg);
 const combinedBreakoutSwing = () =>
   new CombinedBreakoutSwingArbitratedStrategy(
     new CompressionBreakoutRetestStrategy({
@@ -289,6 +295,182 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
       earlyExitMaxAdverseAtr: 0.92,
       earlyExitMinContinuationQuality: 0.3,
       earlyExitStrongBypassThreshold: 0.74
+    })
+  },
+  {
+    id: "expansion_reload_balanced",
+    label: "Expansion Reload Continuation (Balanced)",
+    moduleFamily: CONTINUATION_MODULE_FAMILY,
+    profileType: "balanced",
+    description: "Engine 2 continuation module: prior expansion -> controlled reset -> resumed reload trigger.",
+    regimeIntent: ["TREND_ORDERLY", "TREND_STRETCHED", "NEUTRAL"],
+    productionEligible: true,
+    experimental: true,
+    minScore: 60,
+    create: expansionReload({
+      strategyId: "expansion_reload_balanced",
+      profileType: "balanced",
+      engineFamily: "continuation",
+      setupVariant: "expansion_reload_v1",
+      minRegimeScore: 0.35,
+      minDirectionalAlignment: 0.34,
+      expansionLookbackBars: 44,
+      minExpansionLegAtr: 0.95,
+      minExpansionEfficiency: 0.45,
+      minExpansionBodyRatio: 0.38,
+      minExpansionRangeExpansion: 1.05,
+      minExpansionDisplacementAtr: 0.65,
+      minResetRetraceFraction: 0.18,
+      maxResetRetraceFraction: 0.78,
+      minResetDepthAtr: 0.25,
+      maxResetDriftBars: 20,
+      maxResetStructureBreakAtr: 0.55,
+      maxResetOverlapRatio: 0.92,
+      maxBarsSinceExpansion: 18,
+      minBarsAfterExpansion: 1,
+      minResumptionBodyRatio: 0.36,
+      minResumptionRangeAtr: 0.5,
+      minResumptionCloseOffsetAtr: 0,
+      minResumptionScore: 0.44,
+      maxLateExtensionAtr: 1.25,
+      maxStopDistanceAtr: 2.6,
+      minStopDistanceAtr: 0.3,
+      stopPadAtr: 0.18,
+      minRoomToTargetR: 1.5,
+      tp1RMultiple: 1.15,
+      tp2RMultiple: 3
+    })
+  },
+  {
+    id: "expansion_reload_v2_balanced",
+    label: "Expansion Reload Continuation V2 (Balanced)",
+    moduleFamily: CONTINUATION_MODULE_FAMILY,
+    profileType: "balanced",
+    description: "Moderate participation increase while preserving expansion-reset-reload structure.",
+    regimeIntent: ["TREND_ORDERLY", "TREND_STRETCHED", "NEUTRAL"],
+    productionEligible: true,
+    experimental: true,
+    minScore: 58,
+    create: expansionReload({
+      strategyId: "expansion_reload_v2_balanced",
+      profileType: "balanced",
+      engineFamily: "continuation",
+      setupVariant: "expansion_reload_v2_balanced",
+      minRegimeScore: 0.33,
+      minDirectionalAlignment: 0.32,
+      expansionLookbackBars: 48,
+      minExpansionLegAtr: 0.9,
+      minExpansionEfficiency: 0.43,
+      minExpansionBodyRatio: 0.36,
+      minExpansionRangeExpansion: 1.02,
+      minExpansionDisplacementAtr: 0.6,
+      minResetRetraceFraction: 0.16,
+      maxResetRetraceFraction: 0.82,
+      minResetDepthAtr: 0.22,
+      maxResetDriftBars: 22,
+      maxResetStructureBreakAtr: 0.6,
+      maxResetOverlapRatio: 0.94,
+      maxBarsSinceExpansion: 22,
+      minBarsAfterExpansion: 1,
+      minResumptionBodyRatio: 0.33,
+      minResumptionRangeAtr: 0.46,
+      minResumptionCloseOffsetAtr: -0.02,
+      minResumptionScore: 0.41,
+      maxLateExtensionAtr: 1.35,
+      maxStopDistanceAtr: 2.8,
+      minStopDistanceAtr: 0.28,
+      stopPadAtr: 0.17,
+      minRoomToTargetR: 1.4,
+      tp1RMultiple: 1.1,
+      tp2RMultiple: 2.9
+    })
+  },
+  {
+    id: "expansion_reload_v2_early",
+    label: "Expansion Reload Continuation V2 (Early)",
+    moduleFamily: CONTINUATION_MODULE_FAMILY,
+    profileType: "balanced",
+    description: "Earlier continuation trigger after qualified reset while retaining expansion and anti-noise controls.",
+    regimeIntent: ["TREND_ORDERLY", "TREND_STRETCHED", "NEUTRAL"],
+    productionEligible: true,
+    experimental: true,
+    minScore: 56,
+    create: expansionReload({
+      strategyId: "expansion_reload_v2_early",
+      profileType: "balanced",
+      engineFamily: "continuation",
+      setupVariant: "expansion_reload_v2_early",
+      minRegimeScore: 0.3,
+      minDirectionalAlignment: 0.3,
+      expansionLookbackBars: 52,
+      minExpansionLegAtr: 0.86,
+      minExpansionEfficiency: 0.41,
+      minExpansionBodyRatio: 0.34,
+      minExpansionRangeExpansion: 1.0,
+      minExpansionDisplacementAtr: 0.56,
+      minResetRetraceFraction: 0.14,
+      maxResetRetraceFraction: 0.84,
+      minResetDepthAtr: 0.2,
+      maxResetDriftBars: 24,
+      maxResetStructureBreakAtr: 0.62,
+      maxResetOverlapRatio: 0.95,
+      maxBarsSinceExpansion: 24,
+      minBarsAfterExpansion: 1,
+      minResumptionBodyRatio: 0.3,
+      minResumptionRangeAtr: 0.4,
+      minResumptionCloseOffsetAtr: -0.04,
+      minResumptionScore: 0.38,
+      maxLateExtensionAtr: 1.42,
+      maxStopDistanceAtr: 3.0,
+      minStopDistanceAtr: 0.25,
+      stopPadAtr: 0.16,
+      minRoomToTargetR: 1.3,
+      tp1RMultiple: 1.05,
+      tp2RMultiple: 2.8
+    })
+  },
+  {
+    id: "expansion_reload_v2_wide",
+    label: "Expansion Reload Continuation V2 (Wide)",
+    moduleFamily: CONTINUATION_MODULE_FAMILY,
+    profileType: "balanced",
+    description: "Wider reset/continuation tolerance for participation expansion without removing structural invalidation filters.",
+    regimeIntent: ["TREND_ORDERLY", "TREND_STRETCHED", "NEUTRAL"],
+    productionEligible: true,
+    experimental: true,
+    minScore: 54,
+    create: expansionReload({
+      strategyId: "expansion_reload_v2_wide",
+      profileType: "balanced",
+      engineFamily: "continuation",
+      setupVariant: "expansion_reload_v2_wide",
+      minRegimeScore: 0.28,
+      minDirectionalAlignment: 0.28,
+      expansionLookbackBars: 56,
+      minExpansionLegAtr: 0.82,
+      minExpansionEfficiency: 0.39,
+      minExpansionBodyRatio: 0.32,
+      minExpansionRangeExpansion: 0.98,
+      minExpansionDisplacementAtr: 0.5,
+      minResetRetraceFraction: 0.12,
+      maxResetRetraceFraction: 0.88,
+      minResetDepthAtr: 0.18,
+      maxResetDriftBars: 26,
+      maxResetStructureBreakAtr: 0.65,
+      maxResetOverlapRatio: 0.97,
+      maxBarsSinceExpansion: 26,
+      minBarsAfterExpansion: 1,
+      minResumptionBodyRatio: 0.27,
+      minResumptionRangeAtr: 0.36,
+      minResumptionCloseOffsetAtr: -0.06,
+      minResumptionScore: 0.35,
+      maxLateExtensionAtr: 1.5,
+      maxStopDistanceAtr: 3.1,
+      minStopDistanceAtr: 0.22,
+      stopPadAtr: 0.15,
+      minRoomToTargetR: 1.2,
+      tp1RMultiple: 1.0,
+      tp2RMultiple: 2.65
     })
   },
   {
