@@ -40,6 +40,10 @@ For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
 | BREAKOUT_OPERATING_MODE | OPTIONAL_RUNTIME_WITH_DEFAULT | `stable` | Yes | Breakout policy profile. |
 | BREAKOUT_EDGE_PROFILE | OPTIONAL_RUNTIME_WITH_DEFAULT | `reinforced` | Yes | Breakout strategy variant selection. |
 | ACTIVE_PRODUCTION_STRATEGY | OPTIONAL_RUNTIME_WITH_DEFAULT | `compression_breakout_balanced` | Yes | Active strategy id. |
+| SIGNAL_ENABLE_ENGINE2 | OPTIONAL_FEATURE_FLAG, SIGNAL_ONLY | `0` | Yes | Enables Engine 2 (`expansion_reload_v2_wide`) candidate participation in the unified selector path. |
+| ENGINE2_STRATEGY | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `expansion_reload_v2_wide` | Yes | Locked Engine 2 winner id for runtime integration. |
+| ENGINE2_MIN_SCORE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `54` | Yes | Engine 2-specific floor before a candidate enters signal-mode eligible set. |
+| ENGINE2_RANKING_BIAS | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0` | Yes | Small explicit additive score bias for Engine 2 ranking fairness tuning (default neutral). |
 | ENABLE_SWING_RESEARCH_MODE | OPTIONAL_FEATURE_FLAG | `0` | Yes | Enables broader strategy catalog in control-room/runtime reporting. |
 | WORKER_LOOP_INTERVAL_SECONDS | OPTIONAL_RUNTIME_WITH_DEFAULT | `15` | Yes | Worker cycle interval. |
 | MARKET_TYPE | OPTIONAL_RUNTIME_WITH_DEFAULT | `crypto` | Yes | Non-signal modes: chooses crypto vs forex symbol build path. |

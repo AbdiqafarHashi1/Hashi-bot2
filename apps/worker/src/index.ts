@@ -24,6 +24,7 @@ import {
   closePaperPosition,
   computeProtectedStopPrice,
   computePaperExecutionDecision,
+  buildBreakoutSignal,
   markOpenPaperPositions,
   partiallyClosePaperPosition,
   reconcilePersonalDemoState,
@@ -33,6 +34,7 @@ import {
   type PaperExecutionRejectionReason,
   type PaperPosition,
   getProductionStrategies,
+  getStrategyById,
   loadCandlesFromCsv,
   type Candle,
   type MarketDataProvider,
@@ -593,58 +595,88 @@ function operatorManualRecommendation(signal: Pick<BreakoutSignal, "setupGrade" 
   };
 }
 
-function buildDirectionalCandidateFromContext(params: {
+function resolveRuntimeStrategyIds(config: ReturnType<typeof getConfig>): string[] {
+  const ids = [config.ACTIVE_PRODUCTION_STRATEGY];
+  if (config.SIGNAL_ENABLE_ENGINE2) {
+    ids.push(config.ENGINE2_STRATEGY);
+  }
+  return Array.from(new Set(ids));
+}
+
+async function generateUnifiedSignalsForContext(params: {
   marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
-  strategyId: string;
-}): BreakoutSignal | null {
-  const { marketContext, strategyId } = params;
-  const candles = marketContext.candles[marketContext.executionTimeframe] ?? [];
-  if (candles.length < 25) return null;
+  regime: ReturnType<typeof classifyRegime>;
+  config: ReturnType<typeof getConfig>;
+  runtimeMode: RuntimeMode;
+}): Promise<BreakoutSignal[]> {
+  const { marketContext, regime, config, runtimeMode } = params;
+  const strategyIds = resolveRuntimeStrategyIds(config);
+  const signals: BreakoutSignal[] = [];
 
-  const recent = candles.slice(-21, -1);
-  if (recent.length < 10) return null;
-  const latest = marketContext.latestPrice;
-  const recentHigh = Math.max(...recent.map((c) => c.high));
-  const recentLow = Math.min(...recent.map((c) => c.low));
-  const avgRange = recent.reduce((sum, candle) => sum + Math.max(candle.high - candle.low, 0), 0) / recent.length;
-  const riskDistance = Math.max(avgRange * 0.8, latest * 0.0025);
-  if (!Number.isFinite(riskDistance) || riskDistance <= 0) return null;
+  for (const strategyId of strategyIds) {
+    const entry = getStrategyById(strategyId);
+    if (!entry) continue;
+    const strategy = entry.create();
+    const candidates = await strategy.generateCandidates(marketContext);
+    for (const candidate of candidates) {
+      const scored = await strategy.scoreCandidate(candidate, marketContext);
+      const validation = await strategy.validateCandidate(candidate, marketContext);
+      if (!validation.valid) continue;
+      const plan = await strategy.buildTradePlan(candidate, marketContext);
+      if (plan.side === "NONE") continue;
 
-  const longStrength = (latest - recentHigh) / riskDistance;
-  const shortStrength = (recentLow - latest) / riskDistance;
-  const side = longStrength >= shortStrength ? "LONG" : "SHORT";
+      const scoreWithBias = strategyId === config.ENGINE2_STRATEGY
+        ? boundedScore(scored.score + config.ENGINE2_RANKING_BIAS, 0, 100)
+        : scored.score;
+      const signal = buildBreakoutSignal(candidate, plan, { score: scoreWithBias, confidence: scored.confidence });
+      const quality = computeSignalQuality({ signal, regime, marketContext });
+      if (!quality.tier) continue;
+      if (strategyId === config.ENGINE2_STRATEGY && quality.signalScore < config.ENGINE2_MIN_SCORE) continue;
 
-  if (side === "LONG") {
-    return {
-      strategyId,
-      symbol: marketContext.symbol,
-      marketType: marketContext.marketType,
-      timeframe: marketContext.executionTimeframe,
-      side,
-      entryPrice: latest,
-      stopPrice: latest - riskDistance,
-      tp1: latest + riskDistance,
-      tp2: latest + (riskDistance * 2),
-      score: 70,
-      confidence: Math.min(0.95, Math.max(0.55, 0.6 + Math.max(longStrength, 0) * 0.08)),
-      setupGrade: "A"
-    };
+      const recommendation = operatorManualRecommendation({ setupGrade: quality.tier, score: quality.signalScore });
+      const engineFamily = typeof candidate.metadata?.engineFamily === "string"
+        ? candidate.metadata.engineFamily
+        : "breakout";
+      const setupVariant = typeof candidate.metadata?.setupVariant === "string"
+        ? candidate.metadata.setupVariant
+        : strategyId === config.ACTIVE_PRODUCTION_STRATEGY
+          ? "trusted_a_plus_breakout_core_v1"
+          : "expansion_reload_v2_wide";
+      signals.push({
+        ...signal,
+        score: quality.signalScore,
+        confidence: Math.max(scored.confidence, 0.55),
+        setupGrade: quality.tier,
+        metadata: {
+          ...(candidate.metadata ?? {}),
+          previewOnly: !(runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT),
+          strategyBackbone: strategyId === config.ACTIVE_PRODUCTION_STRATEGY
+            ? "trusted_a_plus_breakout_core"
+            : "engine2_expansion_reload_continuation_locked",
+          engineFamily,
+          setupVariant,
+          strategyId,
+          feedActionability: marketContext.marketType === "crypto"
+            ? "live_actionable"
+            : config.SIGNAL_ENABLE_FOREX
+              ? "live_actionable"
+              : "readiness_only",
+          signalScore: quality.signalScore,
+          tier: quality.tier,
+          scoring: quality.components,
+          ...recommendation,
+          rationale: [
+            ...quality.reasons,
+            `regime=${regime.regime}`,
+            `symbol=${marketContext.symbol}`,
+            `strategy=${strategyId}`
+          ]
+        }
+      });
+    }
   }
 
-  return {
-    strategyId,
-    symbol: marketContext.symbol,
-    marketType: marketContext.marketType,
-    timeframe: marketContext.executionTimeframe,
-    side,
-    entryPrice: latest,
-    stopPrice: latest + riskDistance,
-    tp1: latest - riskDistance,
-    tp2: latest - (riskDistance * 2),
-    score: 70,
-    confidence: Math.min(0.95, Math.max(0.55, 0.6 + Math.max(shortStrength, 0) * 0.08)),
-    setupGrade: "A"
-  };
+  return signals;
 }
 
 async function sendTelegramMessage(params: {
@@ -1246,11 +1278,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
 
     const regime = classifyRegime(marketContext);
-    const seedSignal = buildDirectionalCandidateFromContext({
+    const generatedSignals = await generateUnifiedSignalsForContext({
       marketContext,
-      strategyId: config.ACTIVE_PRODUCTION_STRATEGY
+      regime,
+      config,
+      runtimeMode
     });
-    if (!seedSignal) {
+    if (generatedSignals.length === 0) {
       skippedCount += 1;
       rejectionCounts.analysis_feed_unavailable += 1;
       const summary = symbolSummaries.get(symbolContext.symbol);
@@ -1265,64 +1299,21 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       });
       continue;
     }
-    const quality = computeSignalQuality({
-      signal: seedSignal,
-      regime,
-      marketContext
-    });
-    if (!quality.tier) {
-      skippedCount += 1;
-      rejectionCounts.below_min_tier += 1;
-      const summary = symbolSummaries.get(symbolContext.symbol);
-      if (summary) {
-        summary.candidateFound = false;
-        summary.skipReason = "below_min_tier";
-      }
-      continue;
-    }
     const summary = symbolSummaries.get(symbolContext.symbol);
     if (summary) {
       summary.candidateFound = true;
       summary.skipReason = null;
     }
 
-    cycleCandidates.push({
-      symbolContext,
-      marketContext,
-      regime,
-      candidateCount: 1,
-      signal: (() => {
-        const scoredSignal: BreakoutSignal = {
-          ...seedSignal,
-          score: quality.signalScore,
-          confidence: 0.7,
-          setupGrade: quality.tier
-        };
-        const recommendation = operatorManualRecommendation(scoredSignal);
-        return {
-          ...scoredSignal,
-          metadata: {
-            previewOnly: !(runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT),
-            strategyBackbone: "trusted_a_plus_breakout_core",
-            setupVariant: "trusted_a_plus_breakout_core_v1",
-            feedActionability: symbolContext.marketType === "crypto"
-              ? "live_actionable"
-              : config.SIGNAL_ENABLE_FOREX
-                ? "live_actionable"
-                : "readiness_only",
-            signalScore: quality.signalScore,
-            tier: quality.tier,
-            scoring: quality.components,
-            ...recommendation,
-            rationale: [
-              ...quality.reasons,
-              `regime=${regime.regime}`,
-              `symbol=${marketContext.symbol}`
-            ]
-          }
-        };
-      })()
-    });
+    for (const signal of generatedSignals) {
+      cycleCandidates.push({
+        symbolContext,
+        marketContext,
+        regime,
+        candidateCount: generatedSignals.length,
+        signal
+      });
+    }
   }
   candidateCount = cycleCandidates.length;
 
@@ -1383,9 +1374,10 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       signal_skipped_symbol_cooldown: new Set<string>()
     };
     const eligibleCandidates: typeof cycleCandidates = [];
+    const rankedCycleCandidates = [...cycleCandidates].sort((a, b) => b.signal.score - a.signal.score);
     const currentOpenTradeCount = openSignalTrades.length;
 
-    for (const candidate of cycleCandidates) {
+    for (const candidate of rankedCycleCandidates) {
       const symbol = candidate.signal.symbol;
       if (seenSymbols.has(symbol)) {
         skippedCount += 1;
@@ -1658,7 +1650,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             tp2: entry.signal.tp2,
             score: entry.signal.score,
             confidence: entry.signal.confidence,
-            strategy: config.ACTIVE_PRODUCTION_STRATEGY,
+            strategy: entry.signal.strategyId,
             timeframe: entry.signal.timeframe
           }
         })
@@ -2754,6 +2746,12 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         mode: runtimeMode,
         activeProductionStrategyIds: ACTIVE_PRODUCTION_STRATEGY_IDS,
         selectedActiveStrategy: config.ACTIVE_PRODUCTION_STRATEGY,
+        engine2: {
+          enabled: config.SIGNAL_ENABLE_ENGINE2,
+          lockedWinner: config.ENGINE2_STRATEGY,
+          minScore: config.ENGINE2_MIN_SCORE,
+          rankingBias: config.ENGINE2_RANKING_BIAS
+        },
         swingResearchModeEnabled: config.ENABLE_SWING_RESEARCH_MODE,
         productionStrategies: productionStrategies.map((entry: { id: string }) => entry.id),
         governanceDefaults: LOCKED_MODE_GOVERNANCE_DEFAULTS,
