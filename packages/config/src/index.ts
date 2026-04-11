@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Timeframe } from "@hashi/core";
 
 const providerSchema = z.enum(["binance", "bybit"]);
-const timeframeSchema = z.enum(["15m", "1h", "4h"] satisfies [Timeframe, ...Timeframe[]]);
+const timeframeSchema = z.enum(["5m", "15m", "1h", "4h"] satisfies [Timeframe, ...Timeframe[]]);
 const breakoutOperatingModeSchema = z.enum(["stable", "growth", "bounded_aggression"]);
 const executionModeSchema = z.enum(["signal_only", "live_personal", "live_prop"]);
 const marketTypeSchema = z.enum(["crypto", "forex"]);
@@ -105,6 +105,10 @@ const envSchema = z.object({
   ENGINE2_STRATEGY: z.enum(["expansion_reload_v2_wide"]).default("expansion_reload_v2_wide"),
   ENGINE2_MIN_SCORE: z.coerce.number().min(0).max(100).default(54),
   ENGINE2_RANKING_BIAS: z.coerce.number().min(-20).max(20).default(0),
+  SIGNAL_ENABLE_ENGINE3: booleanFlagSchema.default(false),
+  ENGINE3_STRATEGY: z.enum(["continuation_reclaim_5m_v1"]).default("continuation_reclaim_5m_v1"),
+  ENGINE3_MIN_SCORE: z.coerce.number().min(0).max(100).default(52),
+  ENGINE3_RANKING_BIAS: z.coerce.number().min(-20).max(20).default(0),
   ENABLE_SWING_RESEARCH_MODE: booleanFlagSchema.default(false),
   BREAKOUT_OPERATING_MODE: breakoutOperatingModeSchema.default("stable"),
   RISK_MODE: z.enum(["balanced", "aggressive"]).default("balanced"),

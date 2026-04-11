@@ -1,0 +1,35 @@
+{
+  "phase": "E3G",
+  "runtimeEligibility": {
+    "strategyFoundInRegistry": true,
+    "productionActivationState": "silenced_runtime_eligible",
+    "envGatePresent": true
+  },
+  "contextPlumbing": {
+    "timeframeSupportIncludes5m": true,
+    "workerLoadsDedicatedEngine3Context": true,
+    "engine3Context": {
+      "executionTimeframe": "5m",
+      "biasTimeframe": "15m",
+      "secondaryTimeframe": "1h"
+    }
+  },
+  "unifiedTruthPath": {
+    "unifiedCandidatePoolUsed": true,
+    "selectorOwnsFinalActionableSet": true,
+    "selectedSetDrivesSignalAndPaper": true,
+    "bypassPathDetected": false
+  },
+  "attribution": {
+    "engine3CandidateGeneratedInProbe": true,
+    "engineFamily": "mtf_continuation",
+    "setupVariant": "continuation_reclaim_5m_v1",
+    "executionTimeframe": "5m",
+    "biasTimeframe": "15m"
+  },
+  "answers": {
+    "integratedSamePathAsEngine2WithoutBypass": true,
+    "readyForCombinedEngineTest": true
+  },
+  "recommendation": "READY FOR COMBINED TEST"
+}

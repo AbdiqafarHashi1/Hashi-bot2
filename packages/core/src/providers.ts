@@ -2,6 +2,7 @@ import type { Candle, Timeframe } from "./domains";
 import type { MarketDataProvider } from "./provider";
 
 const timeframeMap: Record<Timeframe, { binance: string; bybit: string }> = {
+  "5m": { binance: "5m", bybit: "5" },
   "15m": { binance: "15m", bybit: "15" },
   "1h": { binance: "1h", bybit: "60" },
   "4h": { binance: "4h", bybit: "240" }

@@ -1,4 +1,4 @@
-export type Timeframe = "15m" | "1h" | "4h";
+export type Timeframe = "5m" | "15m" | "1h" | "4h";
 
 export type Symbol = string;
 export type MarketType = "crypto" | "forex";

@@ -7,9 +7,10 @@ import { SwingContinuationStrategy, type SwingProfileConfig, SWING_MODULE_FAMILY
 import { MeanReversionSnapbackStrategy, type MeanReversionProfileConfig, MEAN_REVERSION_MODULE_FAMILY } from "./strategies/mean-reversion-snapback";
 import { ExpansionReloadContinuationStrategy, type ExpansionReloadProfileConfig, CONTINUATION_MODULE_FAMILY } from "./strategies/expansion-reload-continuation";
 import { CombinedBreakoutSwingArbitratedStrategy } from "./strategies/combined-breakout-swing-arbitrated";
+import { CONTINUATION_RECLAIM_5M_DEFAULT, MtfContinuation5mStrategy, MTF_CONTINUATION_MODULE_FAMILY } from "./strategies/mtf-continuation-5m";
 
 export type StrategyRegistryEntry = {
-  id: "trend_pullback_strict" | "trend_pullback_balanced" | "swing_continuation_strict" | "swing_continuation_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced" | "expansion_reload_balanced" | "expansion_reload_v2_balanced" | "expansion_reload_v2_early" | "expansion_reload_v2_wide" | "combined_breakout_swing_arbitrated";
+  id: "trend_pullback_strict" | "trend_pullback_balanced" | "swing_continuation_strict" | "swing_continuation_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced" | "expansion_reload_balanced" | "expansion_reload_v2_balanced" | "expansion_reload_v2_early" | "expansion_reload_v2_wide" | "continuation_reclaim_5m_v1" | "combined_breakout_swing_arbitrated";
   label: string;
   moduleFamily: string;
   profileType: StrategyProfileType;
@@ -36,7 +37,8 @@ export const PRODUCTION_STRATEGY_ACTIVATION: Record<StrategyRegistryEntry["id"],
   compression_breakout_strict: "active",
   compression_breakout_balanced: "active",
   mean_reversion_strict: "silenced",
-  mean_reversion_balanced: "silenced"
+  mean_reversion_balanced: "silenced",
+  continuation_reclaim_5m_v1: "silenced"
 };
 
 export const ACTIVE_PRODUCTION_STRATEGY_IDS = (Object.entries(PRODUCTION_STRATEGY_ACTIVATION)
@@ -172,6 +174,18 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
     experimental: true,
     minScore: 58,
     create: combinedBreakoutSwing
+  },
+  {
+    id: "continuation_reclaim_5m_v1",
+    label: "MTF Continuation Reclaim 5m (Cadence)",
+    moduleFamily: MTF_CONTINUATION_MODULE_FAMILY,
+    profileType: "balanced",
+    description: "15m directional bias with 5m continuation/reclaim participation paths.",
+    regimeIntent: ["TREND_ORDERLY", "TREND_STRETCHED", "NEUTRAL"],
+    productionEligible: false,
+    experimental: true,
+    minScore: 52,
+    create: () => new MtfContinuation5mStrategy(CONTINUATION_RECLAIM_5M_DEFAULT)
   },
   {
     id: "trend_pullback_strict",

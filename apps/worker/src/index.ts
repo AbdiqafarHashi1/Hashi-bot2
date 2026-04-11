@@ -236,6 +236,7 @@ type SignalRejectionReason =
   | "no_message_payload";
 
 const timeframeToMinutes: Record<Timeframe, number> = {
+  "5m": 5,
   "15m": 15,
   "1h": 60,
   "4h": 240
@@ -624,6 +625,9 @@ function resolveRuntimeStrategyIds(config: ReturnType<typeof getConfig>): string
   if (config.SIGNAL_ENABLE_ENGINE2) {
     ids.push(config.ENGINE2_STRATEGY);
   }
+  if (config.SIGNAL_ENABLE_ENGINE3) {
+    ids.push(config.ENGINE3_STRATEGY);
+  }
   return Array.from(new Set(ids));
 }
 
@@ -632,6 +636,7 @@ async function generateUnifiedSignalsForContext(params: {
   regime: ReturnType<typeof classifyRegime>;
   config: ReturnType<typeof getConfig>;
   runtimeMode: RuntimeMode;
+  marketTypeLoader: MarketTypeAwareAnalysisLoader;
 }): Promise<{
   signals: BreakoutSignal[];
   evaluation: {
@@ -641,7 +646,7 @@ async function generateUnifiedSignalsForContext(params: {
     postValidationCount: number;
   };
 }> {
-  const { marketContext, regime, config, runtimeMode } = params;
+  const { marketContext, regime, config, runtimeMode, marketTypeLoader } = params;
   const strategyIds = resolveRuntimeStrategyIds(config);
   const signals: BreakoutSignal[] = [];
   let rawCandidateCount = 0;
@@ -649,27 +654,44 @@ async function generateUnifiedSignalsForContext(params: {
   const strategyAttempted: string[] = [];
 
   for (const strategyId of strategyIds) {
+    if (strategyId === config.ENGINE3_STRATEGY && marketContext.marketType !== "crypto") {
+      continue;
+    }
+    const strategyContext = strategyId === config.ENGINE3_STRATEGY
+      ? await marketTypeLoader.loadContext({
+          symbol: marketContext.symbol,
+          marketType: marketContext.marketType,
+          executionTimeframe: "5m",
+          htf1: "15m",
+          htf2: "1h",
+          candleLimit: config.CANDLE_LIMIT
+        })
+      : marketContext;
     const entry = getStrategyById(strategyId);
     if (!entry) continue;
     strategyAttempted.push(strategyId);
     const strategy = entry.create();
-    const candidates = await strategy.generateCandidates(marketContext);
+    const candidates = await strategy.generateCandidates(strategyContext);
     rawCandidateCount += candidates.length;
     for (const candidate of candidates) {
-      const scored = await strategy.scoreCandidate(candidate, marketContext);
-      const validation = await strategy.validateCandidate(candidate, marketContext);
+      const scored = await strategy.scoreCandidate(candidate, strategyContext);
+      const validation = await strategy.validateCandidate(candidate, strategyContext);
       if (!validation.valid) continue;
       postValidationCount += 1;
-      const plan = await strategy.buildTradePlan(candidate, marketContext);
+      const plan = await strategy.buildTradePlan(candidate, strategyContext);
       if (plan.side === "NONE") continue;
 
       const scoreWithBias = strategyId === config.ENGINE2_STRATEGY
         ? boundedScore(scored.score + config.ENGINE2_RANKING_BIAS, 0, 100)
+        : strategyId === config.ENGINE3_STRATEGY
+          ? boundedScore(scored.score + config.ENGINE3_RANKING_BIAS, 0, 100)
         : scored.score;
       const signal = buildBreakoutSignal(candidate, plan, { score: scoreWithBias, confidence: scored.confidence });
-      const quality = computeSignalQuality({ signal, regime, marketContext });
+      const strategyRegime = classifyRegime(strategyContext);
+      const quality = computeSignalQuality({ signal, regime: strategyRegime, marketContext: strategyContext });
       if (!quality.tier) continue;
       if (strategyId === config.ENGINE2_STRATEGY && quality.signalScore < config.ENGINE2_MIN_SCORE) continue;
+      if (strategyId === config.ENGINE3_STRATEGY && quality.signalScore < config.ENGINE3_MIN_SCORE) continue;
 
       const recommendation = operatorManualRecommendation({ setupGrade: quality.tier, score: quality.signalScore });
       const engineFamily = typeof candidate.metadata?.engineFamily === "string"
@@ -679,7 +701,9 @@ async function generateUnifiedSignalsForContext(params: {
         ? candidate.metadata.setupVariant
         : strategyId === config.ACTIVE_PRODUCTION_STRATEGY
           ? "trusted_a_plus_breakout_core_v1"
-          : "expansion_reload_v2_wide";
+          : strategyId === config.ENGINE2_STRATEGY
+            ? "expansion_reload_v2_wide"
+            : "continuation_reclaim_5m_v1";
       signals.push({
         ...signal,
         score: quality.signalScore,
@@ -690,7 +714,9 @@ async function generateUnifiedSignalsForContext(params: {
           previewOnly: !(runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT),
           strategyBackbone: strategyId === config.ACTIVE_PRODUCTION_STRATEGY
             ? "trusted_a_plus_breakout_core"
-            : "engine2_expansion_reload_continuation_locked",
+            : strategyId === config.ENGINE2_STRATEGY
+              ? "engine2_expansion_reload_continuation_locked"
+              : "engine3_mtf_continuation_cadence",
           engineFamily,
           setupVariant,
           strategyId,
@@ -1004,6 +1030,11 @@ function computeAnalysisReadiness(params: {
 }): SymbolAnalysisReadiness {
   const { symbolContext, marketContext, transportReady, minExecutionBars } = params;
   const minRequired: Record<Timeframe, number> = {
+    "5m": minBarsForTimeframe({
+      executionTimeframe: marketContext.executionTimeframe,
+      targetTimeframe: "5m",
+      minExecutionBars
+    }),
     "15m": minBarsForTimeframe({
       executionTimeframe: marketContext.executionTimeframe,
       targetTimeframe: "15m",
@@ -1021,6 +1052,7 @@ function computeAnalysisReadiness(params: {
     })
   };
   const candleCount: Record<Timeframe, number> = {
+    "5m": marketContext.candles["5m"]?.length ?? 0,
     "15m": marketContext.candles["15m"]?.length ?? 0,
     "1h": marketContext.candles["1h"]?.length ?? 0,
     "4h": marketContext.candles["4h"]?.length ?? 0
@@ -1387,8 +1419,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         preloadAttempted: false,
         preloadSucceeded: false,
         preloadFallbackUsed: false,
-        minRequired: { "15m": 0, "1h": 0, "4h": 0 },
-        candleCount: { "15m": 0, "1h": 0, "4h": 0 },
+        minRequired: { "5m": 0, "15m": 0, "1h": 0, "4h": 0 },
+        candleCount: { "5m": 0, "15m": 0, "1h": 0, "4h": 0 },
         indicatorsComputable: false,
         analysisReady: false,
         blockedReason: "transport_not_ready"
@@ -1416,6 +1448,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             marketType: symbolContext.marketType,
             contextKey: preloadKey,
             candleCount: {
+              "5m": marketContext.candles["5m"]?.length ?? 0,
               "15m": marketContext.candles["15m"].length,
               "1h": marketContext.candles["1h"].length,
               "4h": marketContext.candles["4h"].length
@@ -1441,8 +1474,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         preloadAttempted: true,
         preloadSucceeded: false,
         preloadFallbackUsed: false,
-        minRequired: { "15m": 0, "1h": 0, "4h": 0 },
-        candleCount: { "15m": 0, "1h": 0, "4h": 0 },
+        minRequired: { "5m": 0, "15m": 0, "1h": 0, "4h": 0 },
+        candleCount: { "5m": 0, "15m": 0, "1h": 0, "4h": 0 },
         indicatorsComputable: false,
         analysisReady: false,
         blockedReason: error instanceof Error ? error.message : "preload_failed"
@@ -1563,7 +1596,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       marketContext,
       regime,
       config,
-      runtimeMode
+      runtimeMode,
+      marketTypeLoader
     });
     console.log(
       JSON.stringify(
