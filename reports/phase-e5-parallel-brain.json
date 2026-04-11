@@ -1,0 +1,70 @@
+{
+  "generatedAt": "2026-04-11T09:13:29.365Z",
+  "structural": {
+    "parallelEngineEvaluation": true,
+    "perEngineFinalistExtraction": true,
+    "brainAdmissionLayer": true,
+    "selectedActionableStillAuthoritative": true,
+    "noBypassDetected": true
+  },
+  "behavioral": {
+    "onlyEngine1Admitted": 2,
+    "onlyEngine2Admitted": 2,
+    "onlyEngine3Admitted": 1,
+    "engine1And2Admitted": 2,
+    "engine1And3Admitted": 1,
+    "engine2And3Admitted": 1,
+    "all3Admitted": 1,
+    "conflictLosses": 1,
+    "capacityLosses": 1,
+    "redundancyLosses": 1
+  },
+  "contributionTruth": {
+    "engine1": {
+      "candidates": 6,
+      "finalists": 6,
+      "admitted": 6,
+      "rejectedByBrain": 0,
+      "rejectionReasons": {}
+    },
+    "engine2": {
+      "candidates": 6,
+      "finalists": 6,
+      "admitted": 6,
+      "rejectedByBrain": 0,
+      "rejectionReasons": {}
+    },
+    "engine3": {
+      "candidates": 7,
+      "finalists": 7,
+      "admitted": 4,
+      "rejectedByBrain": 3,
+      "rejectionReasons": {
+        "not_selected_brain_opposite_side_conflict": 1,
+        "not_selected_brain_same_symbol_duplication": 1,
+        "not_selected_brain_portfolio_capacity": 1
+      }
+    }
+  },
+  "modeComparison": {
+    "modeA_engine1_only": {
+      "admitted": 6
+    },
+    "modeB_engine1_engine2": {
+      "admitted": 12
+    },
+    "modeC_old_suppression_e1_e2_e3": {
+      "admitted": 10,
+      "engine3Admitted": 1
+    },
+    "modeD_new_brain_e1_e2_e3": {
+      "admitted": 16,
+      "engine3Admitted": 4
+    }
+  },
+  "answers": {
+    "parallelWithoutPrematureSuppression": true,
+    "multipleEnginesCanPassWhenNonConflicting": true
+  },
+  "recommendation": "READY FOR LIVE/PAPER MULTI-ENGINE BRAIN TEST"
+}
