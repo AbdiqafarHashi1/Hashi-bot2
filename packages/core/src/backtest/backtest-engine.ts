@@ -305,7 +305,7 @@ function buildMarketContextFromBuffers(
       "15m": c15m,
       "1h": c1h,
       "4h": c4h
-    }
+    } as Record<Timeframe, Candle[]>
   };
 }
 

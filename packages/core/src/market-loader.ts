@@ -1,4 +1,4 @@
-import type { MarketContext, MarketType, Symbol, Timeframe } from "./domains";
+import type { Candle, MarketContext, MarketType, Symbol, Timeframe } from "./domains";
 import type { MarketDataProvider } from "./provider";
 
 export type MarketLoaderInput = {
@@ -54,7 +54,7 @@ export class MarketContextLoader {
         "15m": c15m,
         "1h": c1h,
         "4h": c4h
-      }
+      } as Record<Timeframe, Candle[]>
     };
   }
 }

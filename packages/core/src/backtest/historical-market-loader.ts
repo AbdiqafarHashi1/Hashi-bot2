@@ -1,6 +1,6 @@
 import type { Candle, MarketContext, MarketType, Timeframe } from "../domains";
 
-const factorByTimeframe: Record<Timeframe, number> = {
+const factorByTimeframe: Record<Exclude<Timeframe, "5m">, number> = {
   "15m": 1,
   "1h": 4,
   "4h": 16
@@ -61,6 +61,6 @@ export function buildHistoricalMarketContext(
       "15m": c15m,
       "1h": c1h,
       "4h": c4h
-    }
+    } as Record<Timeframe, Candle[]>
   };
 }
