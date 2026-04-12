@@ -34,4 +34,5 @@ export * from "./runtime/breakout-multi-symbol-runtime";
 export * from "./live-analysis/contracts";
 export * from "./live-analysis/crypto-binance-live-adapter";
 export * from "./live-analysis/forex-mt5-live-adapter";
+export * from "./live-analysis/forex-public-live-adapter";
 export * from "./execution/paper-account";
