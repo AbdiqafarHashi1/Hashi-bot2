@@ -645,6 +645,9 @@ function operatorManualRecommendation(signal: Pick<BreakoutSignal, "setupGrade" 
 }
 
 function resolveRuntimeStrategyIds(config: ReturnType<typeof getConfig>): string[] {
+  if (config.MULTI_ENGINE_EXECUTION_MODE === "independent") {
+    return Array.from(new Set([config.ACTIVE_PRODUCTION_STRATEGY, config.ENGINE2_STRATEGY, config.ENGINE3_STRATEGY]));
+  }
   const ids = [config.ACTIVE_PRODUCTION_STRATEGY];
   if (config.SIGNAL_ENABLE_ENGINE2) {
     ids.push(config.ENGINE2_STRATEGY);
@@ -1679,6 +1682,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
   }
   candidateCount = cycleCandidates.length;
+  const independentMultiEngineMode = config.MULTI_ENGINE_EXECUTION_MODE === "independent";
 
   const latestPriceBySymbol = new Map<string, number>();
   for (const candidate of cycleCandidates) {
@@ -1695,7 +1699,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const effectiveMinScore = runtimeMode === "signal"
     ? Math.max(config.SIGNAL_MIN_SCORE, minTierScore, 85)
     : Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
-  if (prismaClient && runtimeMode === "signal" && cycleCandidates.length > 0) {
+  if (!independentMultiEngineMode && prismaClient && runtimeMode === "signal" && cycleCandidates.length > 0) {
     const candidateSymbols = Array.from(new Set(cycleCandidates.map((entry) => entry.signal.symbol)));
     const dedupeWindowStart = new Date(Date.now() - 60_000);
     const cooldownWindowStart = new Date(Date.now() - config.SIGNAL_SYMBOL_COOLDOWN_MINUTES * 60_000);
@@ -2086,7 +2090,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
 
   }
-  if (runtimeMode === "signal") {
+  if (runtimeMode === "signal" && !independentMultiEngineMode) {
     for (const candidate of cycleCandidates) {
       if (!finalSelectedCandidates.some((selected) => selected.signal.symbol === candidate.signal.symbol)) {
         rejectionCounts.not_actionable_not_in_final_selected_set += 1;
@@ -2094,6 +2098,37 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
   } else {
     finalSelectedCandidates = cycleCandidates;
+  }
+
+  if (independentMultiEngineMode) {
+    cycleRankingAllocation = finalSelectedCandidates.map((candidate, index) => ({
+      symbol: candidate.signal.symbol,
+      marketType: candidate.signal.marketType,
+      side: candidate.signal.side,
+      score: candidate.signal.score,
+      rank: index + 1,
+      tier: candidate.signal.setupGrade,
+      setupVariant: typeof candidate.signal.metadata?.setupVariant === "string"
+        ? candidate.signal.metadata.setupVariant
+        : "trusted_a_plus_breakout_core_v1",
+      selected: true,
+      diversificationGroup: candidate.signal.marketType === "crypto" ? cryptoDiversificationGroup(candidate.signal.symbol) : "other",
+      riskRecommendationLabel: typeof candidate.signal.metadata?.riskRecommendationLabel === "string"
+        ? candidate.signal.metadata.riskRecommendationLabel
+        : "standard_a_plus_core",
+      suggestedManualRiskPctRange: typeof candidate.signal.metadata?.suggestedManualRiskPctRange === "string"
+        ? candidate.signal.metadata.suggestedManualRiskPctRange
+        : "0.50%–0.75%",
+      suggestedManualLeverageRange: typeof candidate.signal.metadata?.suggestedManualLeverageRange === "string"
+        ? candidate.signal.metadata.suggestedManualLeverageRange
+        : "3x–5x",
+      selectedReason: "selected_independent_multi_engine_mode",
+      rejectionReason: null
+    }));
+    for (const candidate of finalSelectedCandidates) {
+      const engineLabel = resolveCandidateEngineLabel(candidate, config).toUpperCase();
+      console.log(`[${engineLabel}] SIGNAL_EMITTED ${candidate.signal.symbol} ${candidate.signal.side} score=${candidate.signal.score.toFixed(0)}`);
+    }
   }
 
   if (prismaClient) {
@@ -2733,7 +2768,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       : config.PORTFOLIO_PER_SYMBOL_RISK_CAP_PERSONAL_PCT
   });
 
-  const signalModeOutput = runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT
+  const signalModeOutput = runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT && !independentMultiEngineMode
       ? buildSignalModePayload({
         rankedSetups: allocation.rankedSetups,
         decisions: allocation.decisions,
