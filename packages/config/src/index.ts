@@ -11,6 +11,7 @@ const signalTierSchema = z.enum(["A+", "A", "B"]);
 const signalTp1ProtectModeSchema = z.enum(["break_even", "offset_r"]);
 const signalRestartPolicySchema = z.enum(["resume_persisted", "reset_signal_mode_state_on_boot"]);
 const execDelayModeSchema = z.enum(["none", "next_candle"]);
+const multiEngineExecutionModeSchema = z.enum(["independent", "legacy"]);
 const booleanFlagSchema = z
   .union([z.literal("1"), z.literal("0"), z.literal("true"), z.literal("false"), z.boolean()])
   .transform((value) => value === "1" || value === "true" || value === true);
@@ -100,12 +101,13 @@ const envSchema = z.object({
   DEFAULT_DATASET_PATH: z.string().default("data/ETHUSDT_15m.csv"),
   EQUITY_START: z.coerce.number().positive().default(10_000),
   EXECUTION_MODE: executionModeSchema.default("signal_only"),
+  MULTI_ENGINE_EXECUTION_MODE: multiEngineExecutionModeSchema.default("independent"),
   ACTIVE_PRODUCTION_STRATEGY: z.enum(["compression_breakout_balanced", "compression_breakout_strict"]).default("compression_breakout_balanced"),
-  SIGNAL_ENABLE_ENGINE2: booleanFlagSchema.default(false),
+  SIGNAL_ENABLE_ENGINE2: booleanFlagSchema.default(true),
   ENGINE2_STRATEGY: z.enum(["expansion_reload_v2_wide"]).default("expansion_reload_v2_wide"),
   ENGINE2_MIN_SCORE: z.coerce.number().min(0).max(100).default(54),
   ENGINE2_RANKING_BIAS: z.coerce.number().min(-20).max(20).default(0),
-  SIGNAL_ENABLE_ENGINE3: booleanFlagSchema.default(false),
+  SIGNAL_ENABLE_ENGINE3: booleanFlagSchema.default(true),
   ENGINE3_STRATEGY: z.enum(["continuation_reclaim_5m_v1"]).default("continuation_reclaim_5m_v1"),
   ENGINE3_MIN_SCORE: z.coerce.number().min(0).max(100).default(52),
   ENGINE3_RANKING_BIAS: z.coerce.number().min(-20).max(20).default(0),
@@ -127,7 +129,7 @@ const envSchema = z.object({
   GOVERNANCE_DAILY_LOSS_LOCK_ACTIVE: booleanFlagSchema.default(false),
   GOVERNANCE_TRAILING_DRAWDOWN_LOCK_ACTIVE: booleanFlagSchema.default(false),
   GOVERNANCE_MAX_CONSECUTIVE_LOSS_LOCK_ACTIVE: booleanFlagSchema.default(false),
-  ENABLE_SIGNAL_MODE_OUTPUT: booleanFlagSchema.default(true),
+  ENABLE_SIGNAL_MODE_OUTPUT: booleanFlagSchema.default(false),
   WORKER_LOOP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(15),
   ENABLE_PERSONAL_DEMO_CONNECTOR: booleanFlagSchema.default(true),
   ENABLE_PROP_DEMO_CONNECTOR: booleanFlagSchema.default(true),
