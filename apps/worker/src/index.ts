@@ -158,17 +158,19 @@ function buildRuntimeSymbols(config: ReturnType<typeof getConfig>): SymbolMetada
   };
 
   if (config.EXECUTION_MODE === "signal_only") {
+    const forexUniverse = config.DEFAULT_FOREX_SYMBOLS.length > 0 ? config.DEFAULT_FOREX_SYMBOLS : defaultForexSymbols;
+    const forexSymbolSet = new Set(forexUniverse.map((symbol) => symbol.toUpperCase()));
+
     if (config.SIGNAL_ENABLE_CRYPTO) {
-      const cryptoUniverse = config.DEFAULT_SYMBOLS.length > 0
-        ? config.DEFAULT_SYMBOLS
-        : config.DEFAULT_CRYPTO_SYMBOLS.length > 0
-          ? config.DEFAULT_CRYPTO_SYMBOLS
+      const cryptoUniverse = config.DEFAULT_CRYPTO_SYMBOLS.length > 0
+        ? config.DEFAULT_CRYPTO_SYMBOLS
+        : config.DEFAULT_SYMBOLS.length > 0
+          ? config.DEFAULT_SYMBOLS.filter((symbol) => !forexSymbolSet.has(symbol.toUpperCase()))
           : defaultCryptoSymbols;
       for (const symbol of cryptoUniverse) append(symbol, "crypto");
     }
 
     if (config.SIGNAL_ENABLE_FOREX || config.SIGNAL_FOREX_READINESS_ONLY) {
-      const forexUniverse = config.DEFAULT_FOREX_SYMBOLS.length > 0 ? config.DEFAULT_FOREX_SYMBOLS : defaultForexSymbols;
       for (const symbol of forexUniverse) append(symbol, "forex");
     }
     return symbols;
@@ -178,10 +180,11 @@ function buildRuntimeSymbols(config: ReturnType<typeof getConfig>): SymbolMetada
     const forexUniverse = config.DEFAULT_FOREX_SYMBOLS.length > 0 ? config.DEFAULT_FOREX_SYMBOLS : defaultForexSymbols;
     for (const symbol of forexUniverse) append(symbol, "forex");
   } else {
-    const cryptoUniverse = config.DEFAULT_SYMBOLS.length > 0
-      ? config.DEFAULT_SYMBOLS
-      : config.DEFAULT_CRYPTO_SYMBOLS.length > 0
-        ? config.DEFAULT_CRYPTO_SYMBOLS
+    const forexSymbolSet = new Set(defaultForexSymbols.map((symbol) => symbol.toUpperCase()));
+    const cryptoUniverse = config.DEFAULT_CRYPTO_SYMBOLS.length > 0
+      ? config.DEFAULT_CRYPTO_SYMBOLS
+      : config.DEFAULT_SYMBOLS.length > 0
+        ? config.DEFAULT_SYMBOLS.filter((symbol) => !forexSymbolSet.has(symbol.toUpperCase()))
         : defaultCryptoSymbols;
     for (const symbol of cryptoUniverse) append(symbol, "crypto");
   }
@@ -1551,7 +1554,12 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   );
 
   const minDirectionalContextBars = config.SIGNAL_MIN_DIRECTIONAL_CONTEXT_BARS;
-  const preloadCandleLimit = Math.max(config.SIGNAL_LIVE_PRELOAD_CANDLE_LIMIT, minDirectionalContextBars);
+  const min5mBarsRequired = minBarsForTimeframe({
+    executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
+    targetTimeframe: "5m",
+    minExecutionBars: minDirectionalContextBars
+  });
+  const preloadCandleLimit = Math.max(config.SIGNAL_LIVE_PRELOAD_CANDLE_LIMIT, minDirectionalContextBars, min5mBarsRequired);
   const cryptoTransportReady = cryptoReadiness.transportConnected;
   const forexTransportReady = forexReadiness.transportConnected;
   const preloadedContextBySymbol = new Map<string, Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>>();
