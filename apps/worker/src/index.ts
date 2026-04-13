@@ -19,6 +19,8 @@ import {
   MarketTypeAwareAnalysisLoader,
   CryptoLiveKlineAdapter,
   PublicForexLiveBarAdapter,
+  normalizeLiveAnalysisCandles,
+  validateRequiredLiveAnalysisCandles,
   buildPaperAccountSnapshot,
   classifyRegime,
   closePaperPosition,
@@ -1215,18 +1217,18 @@ function computeAnalysisReadiness(params: {
     })
   };
   const candleCount: Record<Timeframe, number> = {
-    "5m": marketContext.candles["5m"]?.length ?? 0,
-    "15m": marketContext.candles["15m"]?.length ?? 0,
-    "1h": marketContext.candles["1h"]?.length ?? 0,
-    "4h": marketContext.candles["4h"]?.length ?? 0
+    "5m": marketContext.candles["5m"].length,
+    "15m": marketContext.candles["15m"].length,
+    "1h": marketContext.candles["1h"].length,
+    "4h": marketContext.candles["4h"].length
   };
-  const indicatorsComputable = candleCount["15m"] >= 50 && candleCount["1h"] >= 20 && candleCount["4h"] >= 20;
-  const insufficient = (["15m", "1h", "4h"] as Timeframe[]).find((tf) => candleCount[tf] < minRequired[tf]);
-  const analysisReady = transportReady && indicatorsComputable && !insufficient;
+  const indicatorsComputable = candleCount["5m"] >= 50 && candleCount["15m"] >= 50 && candleCount["1h"] >= 20 && candleCount["4h"] >= 20;
+  const requiredValidation = validateRequiredLiveAnalysisCandles(marketContext.candles, minRequired);
+  const analysisReady = transportReady && indicatorsComputable && requiredValidation.ok;
   const blockedReason = !transportReady
     ? "transport_not_ready"
-    : insufficient
-      ? `insufficient_${insufficient}_candles`
+    : !requiredValidation.ok
+      ? requiredValidation.reason
       : !indicatorsComputable
         ? "insufficient_indicator_context"
         : undefined;
@@ -1597,8 +1599,15 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         htf2: config.DEFAULT_HTF_2,
         candleLimit: preloadCandleLimit
       });
+      marketContext.candles = normalizeLiveAnalysisCandles(marketContext.candles);
       const preloadKey = symbolRuntimeKey(symbolContext);
       preloadedContextBySymbol.set(preloadKey, marketContext);
+      const readiness = computeAnalysisReadiness({
+        symbolContext,
+        marketContext,
+        transportReady,
+        minExecutionBars: minDirectionalContextBars
+      });
       console.log(
         JSON.stringify(
           {
@@ -1608,25 +1617,49 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             marketType: symbolContext.marketType,
             contextKey: preloadKey,
             candleCount: {
-              "5m": marketContext.candles["5m"]?.length ?? 0,
+              "5m": marketContext.candles["5m"].length,
               "15m": marketContext.candles["15m"].length,
               "1h": marketContext.candles["1h"].length,
               "4h": marketContext.candles["4h"].length
-            }
+            },
+            analysisReady: readiness.analysisReady,
+            blockedReason: readiness.blockedReason
           },
           null,
           2
         )
       );
-      symbolReadiness.push(
-        computeAnalysisReadiness({
-          symbolContext,
-          marketContext,
-          transportReady,
-          minExecutionBars: minDirectionalContextBars
-        })
-      );
+      if (!readiness.analysisReady && readiness.blockedReason) {
+        console.log(
+          JSON.stringify(
+            {
+              event: "analysis_preload_blocked",
+              cycleNumber,
+              symbol: symbolContext.symbol,
+              marketType: symbolContext.marketType,
+              reason: readiness.blockedReason
+            },
+            null,
+            2
+          )
+        );
+      }
+      symbolReadiness.push(readiness);
     } catch (error) {
+      const blockedReason = error instanceof Error ? error.message : "preload_failed";
+      console.log(
+        JSON.stringify(
+          {
+            event: "analysis_preload_blocked",
+            cycleNumber,
+            symbol: symbolContext.symbol,
+            marketType: symbolContext.marketType,
+            reason: blockedReason
+          },
+          null,
+          2
+        )
+      );
       symbolReadiness.push({
         symbol: symbolContext.symbol,
         marketType: symbolContext.marketType,
@@ -1638,7 +1671,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         candleCount: { "5m": 0, "15m": 0, "1h": 0, "4h": 0 },
         indicatorsComputable: false,
         analysisReady: false,
-        blockedReason: error instanceof Error ? error.message : "preload_failed"
+        blockedReason
       });
     }
   }

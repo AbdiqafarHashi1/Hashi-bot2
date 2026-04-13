@@ -1,6 +1,6 @@
 import type { Candle, MarketDataSource, Symbol, Timeframe } from "../domains";
 import type { MarketDataProvider } from "../provider";
-import type { LiveAnalysisReadiness, LiveAnalysisMarketData, MarketTypeLiveAnalysisAdapter } from "./contracts";
+import { normalizeLiveAnalysisCandles, type LiveAnalysisReadiness, type LiveAnalysisMarketData, type MarketTypeLiveAnalysisAdapter } from "./contracts";
 
 export class CryptoLiveKlineAdapter implements MarketTypeLiveAnalysisAdapter {
   readonly marketType = "crypto" as const;
@@ -54,10 +54,11 @@ export class CryptoLiveKlineAdapter implements MarketTypeLiveAnalysisAdapter {
       candleLimit: number;
     }
   ): Promise<LiveAnalysisMarketData> {
-    const [executionCandles, htf1Candles, htf2Candles, latestPrice] = await Promise.all([
-      active.getCandles(input.symbol, input.executionTimeframe, input.candleLimit),
-      active.getCandles(input.symbol, input.htf1, input.candleLimit),
-      active.getCandles(input.symbol, input.htf2, input.candleLimit),
+    const [candles5m, candles15m, candles1h, candles4h, latestPrice] = await Promise.all([
+      active.getCandles(input.symbol, "5m", input.candleLimit),
+      active.getCandles(input.symbol, "15m", input.candleLimit),
+      active.getCandles(input.symbol, "1h", input.candleLimit),
+      active.getCandles(input.symbol, "4h", input.candleLimit),
       active.getLatestPrice(input.symbol)
     ]);
 
@@ -71,11 +72,12 @@ export class CryptoLiveKlineAdapter implements MarketTypeLiveAnalysisAdapter {
         used: active.getSourceName(),
         fallbackUsed
       },
-      candles: {
-        [input.executionTimeframe]: executionCandles,
-        [input.htf1]: htf1Candles,
-        [input.htf2]: htf2Candles
-      } as Record<Timeframe, Candle[]>
+      candles: normalizeLiveAnalysisCandles({
+        "5m": candles5m,
+        "15m": candles15m,
+        "1h": candles1h,
+        "4h": candles4h
+      })
     };
   }
 }
