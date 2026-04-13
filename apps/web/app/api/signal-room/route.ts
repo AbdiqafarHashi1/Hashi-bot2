@@ -38,6 +38,7 @@ type ReconciliationPayload = {
     maxConcurrentBlockedCount?: number;
     cycleRankingAllocation?: Array<{
       symbol: string;
+      marketType: "crypto" | "forex";
       side: string;
       score: number;
       rank: number;
@@ -49,6 +50,7 @@ type ReconciliationPayload = {
     }>;
     actionableSelectedThisCycle?: Array<{
       symbol: string;
+      marketType: "crypto" | "forex";
       side: string;
       score: number;
       rank: number;
@@ -61,6 +63,7 @@ type ReconciliationPayload = {
     }>;
     auditCandidatesThisCycle?: Array<{
       symbol: string;
+      marketType: "crypto" | "forex";
       side: string;
       score: number;
       rank: number;
@@ -106,6 +109,28 @@ type ReconciliationPayload = {
     totalPersistedSignals: number;
   };
 };
+
+function normalizeSymbol(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function inferMarketType(params: {
+  symbol: string;
+  forexSymbols: Set<string>;
+  rankingMarketTypeBySymbol: Map<string, "crypto" | "forex">;
+}): "crypto" | "forex" {
+  const normalized = normalizeSymbol(params.symbol);
+  const ranked = params.rankingMarketTypeBySymbol.get(normalized);
+  if (ranked) return ranked;
+  if (params.forexSymbols.has(normalized)) return "forex";
+  return "crypto";
+}
+
+function pipSize(symbol: string): number {
+  const normalized = normalizeSymbol(symbol);
+  if (normalized.endsWith("JPY")) return 0.01;
+  return 0.0001;
+}
 
 function withPaperComputedFields<T extends {
   entryPrice: number;
@@ -271,6 +296,11 @@ export async function GET() {
     });
 
   const reconciliation = (latestReconciliation?.payload as ReconciliationPayload | null) ?? null;
+  const rankingMarketTypeBySymbol = new Map<string, "crypto" | "forex">(
+    (reconciliation?.cycleTruth?.cycleRankingAllocation ?? [])
+      .map((entry) => [normalizeSymbol(entry.symbol), entry.marketType] as const)
+  );
+  const forexSymbols = new Set(config.DEFAULT_FOREX_SYMBOLS.map((symbol) => normalizeSymbol(symbol)));
 
   const currentCycle = reconciliation?.currentCycle ?? {
     candidatesEvaluatedThisCycle: 0,
@@ -312,7 +342,8 @@ export async function GET() {
       selectedReasonBySignalEventId.set(payload.signalEventId, payload.selectedReason);
     }
   }
-  const openPaperPositions: PaperPosition[] = openTradesWithDispatch.map((trade) => ({
+  const openPaperPositions = openTradesWithDispatch.map((trade) => ({
+    marketType: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }),
     id: trade.id,
     symbol: trade.symbol,
     side: trade.side.toUpperCase() === "SHORT" ? "SHORT" : "LONG",
@@ -335,9 +366,18 @@ export async function GET() {
     rejectedReason: null,
     closeReason: closeReasonFromTradeStatus(trade.status),
     unrealizedPnl: trade.unrealizedPnl ?? 0,
-    realizedPnl: trade.realizedPnl ?? 0
+    realizedPnl: trade.realizedPnl ?? 0,
+    strategy: openTradeEvents.find((event) => event.id === trade.signalEventId)?.strategy ?? null,
+    riskPct: trade.riskPct ?? null,
+    stopPips: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }) === "forex"
+      ? Math.abs(trade.entryPrice - trade.stopPrice) / pipSize(trade.symbol)
+      : null,
+    exposureBasis: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }) === "forex"
+      ? config.SIGNAL_FOREX_PER_TRADE_EXPOSURE_BASIS
+      : null
   }));
-  const closedPaperPositions: PaperPosition[] = closedTradesWithPaper.map((trade) => ({
+  const closedPaperPositions = closedTradesWithPaper.map((trade) => ({
+    marketType: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }),
     id: trade.id,
     symbol: trade.symbol,
     side: trade.side.toUpperCase() === "SHORT" ? "SHORT" : "LONG",
@@ -360,7 +400,15 @@ export async function GET() {
     rejectedReason: null,
     closeReason: closeReasonFromTradeStatus(trade.status),
     unrealizedPnl: trade.unrealizedPnl ?? 0,
-    realizedPnl: trade.realizedPnl ?? 0
+    realizedPnl: trade.realizedPnl ?? 0,
+    strategy: recentSignals.find((signal) => signal.id === trade.signalEventId)?.strategy ?? null,
+    riskPct: trade.riskPct ?? null,
+    stopPips: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }) === "forex"
+      ? Math.abs(trade.entryPrice - trade.stopPrice) / pipSize(trade.symbol)
+      : null,
+    exposureBasis: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }) === "forex"
+      ? config.SIGNAL_FOREX_PER_TRADE_EXPOSURE_BASIS
+      : null
   }));
   const paperAccount = buildPaperAccountSnapshot({
     startingBalance: config.SIGNAL_PAPER_EQUITY,
@@ -369,6 +417,26 @@ export async function GET() {
     openPositions: openPaperPositions,
     closedPositions: closedPaperPositions
   });
+  const marketContexts = {
+    crypto: {
+      paperAccount: buildPaperAccountSnapshot({
+        startingBalance: config.SIGNAL_CRYPTO_PAPER_EQUITY,
+        configuredLeverage: config.SIGNAL_CRYPTO_LEVERAGE,
+        maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+        openPositions: openPaperPositions.filter((position) => position.marketType === "crypto"),
+        closedPositions: closedPaperPositions.filter((position) => position.marketType === "crypto")
+      })
+    },
+    forex: {
+      paperAccount: buildPaperAccountSnapshot({
+        startingBalance: config.SIGNAL_FOREX_PAPER_EQUITY,
+        configuredLeverage: config.SIGNAL_FOREX_LEVERAGE,
+        maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+        openPositions: openPaperPositions.filter((position) => position.marketType === "forex"),
+        closedPositions: closedPaperPositions.filter((position) => position.marketType === "forex")
+      })
+    }
+  };
 
   const recentExecutionDecisions = recentExecutionDecisionEvents.map((event) => {
     const payload = (event.payload as {
@@ -403,6 +471,7 @@ export async function GET() {
     } | null) ?? null;
     return {
       signalTradeId: payload?.signalTradeId ?? null,
+      marketType: inferMarketType({ symbol: event.symbol ?? "", forexSymbols, rankingMarketTypeBySymbol }),
       symbol: event.symbol ?? null,
       status: payload?.status ?? null,
       outcome: payload?.outcome ?? null,
@@ -447,6 +516,7 @@ export async function GET() {
   const effectivePortfolioLeverage = paperEquity > 0 ? usedNotional / paperEquity : 0;
 
   const responsePayload = {
+    marketContexts,
     paperAccount,
     openPaperPositions,
     closedPaperPositions,
