@@ -624,6 +624,7 @@ export async function GET() {
     const key = normalizeSymbol(signal.symbol);
     if (!latestSignalBySymbol.has(key)) latestSignalBySymbol.set(key, signal);
   }
+  const cycleTruth = reconciliation?.cycleTruth ?? null;
   const selectedThisCycle = (cycleTruth?.actionableSelectedThisCycle ?? []).map((entry) => {
     const strategyId = latestSignalBySymbol.get(normalizeSymbol(entry.symbol))?.strategy ?? null;
     const engine = resolveEngineDescriptor(strategyId);
@@ -648,7 +649,6 @@ export async function GET() {
         strategyLabel: engine.strategyLabel
       };
     });
-  const cycleTruth = reconciliation?.cycleTruth ?? null;
   const paperEquity = paperAccount.equity;
   const usedNotional = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.notional ?? 0), 0);
   const usedRiskBudget = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.riskAmount ?? 0), 0);
