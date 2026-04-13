@@ -1,5 +1,5 @@
 import type { Candle, Symbol, Timeframe } from "../domains";
-import type { LiveAnalysisMarketData, LiveAnalysisReadiness, MarketTypeLiveAnalysisAdapter } from "./contracts";
+import { normalizeLiveAnalysisCandles, type LiveAnalysisMarketData, type LiveAnalysisReadiness, type MarketTypeLiveAnalysisAdapter } from "./contracts";
 
 type YahooChartResponse = {
   chart?: {
@@ -94,12 +94,13 @@ export class PublicForexLiveBarAdapter implements MarketTypeLiveAnalysisAdapter 
     htf2: Timeframe;
     candleLimit: number;
   }): Promise<LiveAnalysisMarketData> {
-    const [executionBars, htf1Bars, htf2Bars] = await Promise.all([
-      this.getBars(input.symbol, input.executionTimeframe, input.candleLimit),
-      this.getBars(input.symbol, input.htf1, input.candleLimit),
-      this.getBars(input.symbol, input.htf2, input.candleLimit)
+    const [bars5m, bars15m, bars1h, bars4h] = await Promise.all([
+      this.getBars(input.symbol, "5m", input.candleLimit),
+      this.getBars(input.symbol, "15m", input.candleLimit),
+      this.getBars(input.symbol, "1h", input.candleLimit),
+      this.getBars(input.symbol, "4h", input.candleLimit)
     ]);
-    const latest = executionBars.at(-1);
+    const latest = bars15m.at(-1) ?? bars5m.at(-1) ?? bars1h.at(-1) ?? bars4h.at(-1);
     if (!latest) throw new Error(`No forex bars returned for ${input.symbol}`);
 
     return {
@@ -112,11 +113,12 @@ export class PublicForexLiveBarAdapter implements MarketTypeLiveAnalysisAdapter 
         used: "mt5_bridge",
         fallbackUsed: false
       },
-      candles: {
-        [input.executionTimeframe]: executionBars,
-        [input.htf1]: htf1Bars,
-        [input.htf2]: htf2Bars
-      } as Record<Timeframe, Candle[]>
+      candles: normalizeLiveAnalysisCandles({
+        "5m": bars5m,
+        "15m": bars15m,
+        "1h": bars1h,
+        "4h": bars4h
+      })
     };
   }
 
