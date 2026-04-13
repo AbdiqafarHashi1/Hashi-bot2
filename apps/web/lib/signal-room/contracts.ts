@@ -63,6 +63,36 @@ export type SignalEvent = {
 };
 
 export type SignalRoomPayload = {
+  marketContexts?: {
+    crypto: {
+      paperAccount: {
+        balance: number;
+        equity: number;
+        unrealizedPnl: number;
+        realizedPnl: number;
+        usedMargin: number;
+        freeMargin: number;
+        configuredLeverage: number;
+        maxConcurrentPositions: number;
+        openPositionsCount: number;
+        closedPositionsCount: number;
+      };
+    };
+    forex: {
+      paperAccount: {
+        balance: number;
+        equity: number;
+        unrealizedPnl: number;
+        realizedPnl: number;
+        usedMargin: number;
+        freeMargin: number;
+        configuredLeverage: number;
+        maxConcurrentPositions: number;
+        openPositionsCount: number;
+        closedPositionsCount: number;
+      };
+    };
+  };
   paperAccount: {
     balance: number;
     equity: number;
@@ -77,6 +107,7 @@ export type SignalRoomPayload = {
   };
   openPaperPositions: Array<{
     id: string;
+    marketType: "crypto" | "forex";
     symbol: string;
     side: "LONG" | "SHORT";
     entryPrice: number;
@@ -99,9 +130,14 @@ export type SignalRoomPayload = {
     closeReason: "stop_hit" | "tp1_hit" | "tp2_hit" | "manual_close" | "time_stop" | "liquidation_guard_close" | "policy_close" | null;
     unrealizedPnl: number;
     realizedPnl: number;
+    strategy: string | null;
+    riskPct: number | null;
+    stopPips: number | null;
+    exposureBasis: number | null;
   }>;
   closedPaperPositions: Array<{
     id: string;
+    marketType: "crypto" | "forex";
     symbol: string;
     side: "LONG" | "SHORT";
     entryPrice: number;
@@ -124,6 +160,10 @@ export type SignalRoomPayload = {
     closeReason: "stop_hit" | "tp1_hit" | "tp2_hit" | "manual_close" | "time_stop" | "liquidation_guard_close" | "policy_close" | null;
     unrealizedPnl: number;
     realizedPnl: number;
+    strategy: string | null;
+    riskPct: number | null;
+    stopPips: number | null;
+    exposureBasis: number | null;
   }>;
   recentExecutionDecisions: Array<{
     signalEventId: string | null;
@@ -149,6 +189,7 @@ export type SignalRoomPayload = {
   }>;
   recentPaperLifecycleEvents: Array<{
     signalTradeId: string | null;
+    marketType: "crypto" | "forex";
     symbol: string | null;
     status: string | null;
     outcome: string | null;
