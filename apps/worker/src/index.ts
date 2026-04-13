@@ -222,6 +222,11 @@ type SymbolAnalysisReadiness = {
   analysisReady: boolean;
   blockedReason?: string;
 };
+type ContextValidationResult = {
+  ready: boolean;
+  blockedReason?: string;
+  missingTimeframes: Timeframe[];
+};
 type SignalRejectionReason =
   | "analysis_feed_unavailable"
   | "below_min_tier"
@@ -820,6 +825,18 @@ async function generateUnifiedSignalsForContext(params: {
   let rawCandidateCount = 0;
   let postValidationCount = 0;
   const strategyAttempted: string[] = [];
+  const baseValidation = validateContextCandles(marketContext.candles);
+  if (!baseValidation.ready) {
+    return {
+      signals,
+      evaluation: {
+        strategyCount: strategyIds.length,
+        strategyAttempted,
+        rawCandidateCount,
+        postValidationCount
+      }
+    };
+  }
 
   for (const strategyId of strategyIds) {
     if (strategyId === config.ENGINE3_STRATEGY && marketContext.marketType !== "crypto") {
@@ -835,76 +852,125 @@ async function generateUnifiedSignalsForContext(params: {
           candleLimit: config.CANDLE_LIMIT
         })
       : marketContext;
+    const strategyValidation = validateContextCandles(strategyContext.candles);
+    if (!strategyValidation.ready) {
+      console.log(
+        JSON.stringify(
+          {
+            event: "engine_scan_strategy_blocked_context",
+            symbol: strategyContext.symbol,
+            strategyId,
+            blockedReason: strategyValidation.blockedReason
+          },
+          null,
+          2
+        )
+      );
+      continue;
+    }
     const entry = getStrategyById(strategyId);
     if (!entry) continue;
     strategyAttempted.push(strategyId);
     const strategy = entry.create();
-    const candidates = await strategy.generateCandidates(strategyContext);
+    let candidates: Awaited<ReturnType<typeof strategy.generateCandidates>>;
+    try {
+      candidates = await strategy.generateCandidates(strategyContext);
+    } catch (error) {
+      console.log(
+        JSON.stringify(
+          {
+            event: "engine_scan_strategy_failed",
+            symbol: strategyContext.symbol,
+            strategyId,
+            reason: error instanceof Error ? error.message : "strategy_generate_failed"
+          },
+          null,
+          2
+        )
+      );
+      continue;
+    }
     rawCandidateCount += candidates.length;
-    for (const candidate of candidates) {
-      const scored = await strategy.scoreCandidate(candidate, strategyContext);
-      const validation = await strategy.validateCandidate(candidate, strategyContext);
-      if (!validation.valid) continue;
-      postValidationCount += 1;
-      const plan = await strategy.buildTradePlan(candidate, strategyContext);
-      if (plan.side === "NONE") continue;
+    try {
+      for (const candidate of candidates) {
+        const scored = await strategy.scoreCandidate(candidate, strategyContext);
+        const validation = await strategy.validateCandidate(candidate, strategyContext);
+        if (!validation.valid) continue;
+        postValidationCount += 1;
+        const plan = await strategy.buildTradePlan(candidate, strategyContext);
+        if (plan.side === "NONE") continue;
 
-      const scoreWithBias = strategyId === config.ENGINE2_STRATEGY
-        ? boundedScore(scored.score + config.ENGINE2_RANKING_BIAS, 0, 100)
-        : strategyId === config.ENGINE3_STRATEGY
-          ? boundedScore(scored.score + config.ENGINE3_RANKING_BIAS, 0, 100)
-        : scored.score;
-      const signal = buildBreakoutSignal(candidate, plan, { score: scoreWithBias, confidence: scored.confidence });
-      const strategyRegime = classifyRegime(strategyContext);
-      const quality = computeSignalQuality({ signal, regime: strategyRegime, marketContext: strategyContext });
-      if (!quality.tier) continue;
-      if (strategyId === config.ENGINE2_STRATEGY && quality.signalScore < config.ENGINE2_MIN_SCORE) continue;
-      if (strategyId === config.ENGINE3_STRATEGY && quality.signalScore < config.ENGINE3_MIN_SCORE) continue;
+        const scoreWithBias = strategyId === config.ENGINE2_STRATEGY
+          ? boundedScore(scored.score + config.ENGINE2_RANKING_BIAS, 0, 100)
+          : strategyId === config.ENGINE3_STRATEGY
+            ? boundedScore(scored.score + config.ENGINE3_RANKING_BIAS, 0, 100)
+          : scored.score;
+        const signal = buildBreakoutSignal(candidate, plan, { score: scoreWithBias, confidence: scored.confidence });
+        const strategyRegime = classifyRegime(strategyContext);
+        const quality = computeSignalQuality({ signal, regime: strategyRegime, marketContext: strategyContext });
+        if (!quality.tier) continue;
+        if (strategyId === config.ENGINE2_STRATEGY && quality.signalScore < config.ENGINE2_MIN_SCORE) continue;
+        if (strategyId === config.ENGINE3_STRATEGY && quality.signalScore < config.ENGINE3_MIN_SCORE) continue;
 
-      const recommendation = operatorManualRecommendation({ setupGrade: quality.tier, score: quality.signalScore });
-      const engineFamily = typeof candidate.metadata?.engineFamily === "string"
-        ? candidate.metadata.engineFamily
-        : "breakout";
-      const setupVariant = typeof candidate.metadata?.setupVariant === "string"
-        ? candidate.metadata.setupVariant
-        : strategyId === config.ACTIVE_PRODUCTION_STRATEGY
-          ? "trusted_a_plus_breakout_core_v1"
-          : strategyId === config.ENGINE2_STRATEGY
-            ? "expansion_reload_v2_wide"
-            : "continuation_reclaim_5m_v1";
-      signals.push({
-        ...signal,
-        score: quality.signalScore,
-        confidence: Math.max(scored.confidence, 0.55),
-        setupGrade: quality.tier,
-        metadata: {
-          ...(candidate.metadata ?? {}),
-          previewOnly: !(runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT),
-          strategyBackbone: strategyId === config.ACTIVE_PRODUCTION_STRATEGY
-            ? "trusted_a_plus_breakout_core"
+        const recommendation = operatorManualRecommendation({ setupGrade: quality.tier, score: quality.signalScore });
+        const engineFamily = typeof candidate.metadata?.engineFamily === "string"
+          ? candidate.metadata.engineFamily
+          : "breakout";
+        const setupVariant = typeof candidate.metadata?.setupVariant === "string"
+          ? candidate.metadata.setupVariant
+          : strategyId === config.ACTIVE_PRODUCTION_STRATEGY
+            ? "trusted_a_plus_breakout_core_v1"
             : strategyId === config.ENGINE2_STRATEGY
-              ? "engine2_expansion_reload_continuation_locked"
-              : "engine3_mtf_continuation_cadence",
-          engineFamily,
-          setupVariant,
-          strategyId,
-          feedActionability: marketContext.marketType === "crypto"
-            ? "live_actionable"
-            : config.SIGNAL_ENABLE_FOREX
+              ? "expansion_reload_v2_wide"
+              : "continuation_reclaim_5m_v1";
+        signals.push({
+          ...signal,
+          score: quality.signalScore,
+          confidence: Math.max(scored.confidence, 0.55),
+          setupGrade: quality.tier,
+          metadata: {
+            ...(candidate.metadata ?? {}),
+            previewOnly: !(runtimeMode === "signal" && config.ENABLE_SIGNAL_MODE_OUTPUT),
+            strategyBackbone: strategyId === config.ACTIVE_PRODUCTION_STRATEGY
+              ? "trusted_a_plus_breakout_core"
+              : strategyId === config.ENGINE2_STRATEGY
+                ? "engine2_expansion_reload_continuation_locked"
+                : "engine3_mtf_continuation_cadence",
+            engineFamily,
+            setupVariant,
+            strategyId,
+            feedActionability: marketContext.marketType === "crypto"
               ? "live_actionable"
-              : "readiness_only",
-          signalScore: quality.signalScore,
-          tier: quality.tier,
-          scoring: quality.components,
-          ...recommendation,
-          rationale: [
-            ...quality.reasons,
-            `regime=${regime.regime}`,
-            `symbol=${marketContext.symbol}`,
-            `strategy=${strategyId}`
-          ]
-        }
-      });
+              : config.SIGNAL_ENABLE_FOREX
+                ? "live_actionable"
+                : "readiness_only",
+            signalScore: quality.signalScore,
+            tier: quality.tier,
+            scoring: quality.components,
+            ...recommendation,
+            rationale: [
+              ...quality.reasons,
+              `regime=${regime.regime}`,
+              `symbol=${marketContext.symbol}`,
+              `strategy=${strategyId}`
+            ]
+          }
+        });
+      }
+    } catch (error) {
+      console.log(
+        JSON.stringify(
+          {
+            event: "engine_scan_strategy_failed",
+            symbol: strategyContext.symbol,
+            strategyId,
+            reason: error instanceof Error ? error.message : "strategy_evaluation_failed"
+          },
+          null,
+          2
+        )
+      );
+      continue;
     }
   }
 
@@ -1190,6 +1256,21 @@ function minBarsForTimeframe(params: {
   return Math.max(20, scaled);
 }
 
+function validateContextCandles(candles: Partial<Record<Timeframe, Candle[] | undefined>>): ContextValidationResult {
+  const normalized = normalizeLiveAnalysisCandles(candles);
+  const required: Timeframe[] = ["5m", "15m", "1h", "4h"];
+  const missingTimeframes = required.filter((tf) => !Array.isArray(normalized[tf]) || normalized[tf].length === 0);
+  if (missingTimeframes.length > 0) {
+    const firstMissing = missingTimeframes[0];
+    return {
+      ready: false,
+      blockedReason: `missing_${firstMissing}_candles`,
+      missingTimeframes
+    };
+  }
+  return { ready: true, missingTimeframes: [] };
+}
+
 function computeAnalysisReadiness(params: {
   symbolContext: SymbolMetadata;
   marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
@@ -1225,11 +1306,14 @@ function computeAnalysisReadiness(params: {
     "1h": marketContext.candles["1h"].length,
     "4h": marketContext.candles["4h"].length
   };
+  const contextValidation = validateContextCandles(marketContext.candles);
   const indicatorsComputable = candleCount["5m"] >= 50 && candleCount["15m"] >= 50 && candleCount["1h"] >= 20 && candleCount["4h"] >= 20;
   const requiredValidation = validateRequiredLiveAnalysisCandles(marketContext.candles, minRequired);
-  const analysisReady = transportReady && indicatorsComputable && requiredValidation.ok;
+  const analysisReady = transportReady && contextValidation.ready && indicatorsComputable && requiredValidation.ok;
   const blockedReason = !transportReady
     ? "transport_not_ready"
+    : !contextValidation.ready
+      ? contextValidation.blockedReason
     : !requiredValidation.ok
       ? requiredValidation.reason
       : !indicatorsComputable
@@ -1654,7 +1738,10 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       }
       symbolReadiness.push(readiness);
     } catch (error) {
-      const blockedReason = error instanceof Error ? error.message : "preload_failed";
+      const errorMessage = error instanceof Error ? error.message : "preload_failed";
+      const blockedReason = symbolContext.marketType === "forex"
+        ? (errorMessage.includes("404") ? "forex_feed_404" : `forex_feed_unavailable:${errorMessage}`)
+        : errorMessage;
       console.log(
         JSON.stringify(
           {
@@ -1662,7 +1749,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             cycleNumber,
             symbol: symbolContext.symbol,
             marketType: symbolContext.marketType,
-            reason: blockedReason
+            reason: blockedReason,
+            forexBlocked: symbolContext.marketType === "forex"
           },
           null,
           2
@@ -1756,6 +1844,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     console.log(
       JSON.stringify(
         {
+          checkpoint: "CONTEXT_READY",
           event: "analysis_preload_context_attached_to_evaluation",
           cycleNumber,
           symbol: symbolContext.symbol,
@@ -1772,6 +1861,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     console.log(
       JSON.stringify(
         {
+          checkpoint: "ENGINE_SCAN_BEGIN",
           event: "evaluation_allowed_after_warmup",
           cycleNumber,
           symbol: symbolContext.symbol,
@@ -1797,6 +1887,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     console.log(
       JSON.stringify(
         {
+          checkpoint: "ENGINE_SCAN_COMPLETE",
           event: "directional_candidate_generation_attempted",
           cycleNumber,
           symbol: symbolContext.symbol,
@@ -1856,6 +1947,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
   }
   candidateCount = cycleCandidates.length;
+  console.log(
+    JSON.stringify(
+      {
+        event: "CANDIDATES_GENERATED",
+        cycleNumber,
+        candidateCount
+      },
+      null,
+      2
+    )
+  );
   const independentMultiEngineMode = config.MULTI_ENGINE_EXECUTION_MODE === "independent";
 
   const latestPriceBySymbol = new Map<string, number>();
@@ -1864,6 +1966,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   }
 
   let finalSelectedCandidates: typeof cycleCandidates = [];
+  const paperExecutedSignalSymbols = new Set<string>();
   const selectedReasonBySymbol = new Map<string, string>();
   let diversificationNotes: string[] = [];
   const effectiveRequireAPlusOnly = runtimeMode === "signal"
@@ -2301,7 +2404,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }));
     for (const candidate of finalSelectedCandidates) {
       const engineLabel = resolveCandidateEngineLabel(candidate, config).toUpperCase();
-      console.log(`[${engineLabel}] SIGNAL_EMITTED ${candidate.signal.symbol} ${candidate.signal.side} score=${candidate.signal.score.toFixed(0)}`);
+      console.log(`[${engineLabel}] SIGNAL_SELECTED ${candidate.signal.symbol} ${candidate.signal.side} score=${candidate.signal.score.toFixed(0)}`);
     }
   }
 
@@ -2377,7 +2480,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     finalSelectedCandidates = dedupedCandidates;
   }
 
-  if (runtimeMode === "signal" && finalSelectedCandidates.length > 0) {
+  if (runtimeMode !== "signal" && finalSelectedCandidates.length > 0) {
     for (const candidate of finalSelectedCandidates) {
       const detail = buildSignalDetailPayload({
         candidate,
@@ -2673,6 +2776,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             realizedPnl: 0
           }
         });
+        paperExecutedSignalSymbols.add(event.symbol.toUpperCase());
 
         mutableOpenPositions.push({
           id: event.id,
@@ -3071,13 +3175,51 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
   }
 
+  const emittedCandidates = runtimeMode === "signal"
+    ? finalSelectedCandidates.filter((entry) => paperExecutedSignalSymbols.has(entry.signal.symbol.toUpperCase()))
+    : finalSelectedCandidates;
+  if (runtimeMode === "signal" && emittedCandidates.length > 0) {
+    for (const candidate of emittedCandidates) {
+      const detail = buildSignalDetailPayload({
+        candidate,
+        config,
+        emitted: true,
+        blockedReason: null,
+        symbolLockPassed: true,
+        independentMode: independentMultiEngineMode,
+        nowIso: cycleNow.toISOString()
+      });
+      console.log(
+        JSON.stringify(
+          {
+            event: "signal_emitted_detail",
+            ...detail
+          },
+          null,
+          2
+        )
+      );
+    }
+  }
+  console.log(
+    JSON.stringify(
+      {
+        event: "SIGNALS_EMITTED",
+        cycleNumber,
+        emittedSignalCount: emittedCandidates.length
+      },
+      null,
+      2
+    )
+  );
+
   const executionModeForAllocation: ReturnType<typeof getConfig>["EXECUTION_MODE"] =
     runtimeMode === "personal" ? "live_personal" : runtimeMode === "prop" ? "live_prop" : "signal_only";
 
   const allocation = allocatePortfolioCapital({
     mode: executionModeForAllocation,
     accountEquityUsd: config.EQUITY_START,
-    candidates: finalSelectedCandidates.map((entry) => ({ signal: entry.signal })),
+    candidates: emittedCandidates.map((entry) => ({ signal: entry.signal })),
     currentOpenRiskPct: 0,
     openRiskBySymbolPct: Object.fromEntries(runtimeSymbols.map((entry) => [entry.symbol, 0])),
     governanceLocks: {
@@ -3094,7 +3236,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       ? buildSignalModePayload({
         rankedSetups: allocation.rankedSetups,
         decisions: allocation.decisions,
-        selectedSignals: finalSelectedCandidates.map((entry) => entry.signal),
+        selectedSignals: emittedCandidates.map((entry) => entry.signal),
         cycleId,
         minTier: config.SIGNAL_MIN_TIER,
         maxSignals: effectiveTelegramCap

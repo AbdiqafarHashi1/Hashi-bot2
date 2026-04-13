@@ -63,6 +63,28 @@ export type SignalEvent = {
 };
 
 export type SignalRoomPayload = {
+  cryptoAccount?: {
+    balance: number;
+    equity: number;
+    usedMargin: number;
+    freeMargin: number;
+    unrealizedPnL: number;
+    realizedPnL: number;
+    openPositions: number;
+    closedPositions: number;
+    leverage: number;
+  };
+  forexAccount?: {
+    balance: number;
+    equity: number;
+    usedMargin: number;
+    freeMargin: number;
+    unrealizedPnL: number;
+    realizedPnL: number;
+    openPositions: number;
+    closedPositions: number;
+    leverage: number;
+  };
   marketContexts?: {
     crypto: {
       paperAccount: {
@@ -131,6 +153,20 @@ export type SignalRoomPayload = {
     unrealizedPnl: number;
     realizedPnl: number;
     strategy: string | null;
+    engineId?: "engine1" | "engine2" | "engine3";
+    engineLabel?: string;
+    strategyLabel?: string;
+    signalScore?: number | null;
+    tier?: string | null;
+    confidence?: number | null;
+    strategyVariant?: string | null;
+    setupType?: string | null;
+    reasoning?: {
+      trend: number | null;
+      structure: number | null;
+      volatility: number | null;
+      entry: number | null;
+    };
     riskPct: number | null;
     stopPips: number | null;
     exposureBasis: number | null;
@@ -161,6 +197,20 @@ export type SignalRoomPayload = {
     unrealizedPnl: number;
     realizedPnl: number;
     strategy: string | null;
+    engineId?: "engine1" | "engine2" | "engine3";
+    engineLabel?: string;
+    strategyLabel?: string;
+    signalScore?: number | null;
+    tier?: string | null;
+    confidence?: number | null;
+    strategyVariant?: string | null;
+    setupType?: string | null;
+    reasoning?: {
+      trend: number | null;
+      structure: number | null;
+      volatility: number | null;
+      entry: number | null;
+    };
     riskPct: number | null;
     stopPips: number | null;
     exposureBasis: number | null;
@@ -271,6 +321,10 @@ export type SignalRoomPayload = {
     selectedReason: string;
     telegramDispatchStatus: string;
     paperTradeStatus: string;
+    engineId?: "engine1" | "engine2" | "engine3";
+    engineLabel?: string;
+    strategyId?: string | null;
+    strategyLabel?: string;
   }>;
   rejectedThisCycle: Array<{
     symbol: string;
@@ -286,6 +340,10 @@ export type SignalRoomPayload = {
     suggestedManualRiskPctRange: string;
     suggestedManualLeverageRange: string;
     rejectionReason: string | null;
+    engineId?: "engine1" | "engine2" | "engine3";
+    engineLabel?: string;
+    strategyId?: string | null;
+    strategyLabel?: string;
   }>;
   cycleTruth: {
     allowedSymbolsConfigured?: string[];
