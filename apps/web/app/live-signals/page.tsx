@@ -49,6 +49,10 @@ function badgeClass(marketType: "crypto" | "forex") {
     : "rounded bg-amber-900/50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200";
 }
 
+function scoreBadge(label: string, value: string) {
+  return <span className="rounded bg-violet-900/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-200">{label}: {value}</span>;
+}
+
 export default function Page() {
   const [data, setData] = useState<SignalRoomPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -199,7 +203,9 @@ export default function Page() {
               <h2 className="text-lg font-semibold text-slate-100">Account Summary — Split Contexts</h2>
               <div className="grid gap-4 xl:grid-cols-2">
                 {(["crypto", "forex"] as const).map((marketType) => {
-                  const account = data.marketContexts?.[marketType].paperAccount;
+                  const account: any = marketType === "crypto"
+                    ? data.cryptoAccount ?? data.marketContexts?.crypto.paperAccount
+                    : data.forexAccount ?? data.marketContexts?.forex.paperAccount;
                   if (!account) return null;
                   return (
                     <div key={marketType} className="rounded-lg border border-slate-800 bg-slate-900/50 p-4 sm:p-5">
@@ -207,14 +213,14 @@ export default function Page() {
                       <div className="grid gap-3 sm:grid-cols-2">
                         <SummaryCard label="Balance" value={formatMoney(account.balance)} />
                         <SummaryCard label="Equity" value={formatMoney(account.equity)} />
-                        <SummaryCard label="Unrealized PnL" value={formatMoney(account.unrealizedPnl)} tone={toneForPnl(account.unrealizedPnl)} />
-                        <SummaryCard label="Realized PnL" value={formatMoney(account.realizedPnl)} tone={toneForPnl(account.realizedPnl)} />
+                        <SummaryCard label="Unrealized PnL" value={formatMoney(account.unrealizedPnL ?? account.unrealizedPnl)} tone={toneForPnl(account.unrealizedPnL ?? account.unrealizedPnl)} />
+                        <SummaryCard label="Realized PnL" value={formatMoney(account.realizedPnL ?? account.realizedPnl)} tone={toneForPnl(account.realizedPnL ?? account.realizedPnl)} />
                         <SummaryCard label="Used Margin" value={formatMoney(account.usedMargin)} />
                         <SummaryCard label="Free Margin" value={formatMoney(account.freeMargin)} />
-                        <SummaryCard label="Leverage" value={`${account.configuredLeverage.toFixed(2)}x`} />
-                        <SummaryCard label="Max Concurrent" value={String(account.maxConcurrentPositions)} />
-                        <SummaryCard label="Open Positions" value={String(account.openPositionsCount)} />
-                        <SummaryCard label="Closed Positions" value={String(account.closedPositionsCount)} />
+                        <SummaryCard label="Leverage" value={`${(account.leverage ?? account.configuredLeverage).toFixed(2)}x`} />
+                        <SummaryCard label="Max Concurrent" value={String(account.maxConcurrentPositions ?? "-")} />
+                        <SummaryCard label="Open Positions" value={String(account.openPositions ?? account.openPositionsCount)} />
+                        <SummaryCard label="Closed Positions" value={String(account.closedPositions ?? account.closedPositionsCount)} />
                       </div>
                     </div>
                   );
@@ -224,18 +230,25 @@ export default function Page() {
           ) : (
             <section>
               <h2 className="mb-2 text-lg font-semibold text-slate-100">{activeView.toUpperCase()} Account Summary</h2>
+              {(() => {
+                const account: any = activeView === "crypto"
+                  ? data.cryptoAccount ?? data.marketContexts?.crypto.paperAccount
+                  : data.forexAccount ?? data.marketContexts?.forex.paperAccount;
+                return (
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                <SummaryCard label="Balance" value={formatMoney(data.marketContexts?.[activeView].paperAccount.balance ?? 0)} />
-                <SummaryCard label="Equity" value={formatMoney(data.marketContexts?.[activeView].paperAccount.equity ?? 0)} />
-                <SummaryCard label="Unrealized PnL" value={formatMoney(data.marketContexts?.[activeView].paperAccount.unrealizedPnl ?? 0)} tone={toneForPnl(data.marketContexts?.[activeView].paperAccount.unrealizedPnl ?? 0)} />
-                <SummaryCard label="Realized PnL" value={formatMoney(data.marketContexts?.[activeView].paperAccount.realizedPnl ?? 0)} tone={toneForPnl(data.marketContexts?.[activeView].paperAccount.realizedPnl ?? 0)} />
-                <SummaryCard label="Used Margin" value={formatMoney(data.marketContexts?.[activeView].paperAccount.usedMargin ?? 0)} />
-                <SummaryCard label="Free Margin" value={formatMoney(data.marketContexts?.[activeView].paperAccount.freeMargin ?? 0)} />
-                <SummaryCard label="Leverage" value={`${(data.marketContexts?.[activeView].paperAccount.configuredLeverage ?? 0).toFixed(2)}x`} />
-                <SummaryCard label="Max Concurrent" value={String(data.marketContexts?.[activeView].paperAccount.maxConcurrentPositions ?? 0)} />
-                <SummaryCard label="Open Positions" value={String(data.marketContexts?.[activeView].paperAccount.openPositionsCount ?? 0)} />
-                <SummaryCard label="Closed Positions" value={String(data.marketContexts?.[activeView].paperAccount.closedPositionsCount ?? 0)} />
+                <SummaryCard label="Balance" value={formatMoney(account?.balance ?? 0)} />
+                <SummaryCard label="Equity" value={formatMoney(account?.equity ?? 0)} />
+                <SummaryCard label="Unrealized PnL" value={formatMoney(account?.unrealizedPnL ?? account?.unrealizedPnl ?? 0)} tone={toneForPnl(account?.unrealizedPnL ?? account?.unrealizedPnl ?? 0)} />
+                <SummaryCard label="Realized PnL" value={formatMoney(account?.realizedPnL ?? account?.realizedPnl ?? 0)} tone={toneForPnl(account?.realizedPnL ?? account?.realizedPnl ?? 0)} />
+                <SummaryCard label="Used Margin" value={formatMoney(account?.usedMargin ?? 0)} />
+                <SummaryCard label="Free Margin" value={formatMoney(account?.freeMargin ?? 0)} />
+                <SummaryCard label="Leverage" value={`${(account?.leverage ?? account?.configuredLeverage ?? 0).toFixed(2)}x`} />
+                <SummaryCard label="Max Concurrent" value={String(account?.maxConcurrentPositions ?? 0)} />
+                <SummaryCard label="Open Positions" value={String(account?.openPositions ?? account?.openPositionsCount ?? 0)} />
+                <SummaryCard label="Closed Positions" value={String(account?.closedPositions ?? account?.closedPositionsCount ?? 0)} />
               </div>
+                );
+              })()}
             </section>
           )}
 
@@ -287,7 +300,27 @@ export default function Page() {
                       <td className={numericCellClass}>{formatMoney(position.marginUsed)}</td>
                       <td className={`${numericCellClass} ${toneForPnl(position.unrealizedPnl)}`}>{formatMoney(position.unrealizedPnl)}</td>
                       <td className={`${numericCellClass} ${toneForPnl(position.realizedPnl)}`}>{formatMoney(position.realizedPnl)}</td>
-                      <td className={textCellClass}>{position.strategy ?? "-"}</td>
+                      <td className={`${textCellClass} space-y-1`}>
+                        <div className="text-xs text-slate-300">{position.engineLabel ?? "Engine 1"} ({position.engineId ?? "engine1"})</div>
+                        <div className="font-medium">{position.strategyLabel ?? position.strategy ?? "-"}</div>
+                        <div className="text-xs text-slate-400">strategyId: {position.strategy ?? "-"}</div>
+                        <div className="flex flex-wrap gap-1">
+                          {typeof position.signalScore === "number" && scoreBadge("score", position.signalScore.toFixed(1))}
+                          {position.tier && scoreBadge("tier", position.tier)}
+                          {typeof position.confidence === "number" && scoreBadge("conf", position.confidence.toFixed(2))}
+                          {position.strategyVariant && scoreBadge("variant", position.strategyVariant)}
+                          {position.setupType && scoreBadge("setup", position.setupType)}
+                        </div>
+                        <details className="text-xs text-slate-300">
+                          <summary className="cursor-pointer text-slate-400">reasoning</summary>
+                          <div className="mt-1 grid grid-cols-2 gap-1">
+                            <span>trend: {position.reasoning?.trend ?? "-"}</span>
+                            <span>structure: {position.reasoning?.structure ?? "-"}</span>
+                            <span>volatility: {position.reasoning?.volatility ?? "-"}</span>
+                            <span>entry: {position.reasoning?.entry ?? "-"}</span>
+                          </div>
+                        </details>
+                      </td>
                       <td className={`${textCellClass} max-w-[260px] whitespace-normal break-words`}>{position.selectedReason ?? "-"}</td>
                       <td className={textCellClass}>{formatIso(position.openedAt)}</td>
                     </tr>
@@ -330,7 +363,27 @@ export default function Page() {
                       <td className={numericCellClass}>{position.riskPct === null ? "-" : `${(position.riskPct * 100).toFixed(2)}%`}</td>
                       <td className={numericCellClass}>{position.exposureBasis === null ? "-" : formatMoney(position.exposureBasis)}</td>
                       <td className={`${numericCellClass} ${toneForPnl(position.realizedPnl)}`}>{formatMoney(position.realizedPnl)}</td>
-                      <td className={textCellClass}>{position.strategy ?? "-"}</td>
+                      <td className={`${textCellClass} space-y-1`}>
+                        <div className="text-xs text-slate-300">{position.engineLabel ?? "Engine 1"} ({position.engineId ?? "engine1"})</div>
+                        <div className="font-medium">{position.strategyLabel ?? position.strategy ?? "-"}</div>
+                        <div className="text-xs text-slate-400">strategyId: {position.strategy ?? "-"}</div>
+                        <div className="flex flex-wrap gap-1">
+                          {typeof position.signalScore === "number" && scoreBadge("score", position.signalScore.toFixed(1))}
+                          {position.tier && scoreBadge("tier", position.tier)}
+                          {typeof position.confidence === "number" && scoreBadge("conf", position.confidence.toFixed(2))}
+                          {position.strategyVariant && scoreBadge("variant", position.strategyVariant)}
+                          {position.setupType && scoreBadge("setup", position.setupType)}
+                        </div>
+                        <details className="text-xs text-slate-300">
+                          <summary className="cursor-pointer text-slate-400">reasoning</summary>
+                          <div className="mt-1 grid grid-cols-2 gap-1">
+                            <span>trend: {position.reasoning?.trend ?? "-"}</span>
+                            <span>structure: {position.reasoning?.structure ?? "-"}</span>
+                            <span>volatility: {position.reasoning?.volatility ?? "-"}</span>
+                            <span>entry: {position.reasoning?.entry ?? "-"}</span>
+                          </div>
+                        </details>
+                      </td>
                       <td className={textCellClass}>{position.closeReason ?? "-"}</td>
                       <td className={textCellClass}>{formatIso(position.openedAt)}</td>
                       <td className={textCellClass}>{formatIso(position.closedAt)}</td>
@@ -352,6 +405,7 @@ export default function Page() {
                       <th className={headerCellClass}>Market</th>
                       <th className={headerCellClass}>Symbol</th>
                       <th className={headerCellClass}>Score</th>
+                      <th className={headerCellClass}>Engine / Strategy</th>
                       <th className={headerCellClass}>Reason</th>
                     </tr>
                   </thead>
@@ -362,6 +416,11 @@ export default function Page() {
                         <td className={textCellClass}><span className={badgeClass(entry.marketType)}>{entry.marketType}</span></td>
                         <td className={textCellClass}>{entry.symbol} {entry.side}</td>
                         <td className={numericCellClass}>{entry.score.toFixed(2)}</td>
+                        <td className={textCellClass}>
+                          <div className="text-xs text-slate-300">{entry.engineLabel ?? "Engine 1"} ({entry.engineId ?? "engine1"})</div>
+                          <div className="text-xs text-slate-400">{entry.strategyLabel ?? "Compression Breakout"}</div>
+                          <div className="text-xs text-slate-500">strategyId: {entry.strategyId ?? "-"}</div>
+                        </td>
                         <td className={`${textCellClass} max-w-[360px] whitespace-normal break-words`}>{entry.selectedReason}</td>
                       </tr>
                     ))}
@@ -380,6 +439,7 @@ export default function Page() {
                       <th className={headerCellClass}>Market</th>
                       <th className={headerCellClass}>Symbol</th>
                       <th className={headerCellClass}>Score</th>
+                      <th className={headerCellClass}>Engine / Strategy</th>
                       <th className={headerCellClass}>Rejection reason</th>
                     </tr>
                   </thead>
@@ -390,6 +450,11 @@ export default function Page() {
                         <td className={textCellClass}><span className={badgeClass(entry.marketType)}>{entry.marketType}</span></td>
                         <td className={textCellClass}>{entry.symbol} {entry.side}</td>
                         <td className={numericCellClass}>{entry.score.toFixed(2)}</td>
+                        <td className={textCellClass}>
+                          <div className="text-xs text-slate-300">{entry.engineLabel ?? "Engine 1"} ({entry.engineId ?? "engine1"})</div>
+                          <div className="text-xs text-slate-400">{entry.strategyLabel ?? "Compression Breakout"}</div>
+                          <div className="text-xs text-slate-500">strategyId: {entry.strategyId ?? "-"}</div>
+                        </td>
                         <td className={`${textCellClass} max-w-[360px] whitespace-normal break-words`}>{entry.rejectionReason ?? "-"}</td>
                       </tr>
                     ))}
@@ -419,6 +484,8 @@ export default function Page() {
                   <p>Market: <span className="font-medium">{inspected.marketType}</span></p>
                   <p>Symbol/Side: <span className="font-medium">{inspected.symbol} {inspected.side}</span></p>
                   <p>Status: <span className="font-medium">{inspected.status}</span></p>
+                  <p>Engine: <span className="font-medium">{inspected.engineLabel ?? "Engine 1"} ({inspected.engineId ?? "engine1"})</span></p>
+                  <p>Strategy: <span className="font-medium">{inspected.strategyLabel ?? inspected.strategy ?? "-"} / {inspected.strategy ?? "-"}</span></p>
                   <p>Entry reason: <span className="font-medium">{inspected.selectedReason ?? "-"}</span></p>
                   <p>Close reason: <span className="font-medium">{inspected.closeReason ?? "-"}</span></p>
                   <p>Stop pips / risk %: <span className="font-medium">{inspected.stopPips === null ? "-" : formatQty(inspected.stopPips)} / {inspected.riskPct === null ? "-" : `${(inspected.riskPct * 100).toFixed(2)}%`}</span></p>

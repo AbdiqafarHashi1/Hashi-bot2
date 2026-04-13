@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { getConfig } from "@hashi/config";
 import { buildPaperAccountSnapshot, type PaperCloseReason, type PaperExecutionDecision, type PaperPosition } from "@hashi/core";
 
+type EngineDescriptor = {
+  engineId: "engine1" | "engine2" | "engine3";
+  engineLabel: string;
+  strategyLabel: string;
+};
+
 async function resolvePrisma() {
   try {
     const { prisma } = await import("@hashi/db");
@@ -209,6 +215,16 @@ function closeReasonFromTradeStatus(status: string): PaperCloseReason | null {
   return null;
 }
 
+function resolveEngineDescriptor(strategyId: string | null | undefined): EngineDescriptor {
+  if (strategyId === "expansion_reload_v2_wide") {
+    return { engineId: "engine2", engineLabel: "Engine 2", strategyLabel: "Expansion Reload" };
+  }
+  if (strategyId === "continuation_reclaim_5m_v1") {
+    return { engineId: "engine3", engineLabel: "Engine 3", strategyLabel: "Continuation Reclaim" };
+  }
+  return { engineId: "engine1", engineLabel: "Engine 1", strategyLabel: "Compression Breakout" };
+}
+
 export async function GET() {
   const prisma = await resolvePrisma();
   if (!prisma) {
@@ -232,7 +248,8 @@ export async function GET() {
     totalTelegramDispatchRecords,
     latestSignalEvent,
     recentExecutionDecisionEvents,
-    recentTradeLifecycleEvents
+    recentTradeLifecycleEvents,
+    recentPersistedSignalDetails
   ] = await Promise.all([
     prisma.signalTrade.findMany({
       where: {
@@ -281,6 +298,11 @@ export async function GET() {
       where: { type: "signal_trade_updated", mode: "signal" },
       orderBy: { createdAt: "desc" },
       take: 30
+    }),
+    prisma.runtimeEvent.findMany({
+      where: { type: "signal_persisted", mode: "signal" },
+      orderBy: { createdAt: "desc" },
+      take: 200
     })
   ]);
   const systemControl = await prisma.systemControl.findUnique({ where: { id: "system" } });
@@ -342,7 +364,66 @@ export async function GET() {
       selectedReasonBySignalEventId.set(payload.signalEventId, payload.selectedReason);
     }
   }
-  const openPaperPositions = openTradesWithDispatch.map((trade) => ({
+  const signalDetailBySignalEventId = new Map<string, {
+    signalScore: number | null;
+    confidence: number | null;
+    tier: string | null;
+    strategyVariant: string | null;
+    setupType: string | null;
+    strategyId: string | null;
+    reasoning: {
+      trend: number | null;
+      structure: number | null;
+      volatility: number | null;
+      entry: number | null;
+    };
+  }>();
+  for (const event of recentPersistedSignalDetails) {
+    const payload = (event.payload as {
+      signalEventId?: string;
+      detail?: {
+        signal?: {
+          score?: number;
+          confidence?: number;
+          strategyId?: string;
+          metadata?: {
+            tier?: string;
+            setupVariant?: string;
+            strategyBackbone?: string;
+            scoring?: {
+              trend?: number;
+              structure?: number;
+              volatility?: number;
+              entry?: number;
+            };
+          };
+        };
+      };
+    } | null) ?? null;
+    const signalEventId = payload?.signalEventId;
+    if (!signalEventId || signalDetailBySignalEventId.has(signalEventId)) continue;
+    const scoring = payload?.detail?.signal?.metadata?.scoring;
+    signalDetailBySignalEventId.set(signalEventId, {
+      signalScore: payload?.detail?.signal?.score ?? null,
+      confidence: payload?.detail?.signal?.confidence ?? null,
+      tier: payload?.detail?.signal?.metadata?.tier ?? null,
+      strategyVariant: payload?.detail?.signal?.metadata?.setupVariant ?? null,
+      setupType: payload?.detail?.signal?.metadata?.strategyBackbone ?? null,
+      strategyId: payload?.detail?.signal?.strategyId ?? null,
+      reasoning: {
+        trend: typeof scoring?.trend === "number" ? scoring.trend : null,
+        structure: typeof scoring?.structure === "number" ? scoring.structure : null,
+        volatility: typeof scoring?.volatility === "number" ? scoring.volatility : null,
+        entry: typeof scoring?.entry === "number" ? scoring.entry : null
+      }
+    });
+  }
+  const signalEventById = new Map(recentSignals.map((signal) => [signal.id, signal]));
+  const openPaperPositions = openTradesWithDispatch.map((trade) => {
+    const strategyId = signalEventById.get(trade.signalEventId)?.strategy ?? null;
+    const engine = resolveEngineDescriptor(strategyId);
+    const detail = signalDetailBySignalEventId.get(trade.signalEventId);
+    return ({
     marketType: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }),
     id: trade.id,
     symbol: trade.symbol,
@@ -367,7 +448,21 @@ export async function GET() {
     closeReason: closeReasonFromTradeStatus(trade.status),
     unrealizedPnl: trade.unrealizedPnl ?? 0,
     realizedPnl: trade.realizedPnl ?? 0,
-    strategy: openTradeEvents.find((event) => event.id === trade.signalEventId)?.strategy ?? null,
+    strategy: strategyId,
+    engineId: engine.engineId,
+    engineLabel: engine.engineLabel,
+    strategyLabel: engine.strategyLabel,
+    signalScore: detail?.signalScore ?? signalEventById.get(trade.signalEventId)?.score ?? null,
+    tier: detail?.tier ?? null,
+    confidence: detail?.confidence ?? signalEventById.get(trade.signalEventId)?.confidence ?? null,
+    strategyVariant: detail?.strategyVariant ?? null,
+    setupType: detail?.setupType ?? null,
+    reasoning: detail?.reasoning ?? {
+      trend: null,
+      structure: null,
+      volatility: null,
+      entry: null
+    },
     riskPct: trade.riskPct ?? null,
     stopPips: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }) === "forex"
       ? Math.abs(trade.entryPrice - trade.stopPrice) / pipSize(trade.symbol)
@@ -375,8 +470,13 @@ export async function GET() {
     exposureBasis: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }) === "forex"
       ? config.SIGNAL_FOREX_PER_TRADE_EXPOSURE_BASIS
       : null
-  }));
-  const closedPaperPositions = closedTradesWithPaper.map((trade) => ({
+  });
+  });
+  const closedPaperPositions = closedTradesWithPaper.map((trade) => {
+    const strategyId = signalEventById.get(trade.signalEventId)?.strategy ?? null;
+    const engine = resolveEngineDescriptor(strategyId);
+    const detail = signalDetailBySignalEventId.get(trade.signalEventId);
+    return ({
     marketType: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }),
     id: trade.id,
     symbol: trade.symbol,
@@ -401,7 +501,21 @@ export async function GET() {
     closeReason: closeReasonFromTradeStatus(trade.status),
     unrealizedPnl: trade.unrealizedPnl ?? 0,
     realizedPnl: trade.realizedPnl ?? 0,
-    strategy: recentSignals.find((signal) => signal.id === trade.signalEventId)?.strategy ?? null,
+    strategy: strategyId,
+    engineId: engine.engineId,
+    engineLabel: engine.engineLabel,
+    strategyLabel: engine.strategyLabel,
+    signalScore: detail?.signalScore ?? signalEventById.get(trade.signalEventId)?.score ?? null,
+    tier: detail?.tier ?? null,
+    confidence: detail?.confidence ?? signalEventById.get(trade.signalEventId)?.confidence ?? null,
+    strategyVariant: detail?.strategyVariant ?? null,
+    setupType: detail?.setupType ?? null,
+    reasoning: detail?.reasoning ?? {
+      trend: null,
+      structure: null,
+      volatility: null,
+      entry: null
+    },
     riskPct: trade.riskPct ?? null,
     stopPips: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }) === "forex"
       ? Math.abs(trade.entryPrice - trade.stopPrice) / pipSize(trade.symbol)
@@ -409,7 +523,8 @@ export async function GET() {
     exposureBasis: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }) === "forex"
       ? config.SIGNAL_FOREX_PER_TRADE_EXPOSURE_BASIS
       : null
-  }));
+  });
+  });
   const paperAccount = buildPaperAccountSnapshot({
     startingBalance: config.SIGNAL_PAPER_EQUITY,
     configuredLeverage: config.SIGNAL_PAPER_LEVERAGE,
@@ -504,6 +619,35 @@ export async function GET() {
     openTradesWithTelegramDispatch: openTradesWithDispatch.filter((trade) => trade.telegramDispatchStatus === "sent").length,
     openTradesWithoutTelegramDispatch: openTradesWithDispatch.filter((trade) => trade.telegramDispatchStatus !== "sent").length
   };
+  const latestSignalBySymbol = new Map<string, (typeof recentSignals)[number]>();
+  for (const signal of recentSignals) {
+    const key = normalizeSymbol(signal.symbol);
+    if (!latestSignalBySymbol.has(key)) latestSignalBySymbol.set(key, signal);
+  }
+  const selectedThisCycle = (cycleTruth?.actionableSelectedThisCycle ?? []).map((entry) => {
+    const strategyId = latestSignalBySymbol.get(normalizeSymbol(entry.symbol))?.strategy ?? null;
+    const engine = resolveEngineDescriptor(strategyId);
+    return {
+      ...entry,
+      engineId: engine.engineId,
+      engineLabel: engine.engineLabel,
+      strategyId,
+      strategyLabel: engine.strategyLabel
+    };
+  });
+  const rejectedThisCycle = (cycleTruth?.auditCandidatesThisCycle ?? [])
+    .filter((entry) => !entry.selected)
+    .map((entry) => {
+      const strategyId = latestSignalBySymbol.get(normalizeSymbol(entry.symbol))?.strategy ?? null;
+      const engine = resolveEngineDescriptor(strategyId);
+      return {
+        ...entry,
+        engineId: engine.engineId,
+        engineLabel: engine.engineLabel,
+        strategyId,
+        strategyLabel: engine.strategyLabel
+      };
+    });
   const cycleTruth = reconciliation?.cycleTruth ?? null;
   const paperEquity = paperAccount.equity;
   const usedNotional = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.notional ?? 0), 0);
@@ -516,6 +660,28 @@ export async function GET() {
   const effectivePortfolioLeverage = paperEquity > 0 ? usedNotional / paperEquity : 0;
 
   const responsePayload = {
+    cryptoAccount: {
+      balance: marketContexts.crypto.paperAccount.balance,
+      equity: marketContexts.crypto.paperAccount.equity,
+      usedMargin: marketContexts.crypto.paperAccount.usedMargin,
+      freeMargin: marketContexts.crypto.paperAccount.freeMargin,
+      unrealizedPnL: marketContexts.crypto.paperAccount.unrealizedPnl,
+      realizedPnL: marketContexts.crypto.paperAccount.realizedPnl,
+      openPositions: marketContexts.crypto.paperAccount.openPositionsCount,
+      closedPositions: marketContexts.crypto.paperAccount.closedPositionsCount,
+      leverage: marketContexts.crypto.paperAccount.configuredLeverage
+    },
+    forexAccount: {
+      balance: marketContexts.forex.paperAccount.balance,
+      equity: marketContexts.forex.paperAccount.equity,
+      usedMargin: marketContexts.forex.paperAccount.usedMargin,
+      freeMargin: marketContexts.forex.paperAccount.freeMargin,
+      unrealizedPnL: marketContexts.forex.paperAccount.unrealizedPnl,
+      realizedPnL: marketContexts.forex.paperAccount.realizedPnl,
+      openPositions: marketContexts.forex.paperAccount.openPositionsCount,
+      closedPositions: marketContexts.forex.paperAccount.closedPositionsCount,
+      leverage: marketContexts.forex.paperAccount.configuredLeverage
+    },
     marketContexts,
     paperAccount,
     openPaperPositions,
@@ -607,8 +773,8 @@ export async function GET() {
     },
     cycleTruth,
     dispatchBreakdown,
-    selectedThisCycle: cycleTruth?.actionableSelectedThisCycle ?? [],
-    rejectedThisCycle: (cycleTruth?.auditCandidatesThisCycle ?? []).filter((entry) => !entry.selected),
+    selectedThisCycle,
+    rejectedThisCycle,
     openTrades: openTradesWithDispatch,
     closedTrades: closedTradesWithPaper,
     recentActionableSignals: recentSignals
