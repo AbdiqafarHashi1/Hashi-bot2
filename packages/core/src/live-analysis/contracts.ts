@@ -56,6 +56,8 @@ export interface MarketTypeLiveAnalysisAdapter {
     htf1: Timeframe;
     htf2: Timeframe;
     candleLimit: number;
+    cycleNumber?: number;
+    debugVisibilityEnabled?: boolean;
   }): Promise<LiveAnalysisMarketData>;
 }
 
@@ -69,6 +71,8 @@ export class MarketTypeAwareAnalysisLoader {
     htf1: Timeframe;
     htf2: Timeframe;
     candleLimit: number;
+    cycleNumber?: number;
+    debugVisibilityEnabled?: boolean;
   }): Promise<MarketContext> {
     const adapter = this.adapters[input.marketType];
     const data = await adapter.load({
@@ -76,7 +80,9 @@ export class MarketTypeAwareAnalysisLoader {
       executionTimeframe: input.executionTimeframe,
       htf1: input.htf1,
       htf2: input.htf2,
-      candleLimit: input.candleLimit
+      candleLimit: input.candleLimit,
+      cycleNumber: input.cycleNumber,
+      debugVisibilityEnabled: input.debugVisibilityEnabled
     });
 
     return {

@@ -912,7 +912,9 @@ async function generateUnifiedSignalsForContext(params: {
           executionTimeframe: "5m",
           htf1: "15m",
           htf2: "1h",
-          candleLimit: config.CANDLE_LIMIT
+          candleLimit: config.CANDLE_LIMIT,
+          cycleNumber,
+          debugVisibilityEnabled
         })
       : marketContext;
     const engineId = strategyEngineId(config, strategyId);
@@ -1603,6 +1605,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let engineScansAttempted = 0;
   let engineScansNoSetup = 0;
   let engineScansCandidates = 0;
+  let providerFailures = 0;
+  const symbolsSurvivedProviderStage = new Set<string>();
+  const symbolsReachedEngineScan = new Set<string>();
   let candidatesGeneratedCount = 0;
   let candidatesRejectedCount = 0;
   let candidatesSelectedCount = 0;
@@ -1931,11 +1936,14 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
         htf1: config.DEFAULT_HTF_1,
         htf2: config.DEFAULT_HTF_2,
-        candleLimit: preloadCandleLimit
+        candleLimit: preloadCandleLimit,
+        cycleNumber,
+        debugVisibilityEnabled
       });
       marketContext.candles = normalizeLiveAnalysisCandles(marketContext.candles);
       const preloadKey = symbolRuntimeKey(symbolContext);
       preloadedContextBySymbol.set(preloadKey, marketContext);
+      symbolsSurvivedProviderStage.add(preloadKey);
       const readiness = computeAnalysisReadiness({
         symbolContext,
         marketContext,
@@ -1985,6 +1993,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       const blockedReason = symbolContext.marketType === "forex"
         ? (errorMessage.includes("404") ? "forex_feed_404" : `forex_feed_unavailable:${errorMessage}`)
         : errorMessage;
+      if (blockedReason.includes("provider_fetch_failed")) {
+        providerFailures += 1;
+      }
       cycleBlockedByReason[blockedReason] = (cycleBlockedByReason[blockedReason] ?? 0) + 1;
       console.log(
         JSON.stringify(
@@ -2108,6 +2119,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       analysisReady: readiness.analysisReady,
       candleCount: readiness.candleCount
     }, null, 2));
+    symbolsReachedEngineScan.add(contextKey);
 
     const regime = classifyRegime(marketContext);
     const { signals: generatedSignals, evaluation } = await generateUnifiedSignalsForContext({
@@ -3335,7 +3347,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
             htf1: config.DEFAULT_HTF_1,
             htf2: config.DEFAULT_HTF_2,
-            candleLimit: 50
+            candleLimit: 50,
+            cycleNumber,
+            debugVisibilityEnabled
           });
           latestPrice = dynamicContext.latestPrice;
           if (latestPrice !== undefined) {
@@ -4648,6 +4662,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         symbolsTotal: runtimeSymbols.length,
         symbolsContextReady: symbolReadiness.filter((entry) => entry.analysisReady).length,
         symbolsBlocked: symbolReadiness.filter((entry) => !entry.analysisReady).length,
+        providerFailures,
+        symbolsSurvivedProviderStage: symbolsSurvivedProviderStage.size,
+        symbolsReachedEngineScan: symbolsReachedEngineScan.size,
         engineScansAttempted,
         engineScansNoSetup,
         engineScansCandidates,
