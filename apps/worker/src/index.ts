@@ -862,6 +862,13 @@ function resolveRuntimeStrategyIds(config: ReturnType<typeof getConfig>): string
   return Array.from(new Set(ids));
 }
 
+function resolveRuntimeEnginePlanForSymbol(config: ReturnType<typeof getConfig>) {
+  return resolveRuntimeStrategyIds(config).map((strategyId) => ({
+    strategyId,
+    engineId: strategyEngineId(config, strategyId)
+  }));
+}
+
 async function generateUnifiedSignalsForContext(params: {
   marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>;
   regime: ReturnType<typeof classifyRegime>;
@@ -1676,6 +1683,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let providerFailures = 0;
   const symbolsSurvivedProviderStage = new Set<string>();
   const symbolsReachedEngineScan = new Set<string>();
+  const symbolsCompletedEngineScan = new Set<string>();
   let candidatesGeneratedCount = 0;
   let candidatesRejectedCount = 0;
   let candidatesSelectedCount = 0;
@@ -2173,6 +2181,68 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   for (const symbolContext of runtimeSymbols) {
     const contextKey = symbolRuntimeKey(symbolContext);
     const readiness = symbolReadiness.find((entry) => symbolRuntimeKey(entry) === contextKey);
+    console.log(JSON.stringify({
+      event: "PRE_ENGINE_SYMBOL_DISPATCH",
+      cycleNumber,
+      symbol: symbolContext.symbol,
+      marketType: symbolContext.marketType,
+      contextReady: readiness?.analysisReady ?? false,
+      debugVisibilityEnabled
+    }, null, 2));
+    symbolsReachedEngineScan.add(contextKey);
+    const enginePlan = resolveRuntimeEnginePlanForSymbol(config);
+    const emitBlockedEngineScanForSymbol = (reason: string, summary: string) => {
+      for (const engine of enginePlan) {
+        const trace: EngineScanTrace = {
+          symbol: symbolContext.symbol,
+          marketType: symbolContext.marketType,
+          engineId: engine.engineId,
+          strategyId: engine.strategyId,
+          executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
+          htf1: config.DEFAULT_HTF_1,
+          htf2: config.DEFAULT_HTF_2,
+          result: "blocked",
+          reason,
+          summary,
+          candidateGeneratedCount: 0,
+          candidateRejectedCount: 0
+        };
+        engineScansAttempted += 1;
+        engineScansBlocked += 1;
+        const bucket = noSetupByEngine[engine.engineId] ?? (noSetupByEngine[engine.engineId] = {});
+        bucket[reason] = (bucket[reason] ?? 0) + 1;
+        console.log(
+          JSON.stringify(
+            {
+              event: "ENGINE_SCAN_BEGIN",
+              cycleNumber,
+              symbol: symbolContext.symbol,
+              marketType: symbolContext.marketType,
+              engineId: engine.engineId,
+              strategyId: engine.strategyId,
+              executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
+              htf1: config.DEFAULT_HTF_1,
+              htf2: config.DEFAULT_HTF_2,
+              debugVisibilityEnabled
+            },
+            null,
+            2
+          )
+        );
+        console.log(
+          JSON.stringify(
+            {
+              event: "ENGINE_SCAN_RESULT",
+              cycleNumber,
+              ...trace
+            },
+            null,
+            2
+          )
+        );
+      }
+      symbolsCompletedEngineScan.add(contextKey);
+    };
     if (warmupIncomplete || !readiness?.analysisReady) {
       skippedCount += 1;
       rejectionCounts.analysis_feed_unavailable += 1;
@@ -2191,15 +2261,14 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         ? "worker_warmup_incomplete_no_analysis_ready_symbols"
         : readiness?.blockedReason ?? "analysis_context_not_ready";
       cycleBlockedByReason[blockedReason] = (cycleBlockedByReason[blockedReason] ?? 0) + 1;
-      if (debugVisibilityEnabled) {
-        console.log(JSON.stringify({
-          event: toStructuredEventName("CONTEXT_BLOCKED"),
-          cycleNumber,
-          symbol: symbolContext.symbol,
-          marketType: symbolContext.marketType,
-          blockedReason
-        }, null, 2));
-      }
+      console.log(JSON.stringify({
+        event: toStructuredEventName("CONTEXT_BLOCKED"),
+        cycleNumber,
+        symbol: symbolContext.symbol,
+        marketType: symbolContext.marketType,
+        blockedReason
+      }, null, 2));
+      emitBlockedEngineScanForSymbol(blockedReason, "analysis_not_ready_for_engine_scan");
       continue;
     }
     const marketContext = preloadedContextBySymbol.get(contextKey);
@@ -2216,6 +2285,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         reason: "analysis_context_missing_after_preload"
       });
       cycleBlockedByReason.analysis_context_missing_after_preload = (cycleBlockedByReason.analysis_context_missing_after_preload ?? 0) + 1;
+      emitBlockedEngineScanForSymbol("analysis_context_missing_after_preload", "analysis_context_missing_after_preload");
       continue;
     }
 
@@ -2228,104 +2298,128 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       analysisReady: readiness.analysisReady,
       candleCount: readiness.candleCount
     }, null, 2));
-    console.log(JSON.stringify({
-      event: "PRE_ENGINE_SYMBOL_DISPATCH",
-      cycleNumber,
-      symbol: symbolContext.symbol,
-      marketType: symbolContext.marketType,
-      contextReady: readiness.analysisReady,
-      debugVisibilityEnabled
-    }, null, 2));
-    symbolsReachedEngineScan.add(contextKey);
 
-    const regime = classifyRegime(marketContext);
-    const { signals: generatedSignals, evaluation } = await generateUnifiedSignalsForContext({
-      marketContext,
-      regime,
-      config,
-      runtimeMode,
-      marketTypeLoader,
-      cycleNumber,
-      debugVisibilityEnabled
-    });
-    engineScansAttempted += evaluation.engineScans.length;
-    for (const scan of evaluation.engineScans) {
-      if (scan.result === "candidate_generated") engineScansCandidates += 1;
-      if (scan.result === "no_setup") {
-        engineScansNoSetup += 1;
+    try {
+      const regime = classifyRegime(marketContext);
+      const { signals: generatedSignals, evaluation } = await generateUnifiedSignalsForContext({
+        marketContext,
+        regime,
+        config,
+        runtimeMode,
+        marketTypeLoader,
+        cycleNumber,
+        debugVisibilityEnabled
+      });
+      engineScansAttempted += evaluation.engineScans.length;
+      for (const scan of evaluation.engineScans) {
+        if (scan.result === "candidate_generated") engineScansCandidates += 1;
+        if (scan.result === "no_setup") {
+          engineScansNoSetup += 1;
+        }
+        if (scan.result === "skipped") {
+          engineScansSkipped += 1;
+        }
+        if (scan.result === "blocked") {
+          engineScansBlocked += 1;
+        }
+        if (scan.result === "engine_error") {
+          engineScansErrors += 1;
+        }
+        if (scan.result === "no_setup" || scan.result === "skipped" || scan.result === "blocked" || scan.result === "engine_error") {
+          const bucket = noSetupByEngine[scan.engineId] ?? (noSetupByEngine[scan.engineId] = {});
+          bucket[scan.reason] = (bucket[scan.reason] ?? 0) + 1;
+        }
       }
-      if (scan.result === "skipped") {
-        engineScansSkipped += 1;
+      if (generatedSignals.length === 0) {
+        skippedCount += 1;
+        rejectionCounts.not_actionable_not_in_final_selected_set += 1;
+        const summary = symbolSummaries.get(symbolContext.symbol);
+        if (summary) {
+          summary.candidateFound = false;
+          summary.skipReason = "no_setup_found";
+        }
+        console.log(
+          JSON.stringify(
+            {
+              event: "directional_candidate_rejected_real_reason",
+              cycleNumber,
+              symbol: symbolContext.symbol,
+              marketType: symbolContext.marketType,
+              contextKey,
+              reason: "no_setup_found",
+              analysisReady: readiness.analysisReady,
+              staleFeedUnavailableSuppressed: true
+            },
+            null,
+            2
+          )
+        );
+        symbolsCompletedEngineScan.add(contextKey);
+        continue;
       }
-      if (scan.result === "blocked") {
-        engineScansBlocked += 1;
-      }
-      if (scan.result === "engine_error") {
-        engineScansErrors += 1;
-      }
-      if (scan.result === "no_setup" || scan.result === "skipped" || scan.result === "blocked" || scan.result === "engine_error") {
-        const bucket = noSetupByEngine[scan.engineId] ?? (noSetupByEngine[scan.engineId] = {});
-        bucket[scan.reason] = (bucket[scan.reason] ?? 0) + 1;
-      }
-    }
-    if (generatedSignals.length === 0) {
-      skippedCount += 1;
-      rejectionCounts.not_actionable_not_in_final_selected_set += 1;
       const summary = symbolSummaries.get(symbolContext.symbol);
       if (summary) {
-        summary.candidateFound = false;
-        summary.skipReason = "no_setup_found";
+        summary.candidateFound = true;
+        summary.skipReason = null;
       }
+
+      for (const signal of generatedSignals) {
+        candidatesGeneratedCount += 1;
+        if (debugVisibilityEnabled) {
+          console.log(JSON.stringify({
+            event: "CANDIDATE_GENERATED",
+            cycleNumber,
+            symbol: signal.symbol,
+            marketType: signal.marketType,
+            engineId: strategyEngineId(config, signal.strategyId),
+            strategyId: signal.strategyId,
+            setupVariant: typeof signal.metadata?.setupVariant === "string" ? signal.metadata.setupVariant : null,
+            side: signal.side,
+            score: signal.score,
+            entry: signal.entryPrice,
+            stop: signal.stopPrice,
+            tp1: signal.tp1,
+            tp2: signal.tp2
+          }, null, 2));
+        }
+        cycleCandidates.push({
+          symbolContext,
+          marketContext,
+          regime,
+          candidateCount: generatedSignals.length,
+          signal
+        });
+      }
+      symbolsCompletedEngineScan.add(contextKey);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "symbol_scan_unhandled_error";
+      cycleBlockedByReason[reason] = (cycleBlockedByReason[reason] ?? 0) + 1;
+      skippedCount += 1;
+      rejectionCounts.analysis_feed_unavailable += 1;
+      const summary = symbolSummaries.get(symbolContext.symbol);
+      if (summary) {
+        summary.skipReason = "analysis_feed_unavailable";
+      }
+      unavailableFeeds.push({
+        symbol: symbolContext.symbol,
+        marketType: symbolContext.marketType,
+        reason
+      });
       console.log(
         JSON.stringify(
           {
-            event: "directional_candidate_rejected_real_reason",
+            event: "SYMBOL_SCAN_ERROR",
             cycleNumber,
             symbol: symbolContext.symbol,
             marketType: symbolContext.marketType,
-            contextKey,
-            reason: "no_setup_found",
-            analysisReady: readiness.analysisReady,
-            staleFeedUnavailableSuppressed: true
+            reason
           },
           null,
           2
         )
       );
+      emitBlockedEngineScanForSymbol(reason, "symbol_dispatch_failed");
       continue;
-    }
-    const summary = symbolSummaries.get(symbolContext.symbol);
-    if (summary) {
-      summary.candidateFound = true;
-      summary.skipReason = null;
-    }
-
-    for (const signal of generatedSignals) {
-      candidatesGeneratedCount += 1;
-      if (debugVisibilityEnabled) {
-        console.log(JSON.stringify({
-          event: "CANDIDATE_GENERATED",
-          cycleNumber,
-          symbol: signal.symbol,
-          marketType: signal.marketType,
-          engineId: strategyEngineId(config, signal.strategyId),
-          strategyId: signal.strategyId,
-          setupVariant: typeof signal.metadata?.setupVariant === "string" ? signal.metadata.setupVariant : null,
-          side: signal.side,
-          score: signal.score,
-          entry: signal.entryPrice,
-          stop: signal.stopPrice,
-          tp1: signal.tp1,
-          tp2: signal.tp2
-        }, null, 2));
-      }
-      cycleCandidates.push({
-        symbolContext,
-        marketContext,
-        regime,
-        candidateCount: generatedSignals.length,
-        signal
-      });
     }
   }
   candidateCount = cycleCandidates.length;
@@ -4796,7 +4890,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         cycleNumber,
         debugVisibilityEnabled,
         symbolsDispatchedToScan: symbolsReachedEngineScan.size,
-        symbolsCompletedScan: symbolsReachedEngineScan.size,
+        symbolsCompletedScan: symbolsCompletedEngineScan.size,
         totalEngineAttempts: engineScansAttempted,
         totalCandidates: engineScansCandidates,
         totalNoSetup: engineScansNoSetup,
@@ -4830,6 +4924,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         providerFailures,
         symbolsSurvivedProviderStage: symbolsSurvivedProviderStage.size,
         symbolsReachedEngineScan: symbolsReachedEngineScan.size,
+        symbolsCompletedEngineScan: symbolsCompletedEngineScan.size,
         engineScansAttempted,
         engineScansCandidates,
         engineScansNoSetup,
