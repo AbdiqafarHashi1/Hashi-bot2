@@ -965,8 +965,23 @@ async function generateUnifiedSignalsForContext(params: {
   }
 
   for (const strategyId of strategyIds) {
-    const strategyContext = strategyId === config.ENGINE3_STRATEGY
-      ? await marketTypeLoader.loadContext({
+    const engineId = strategyEngineId(config, strategyId);
+    const defaultExecutionTimeframe = strategyId === config.ENGINE3_STRATEGY ? "5m" : marketContext.executionTimeframe;
+    const defaultHtf1 = strategyId === config.ENGINE3_STRATEGY ? "15m" : marketContext.htf1;
+    const defaultHtf2 = strategyId === config.ENGINE3_STRATEGY ? "1h" : marketContext.htf2;
+    emitEngineScanBegin({
+      symbol: marketContext.symbol,
+      marketType: marketContext.marketType,
+      engineId,
+      strategyId,
+      executionTimeframe: defaultExecutionTimeframe,
+      htf1: defaultHtf1,
+      htf2: defaultHtf2
+    });
+    let strategyContext = marketContext;
+    if (strategyId === config.ENGINE3_STRATEGY) {
+      try {
+        strategyContext = await marketTypeLoader.loadContext({
           symbol: marketContext.symbol,
           marketType: marketContext.marketType,
           executionTimeframe: "5m",
@@ -975,19 +990,27 @@ async function generateUnifiedSignalsForContext(params: {
           candleLimit: config.CANDLE_LIMIT,
           cycleNumber,
           debugVisibilityEnabled
-        })
-      : marketContext;
-    const engineId = strategyEngineId(config, strategyId);
-    const beginPayload = {
-      symbol: strategyContext.symbol,
-      marketType: strategyContext.marketType,
-      engineId,
-      strategyId,
-      executionTimeframe: strategyContext.executionTimeframe,
-      htf1: strategyContext.htf1,
-      htf2: strategyContext.htf2
-    };
-    emitEngineScanBegin(beginPayload);
+        });
+      } catch (error) {
+        const trace: EngineScanTrace = {
+          symbol: marketContext.symbol,
+          marketType: marketContext.marketType,
+          engineId,
+          strategyId,
+          executionTimeframe: defaultExecutionTimeframe,
+          htf1: defaultHtf1,
+          htf2: defaultHtf2,
+          result: "blocked",
+          reason: error instanceof Error ? error.message : "engine3_context_load_failed",
+          summary: "strategy_context_load_failed",
+          candidateGeneratedCount: 0,
+          candidateRejectedCount: 0
+        };
+        engineScans.push(trace);
+        logEngineScanResult(trace);
+        continue;
+      }
+    }
     if (strategyId === config.ENGINE3_STRATEGY && marketContext.marketType !== "crypto") {
       const trace: EngineScanTrace = {
         symbol: strategyContext.symbol,
@@ -1645,8 +1668,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     engine3: {}
   };
   let engineScansAttempted = 0;
-  let engineScansNoSetup = 0;
   let engineScansCandidates = 0;
+  let engineScansNoSetup = 0;
+  let engineScansSkipped = 0;
+  let engineScansBlocked = 0;
+  let engineScansErrors = 0;
   let providerFailures = 0;
   const symbolsSurvivedProviderStage = new Set<string>();
   const symbolsReachedEngineScan = new Set<string>();
@@ -2110,6 +2136,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       {
         event: "POST_PRELOAD_SUMMARY",
         cycleNumber,
+        totalSymbols: runtimeSymbols.length,
+        symbolsReady: analysisReadySymbols.length,
+        symbolsFailed: Math.max(runtimeSymbols.length - analysisReadySymbols.length, 0),
         symbolsTotal: runtimeSymbols.length,
         contextsCreated: preloadedContextBySymbol.size,
         contextsReady: analysisReadySymbols.length,
@@ -2222,8 +2251,19 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     engineScansAttempted += evaluation.engineScans.length;
     for (const scan of evaluation.engineScans) {
       if (scan.result === "candidate_generated") engineScansCandidates += 1;
-      if (scan.result === "no_setup" || scan.result === "skipped" || scan.result === "blocked") {
+      if (scan.result === "no_setup") {
         engineScansNoSetup += 1;
+      }
+      if (scan.result === "skipped") {
+        engineScansSkipped += 1;
+      }
+      if (scan.result === "blocked") {
+        engineScansBlocked += 1;
+      }
+      if (scan.result === "engine_error") {
+        engineScansErrors += 1;
+      }
+      if (scan.result === "no_setup" || scan.result === "skipped" || scan.result === "blocked" || scan.result === "engine_error") {
         const bucket = noSetupByEngine[scan.engineId] ?? (noSetupByEngine[scan.engineId] = {});
         bucket[scan.reason] = (bucket[scan.reason] ?? 0) + 1;
       }
@@ -4749,30 +4789,35 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   }
 
   const durationMs = Date.now() - cycleStartedAtMs;
-  if (debugVisibilityEnabled) {
-    console.log(
-      JSON.stringify(
-        {
-          event: "WORKER_CYCLE_SUMMARY",
-          cycleNumber,
-          debugVisibilityEnabled,
-          symbolsTotal: runtimeSymbols.length,
-          symbolsContextReady: symbolReadiness.filter((entry) => entry.analysisReady).length,
-          symbolsBlocked: symbolReadiness.filter((entry) => !entry.analysisReady).length,
-          symbolsReachedEngineScan: symbolsReachedEngineScan.size,
-          candidatesGenerated: candidatesGeneratedCount,
-          candidatesRejected: candidatesRejectedCount,
-          candidatesSelected: candidatesSelectedCount,
-          paperExecuted: paperExecutedCount,
-          telegramSent: dispatchedTelegramCount,
-          blockedByReason: cycleBlockedByReason,
-          noSetupByEngine
-        },
-        null,
-        2
-      )
-    );
-  }
+  console.log(
+    JSON.stringify(
+      {
+        event: "WORKER_CYCLE_SUMMARY",
+        cycleNumber,
+        debugVisibilityEnabled,
+        symbolsDispatchedToScan: symbolsReachedEngineScan.size,
+        symbolsCompletedScan: symbolsReachedEngineScan.size,
+        totalEngineAttempts: engineScansAttempted,
+        totalCandidates: engineScansCandidates,
+        totalNoSetup: engineScansNoSetup,
+        totalSkipped: engineScansSkipped,
+        totalBlocked: engineScansBlocked,
+        totalErrors: engineScansErrors,
+        symbolsTotal: runtimeSymbols.length,
+        symbolsContextReady: symbolReadiness.filter((entry) => entry.analysisReady).length,
+        symbolsBlocked: symbolReadiness.filter((entry) => !entry.analysisReady).length,
+        candidatesGenerated: candidatesGeneratedCount,
+        candidatesRejected: candidatesRejectedCount,
+        candidatesSelected: candidatesSelectedCount,
+        paperExecuted: paperExecutedCount,
+        telegramSent: dispatchedTelegramCount,
+        blockedByReason: cycleBlockedByReason,
+        noSetupByEngine
+      },
+      null,
+      2
+    )
+  );
   console.log(
     JSON.stringify(
       {
@@ -4786,8 +4831,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         symbolsSurvivedProviderStage: symbolsSurvivedProviderStage.size,
         symbolsReachedEngineScan: symbolsReachedEngineScan.size,
         engineScansAttempted,
-        engineScansNoSetup,
         engineScansCandidates,
+        engineScansNoSetup,
+        engineScansSkipped,
+        engineScansBlocked,
+        engineScansErrors,
         candidatesGenerated: candidatesGeneratedCount,
         candidatesRejected: candidatesRejectedCount,
         candidatesSelected: candidatesSelectedCount,
