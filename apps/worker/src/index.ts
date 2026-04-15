@@ -415,7 +415,7 @@ type SymbolCycleSummary = {
   skipReason: string | null;
 };
 
-type EngineScanResultStatus = "no_setup" | "candidate_generated" | "candidate_rejected" | "engine_error";
+type EngineScanResultStatus = "candidate_generated" | "no_setup" | "skipped" | "blocked" | "engine_error";
 type EngineScanTrace = {
   symbol: string;
   marketType: SymbolMetadata["marketType"];
@@ -888,7 +888,70 @@ async function generateUnifiedSignalsForContext(params: {
   const strategyAttempted: string[] = [];
   const engineScans: EngineScanTrace[] = [];
   const baseValidation = validateContextCandles(marketContext.candles);
+  const logEngineScanResult = (trace: EngineScanTrace) => {
+    console.log(
+      JSON.stringify(
+        {
+          event: "ENGINE_SCAN_RESULT",
+          cycleNumber,
+          ...trace
+        },
+        null,
+        2
+      )
+    );
+  };
+  const emitEngineScanBegin = (payload: {
+    symbol: string;
+    marketType: SymbolMetadata["marketType"];
+    engineId: string;
+    strategyId: string;
+    executionTimeframe: string;
+    htf1: string;
+    htf2: string;
+  }) => {
+    console.log(
+      JSON.stringify(
+        {
+          event: "ENGINE_SCAN_BEGIN",
+          cycleNumber,
+          ...payload,
+          debugVisibilityEnabled
+        },
+        null,
+        2
+      )
+    );
+  };
   if (!baseValidation.ready) {
+    for (const strategyId of strategyIds) {
+      const engineId = strategyEngineId(config, strategyId);
+      emitEngineScanBegin({
+        symbol: marketContext.symbol,
+        marketType: marketContext.marketType,
+        engineId,
+        strategyId,
+        executionTimeframe: marketContext.executionTimeframe,
+        htf1: marketContext.htf1,
+        htf2: marketContext.htf2
+      });
+      const trace: EngineScanTrace = {
+        symbol: marketContext.symbol,
+        marketType: marketContext.marketType,
+        engineId,
+        strategyId,
+        executionTimeframe: marketContext.executionTimeframe,
+        htf1: marketContext.htf1,
+        htf2: marketContext.htf2,
+        result: "blocked",
+        reason: mapNoSetupReasonForStrategy(strategyId, baseValidation.blockedReason ?? "context_not_ready_for_strategy"),
+        summary: "context_not_ready_for_strategy",
+        candidateGeneratedCount: 0,
+        candidateRejectedCount: 0
+      };
+      engineScans.push(trace);
+      logEngineScanResult(trace);
+    }
     return {
       signals,
       evaluation: {
@@ -902,11 +965,23 @@ async function generateUnifiedSignalsForContext(params: {
   }
 
   for (const strategyId of strategyIds) {
-    if (strategyId === config.ENGINE3_STRATEGY && marketContext.marketType !== "crypto") {
-      continue;
-    }
-    const strategyContext = strategyId === config.ENGINE3_STRATEGY
-      ? await marketTypeLoader.loadContext({
+    const engineId = strategyEngineId(config, strategyId);
+    const defaultExecutionTimeframe = strategyId === config.ENGINE3_STRATEGY ? "5m" : marketContext.executionTimeframe;
+    const defaultHtf1 = strategyId === config.ENGINE3_STRATEGY ? "15m" : marketContext.htf1;
+    const defaultHtf2 = strategyId === config.ENGINE3_STRATEGY ? "1h" : marketContext.htf2;
+    emitEngineScanBegin({
+      symbol: marketContext.symbol,
+      marketType: marketContext.marketType,
+      engineId,
+      strategyId,
+      executionTimeframe: defaultExecutionTimeframe,
+      htf1: defaultHtf1,
+      htf2: defaultHtf2
+    });
+    let strategyContext = marketContext;
+    if (strategyId === config.ENGINE3_STRATEGY) {
+      try {
+        strategyContext = await marketTypeLoader.loadContext({
           symbol: marketContext.symbol,
           marketType: marketContext.marketType,
           executionTimeframe: "5m",
@@ -915,22 +990,45 @@ async function generateUnifiedSignalsForContext(params: {
           candleLimit: config.CANDLE_LIMIT,
           cycleNumber,
           debugVisibilityEnabled
-        })
-      : marketContext;
-    const engineId = strategyEngineId(config, strategyId);
-    const beginPayload = {
-      event: toStructuredEventName("ENGINE_SCAN_BEGIN"),
-      cycleNumber,
-      symbol: strategyContext.symbol,
-      marketType: strategyContext.marketType,
-      engineId,
-      strategyId,
-      executionTimeframe: strategyContext.executionTimeframe,
-      htf1: strategyContext.htf1,
-      htf2: strategyContext.htf2
-    };
-    if (debugVisibilityEnabled) {
-      console.log(JSON.stringify(beginPayload, null, 2));
+        });
+      } catch (error) {
+        const trace: EngineScanTrace = {
+          symbol: marketContext.symbol,
+          marketType: marketContext.marketType,
+          engineId,
+          strategyId,
+          executionTimeframe: defaultExecutionTimeframe,
+          htf1: defaultHtf1,
+          htf2: defaultHtf2,
+          result: "blocked",
+          reason: error instanceof Error ? error.message : "engine3_context_load_failed",
+          summary: "strategy_context_load_failed",
+          candidateGeneratedCount: 0,
+          candidateRejectedCount: 0
+        };
+        engineScans.push(trace);
+        logEngineScanResult(trace);
+        continue;
+      }
+    }
+    if (strategyId === config.ENGINE3_STRATEGY && marketContext.marketType !== "crypto") {
+      const trace: EngineScanTrace = {
+        symbol: strategyContext.symbol,
+        marketType: strategyContext.marketType,
+        engineId,
+        strategyId,
+        executionTimeframe: strategyContext.executionTimeframe,
+        htf1: strategyContext.htf1,
+        htf2: strategyContext.htf2,
+        result: "skipped",
+        reason: "engine3_crypto_only",
+        summary: "strategy_skipped_for_market_type",
+        candidateGeneratedCount: 0,
+        candidateRejectedCount: 0
+      };
+      engineScans.push(trace);
+      logEngineScanResult(trace);
+      continue;
     }
     const strategyValidation = validateContextCandles(strategyContext.candles);
     if (!strategyValidation.ready) {
@@ -950,23 +1048,29 @@ async function generateUnifiedSignalsForContext(params: {
         candidateRejectedCount: 0
       };
       engineScans.push(trace);
-      if (debugVisibilityEnabled) {
-        console.log(
-          JSON.stringify(
-            {
-              event: toStructuredEventName("ENGINE_SCAN_RESULT"),
-              cycleNumber,
-              ...trace
-            },
-            null,
-            2
-          )
-        );
-      }
+      logEngineScanResult(trace);
       continue;
     }
     const entry = getStrategyById(strategyId);
-    if (!entry) continue;
+    if (!entry) {
+      const trace: EngineScanTrace = {
+        symbol: strategyContext.symbol,
+        marketType: strategyContext.marketType,
+        engineId,
+        strategyId,
+        executionTimeframe: strategyContext.executionTimeframe,
+        htf1: strategyContext.htf1,
+        htf2: strategyContext.htf2,
+        result: "blocked",
+        reason: "strategy_not_registered",
+        summary: "strategy_not_registered",
+        candidateGeneratedCount: 0,
+        candidateRejectedCount: 0
+      };
+      engineScans.push(trace);
+      logEngineScanResult(trace);
+      continue;
+    }
     strategyAttempted.push(strategyId);
     const strategy = entry.create();
     let candidates: Awaited<ReturnType<typeof strategy.generateCandidates>>;
@@ -988,19 +1092,7 @@ async function generateUnifiedSignalsForContext(params: {
         candidateRejectedCount: 0
       };
       engineScans.push(trace);
-      if (debugVisibilityEnabled) {
-        console.log(
-          JSON.stringify(
-            {
-              event: toStructuredEventName("ENGINE_SCAN_RESULT"),
-              cycleNumber,
-              ...trace
-            },
-            null,
-            2
-          )
-        );
-      }
+      logEngineScanResult(trace);
       continue;
     }
     rawCandidateCount += candidates.length;
@@ -1096,12 +1188,9 @@ async function generateUnifiedSignalsForContext(params: {
       }
       let result: EngineScanResultStatus = "no_setup";
       if (engineCandidateGeneratedCount > 0) result = "candidate_generated";
-      else if (engineCandidateRejectedCount > 0) result = "candidate_rejected";
       const reason = result === "candidate_generated"
         ? "setup_confirmed"
-        : result === "candidate_rejected"
-          ? mapNoSetupReasonForStrategy(strategyId, firstRejectionReason)
-          : mapNoSetupReasonForStrategy(strategyId, firstRejectionReason ?? "no_candidates_from_strategy");
+        : mapNoSetupReasonForStrategy(strategyId, firstRejectionReason ?? "no_candidates_from_strategy");
       const trace: EngineScanTrace = {
         symbol: strategyContext.symbol,
         marketType: strategyContext.marketType,
@@ -1117,19 +1206,7 @@ async function generateUnifiedSignalsForContext(params: {
         candidateRejectedCount: engineCandidateRejectedCount
       };
       engineScans.push(trace);
-      if (debugVisibilityEnabled) {
-        console.log(
-          JSON.stringify(
-            {
-              event: toStructuredEventName("ENGINE_SCAN_RESULT"),
-              cycleNumber,
-              ...trace
-            },
-            null,
-            2
-          )
-        );
-      }
+      logEngineScanResult(trace);
     } catch (error) {
       const trace: EngineScanTrace = {
         symbol: strategyContext.symbol,
@@ -1146,19 +1223,7 @@ async function generateUnifiedSignalsForContext(params: {
         candidateRejectedCount: 0
       };
       engineScans.push(trace);
-      if (debugVisibilityEnabled) {
-        console.log(
-          JSON.stringify(
-            {
-              event: toStructuredEventName("ENGINE_SCAN_RESULT"),
-              cycleNumber,
-              ...trace
-            },
-            null,
-            2
-          )
-        );
-      }
+      logEngineScanResult(trace);
       continue;
     }
   }
@@ -1603,8 +1668,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     engine3: {}
   };
   let engineScansAttempted = 0;
-  let engineScansNoSetup = 0;
   let engineScansCandidates = 0;
+  let engineScansNoSetup = 0;
+  let engineScansSkipped = 0;
+  let engineScansBlocked = 0;
+  let engineScansErrors = 0;
   let providerFailures = 0;
   const symbolsSurvivedProviderStage = new Set<string>();
   const symbolsReachedEngineScan = new Set<string>();
@@ -1612,6 +1680,22 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let candidatesRejectedCount = 0;
   let candidatesSelectedCount = 0;
   let paperExecutedCount = 0;
+  let cycleExitPathEmitted = false;
+  const emitCycleExitPath = (exitStage: "preload" | "context_filtering" | "engine_dispatch" | "candidate_filtering" | "cycle_complete", reason: string) => {
+    cycleExitPathEmitted = true;
+    console.log(
+      JSON.stringify(
+        {
+          event: "CYCLE_EXIT_PATH",
+          cycleNumber,
+          exitStage,
+          reason
+        },
+        null,
+        2
+      )
+    );
+  };
 
   const skipInfra = config.SKIP_INFRA_CHECKS;
   if (!skipInfra) {
@@ -1675,6 +1759,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   if (!prismaClient) {
     cycleOutcome = "skipped";
     skipReason = "system_control_unavailable";
+    emitCycleExitPath("preload", skipReason);
     console.log(
       JSON.stringify(
         {
@@ -1718,6 +1803,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   if (!systemControl.isRunning) {
     cycleOutcome = "skipped";
     skipReason = "system_stopped";
+    emitCycleExitPath("preload", skipReason);
     await prismaClient.runtimeEvent.create({
       data: {
         type: "cycle_skipped",
@@ -1746,6 +1832,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   if (systemControl.killSwitchActive) {
     cycleOutcome = "skipped";
     skipReason = "kill_switch_active";
+    emitCycleExitPath("preload", skipReason);
     await prismaClient.runtimeEvent.create({
       data: {
         type: "cycle_skipped",
@@ -1809,6 +1896,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   if (runtimeSymbols.length === 0) {
     cycleOutcome = "skipped";
     skipReason = "no_allowed_symbols";
+    emitCycleExitPath("preload", skipReason);
     await prismaClient.runtimeEvent.create({
       data: {
         type: "cycle_skipped",
@@ -2043,6 +2131,27 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       2
     )
   );
+  console.log(
+    JSON.stringify(
+      {
+        event: "POST_PRELOAD_SUMMARY",
+        cycleNumber,
+        totalSymbols: runtimeSymbols.length,
+        symbolsReady: analysisReadySymbols.length,
+        symbolsFailed: Math.max(runtimeSymbols.length - analysisReadySymbols.length, 0),
+        symbolsTotal: runtimeSymbols.length,
+        contextsCreated: preloadedContextBySymbol.size,
+        contextsReady: analysisReadySymbols.length,
+        contextsBlocked: Math.max(runtimeSymbols.length - analysisReadySymbols.length, 0),
+        aboutToEnterEnginePhase: analysisReadySymbols.length > 0,
+        debugVisibilityEnabled,
+        activeMode: runtimeMode,
+        multiEngineExecutionMode: config.MULTI_ENGINE_EXECUTION_MODE
+      },
+      null,
+      2
+    )
+  );
 
   const cycleCandidates: RuntimeCandidate[] = [];
   const unavailableFeeds: Array<{ symbol: string; marketType: SymbolMetadata["marketType"]; reason: string }> = [];
@@ -2119,6 +2228,14 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       analysisReady: readiness.analysisReady,
       candleCount: readiness.candleCount
     }, null, 2));
+    console.log(JSON.stringify({
+      event: "PRE_ENGINE_SYMBOL_DISPATCH",
+      cycleNumber,
+      symbol: symbolContext.symbol,
+      marketType: symbolContext.marketType,
+      contextReady: readiness.analysisReady,
+      debugVisibilityEnabled
+    }, null, 2));
     symbolsReachedEngineScan.add(contextKey);
 
     const regime = classifyRegime(marketContext);
@@ -2134,8 +2251,19 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     engineScansAttempted += evaluation.engineScans.length;
     for (const scan of evaluation.engineScans) {
       if (scan.result === "candidate_generated") engineScansCandidates += 1;
-      if (scan.result === "no_setup" || scan.result === "candidate_rejected") {
+      if (scan.result === "no_setup") {
         engineScansNoSetup += 1;
+      }
+      if (scan.result === "skipped") {
+        engineScansSkipped += 1;
+      }
+      if (scan.result === "blocked") {
+        engineScansBlocked += 1;
+      }
+      if (scan.result === "engine_error") {
+        engineScansErrors += 1;
+      }
+      if (scan.result === "no_setup" || scan.result === "skipped" || scan.result === "blocked" || scan.result === "engine_error") {
         const bucket = noSetupByEngine[scan.engineId] ?? (noSetupByEngine[scan.engineId] = {});
         bucket[scan.reason] = (bucket[scan.reason] ?? 0) + 1;
       }
@@ -2237,13 +2365,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const paperExecutedSignalSymbols = new Set<string>();
   const selectedReasonBySymbol = new Map<string, string>();
   let diversificationNotes: string[] = [];
-  const effectiveRequireAPlusOnly = runtimeMode === "signal"
-    ? true
-    : (config.SIGNAL_REQUIRE_A_PLUS_ONLY || config.SIGNAL_MIN_TIER === "A+");
+  const effectiveRequireAPlusOnly = config.SIGNAL_REQUIRE_A_PLUS_ONLY || config.SIGNAL_MIN_TIER === "A+";
   const minTierScore = minScoreForTier(config.SIGNAL_MIN_TIER);
-  const effectiveMinScore = runtimeMode === "signal"
-    ? Math.max(config.SIGNAL_MIN_SCORE, minTierScore, 85)
-    : Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
+  const effectiveMinScore = Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
   if (!independentMultiEngineMode && prismaClient && runtimeMode === "signal" && cycleCandidates.length > 0) {
     const candidateSymbols = Array.from(new Set(cycleCandidates.map((entry) => entry.signal.symbol)));
     const dedupeWindowStart = new Date(Date.now() - 60_000);
@@ -4652,13 +4776,54 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       }
     });
   }
+  if (!cycleExitPathEmitted) {
+    if (symbolsReachedEngineScan.size === 0) {
+      emitCycleExitPath("context_filtering", "no_symbols_reached_engine_phase");
+    } else if (candidateCount === 0) {
+      emitCycleExitPath("engine_dispatch", "no_candidates_generated_after_engine_scan");
+    } else if (candidatesSelectedCount === 0) {
+      emitCycleExitPath("candidate_filtering", "no_candidates_selected_after_filtering");
+    } else {
+      emitCycleExitPath("cycle_complete", "cycle_completed_with_candidates");
+    }
+  }
 
   const durationMs = Date.now() - cycleStartedAtMs;
   console.log(
     JSON.stringify(
       {
+        event: "WORKER_CYCLE_SUMMARY",
+        cycleNumber,
+        debugVisibilityEnabled,
+        symbolsDispatchedToScan: symbolsReachedEngineScan.size,
+        symbolsCompletedScan: symbolsReachedEngineScan.size,
+        totalEngineAttempts: engineScansAttempted,
+        totalCandidates: engineScansCandidates,
+        totalNoSetup: engineScansNoSetup,
+        totalSkipped: engineScansSkipped,
+        totalBlocked: engineScansBlocked,
+        totalErrors: engineScansErrors,
+        symbolsTotal: runtimeSymbols.length,
+        symbolsContextReady: symbolReadiness.filter((entry) => entry.analysisReady).length,
+        symbolsBlocked: symbolReadiness.filter((entry) => !entry.analysisReady).length,
+        candidatesGenerated: candidatesGeneratedCount,
+        candidatesRejected: candidatesRejectedCount,
+        candidatesSelected: candidatesSelectedCount,
+        paperExecuted: paperExecutedCount,
+        telegramSent: dispatchedTelegramCount,
+        blockedByReason: cycleBlockedByReason,
+        noSetupByEngine
+      },
+      null,
+      2
+    )
+  );
+  console.log(
+    JSON.stringify(
+      {
         event: "WORKER_CYCLE_COMPLETE",
         cycleNumber,
+        debugVisibilityEnabled,
         symbolsTotal: runtimeSymbols.length,
         symbolsContextReady: symbolReadiness.filter((entry) => entry.analysisReady).length,
         symbolsBlocked: symbolReadiness.filter((entry) => !entry.analysisReady).length,
@@ -4666,8 +4831,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         symbolsSurvivedProviderStage: symbolsSurvivedProviderStage.size,
         symbolsReachedEngineScan: symbolsReachedEngineScan.size,
         engineScansAttempted,
-        engineScansNoSetup,
         engineScansCandidates,
+        engineScansNoSetup,
+        engineScansSkipped,
+        engineScansBlocked,
+        engineScansErrors,
         candidatesGenerated: candidatesGeneratedCount,
         candidatesRejected: candidatesRejectedCount,
         candidatesSelected: candidatesSelectedCount,
