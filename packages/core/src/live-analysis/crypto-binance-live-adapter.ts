@@ -2,6 +2,16 @@ import type { Candle, MarketDataSource, Symbol, Timeframe } from "../domains";
 import type { MarketDataProvider } from "../provider";
 import { normalizeLiveAnalysisCandles, type LiveAnalysisReadiness, type LiveAnalysisMarketData, type MarketTypeLiveAnalysisAdapter } from "./contracts";
 
+class ProviderFetchFailure extends Error {
+  constructor(
+    readonly stage: "blocked" | "error",
+    readonly provider: string,
+    readonly reason: string
+  ) {
+    super(`provider_fetch_failed:${provider}:${reason}`);
+  }
+}
+
 export class CryptoLiveKlineAdapter implements MarketTypeLiveAnalysisAdapter {
   readonly marketType = "crypto" as const;
 
@@ -34,6 +44,8 @@ export class CryptoLiveKlineAdapter implements MarketTypeLiveAnalysisAdapter {
     htf1: Timeframe;
     htf2: Timeframe;
     candleLimit: number;
+    cycleNumber?: number;
+    debugVisibilityEnabled?: boolean;
   }): Promise<LiveAnalysisMarketData> {
     try {
       return await this.loadWithProvider(this.primary, this.backup, false, input);
@@ -52,15 +64,72 @@ export class CryptoLiveKlineAdapter implements MarketTypeLiveAnalysisAdapter {
       htf1: Timeframe;
       htf2: Timeframe;
       candleLimit: number;
+      cycleNumber?: number;
+      debugVisibilityEnabled?: boolean;
     }
   ): Promise<LiveAnalysisMarketData> {
-    const [candles5m, candles15m, candles1h, candles4h, latestPrice] = await Promise.all([
+    const provider = active.getSourceName();
+    console.log(JSON.stringify({
+      event: "PROVIDER_FETCH_BEGIN",
+      cycleNumber: input.cycleNumber,
+      symbol: input.symbol,
+      marketType: "crypto",
+      provider
+    }, null, 2));
+
+    const fetchResults = await Promise.allSettled([
       active.getCandles(input.symbol, "5m", input.candleLimit),
       active.getCandles(input.symbol, "15m", input.candleLimit),
       active.getCandles(input.symbol, "1h", input.candleLimit),
       active.getCandles(input.symbol, "4h", input.candleLimit),
       active.getLatestPrice(input.symbol)
     ]);
+
+    const firstRejected = fetchResults.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (firstRejected) {
+      const reason = firstRejected.reason instanceof Error ? firstRejected.reason.message : "provider_request_failed";
+      console.log(JSON.stringify({
+        event: "PROVIDER_FETCH_RESULT",
+        cycleNumber: input.cycleNumber,
+        symbol: input.symbol,
+        marketType: "crypto",
+        provider,
+        result: "error",
+        reason
+      }, null, 2));
+      throw new ProviderFetchFailure("error", provider, reason);
+    }
+
+    const [candles5m, candles15m, candles1h, candles4h, latestPrice] = fetchResults.map(
+      (result) => (result as PromiseFulfilledResult<Candle[] | number>).value
+    ) as [Candle[], Candle[], Candle[], Candle[], number];
+    const hasMissingCandles = candles5m.length === 0 || candles15m.length === 0 || candles1h.length === 0 || candles4h.length === 0;
+    const hasInvalidPrice = !Number.isFinite(latestPrice) || latestPrice <= 0;
+    if (hasMissingCandles || hasInvalidPrice) {
+      const reason = hasMissingCandles
+        ? "provider_returned_empty_candles"
+        : "provider_returned_invalid_latest_price";
+      console.log(JSON.stringify({
+        event: "PROVIDER_FETCH_RESULT",
+        cycleNumber: input.cycleNumber,
+        symbol: input.symbol,
+        marketType: "crypto",
+        provider,
+        result: "blocked",
+        reason
+      }, null, 2));
+      throw new ProviderFetchFailure("blocked", provider, reason);
+    }
+
+    console.log(JSON.stringify({
+      event: "PROVIDER_FETCH_RESULT",
+      cycleNumber: input.cycleNumber,
+      symbol: input.symbol,
+      marketType: "crypto",
+      provider,
+      result: "ok",
+      reason: "provider_payload_valid"
+    }, null, 2));
 
     return {
       symbol: input.symbol,

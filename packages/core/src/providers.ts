@@ -9,6 +9,7 @@ const timeframeMap: Record<Timeframe, { binance: string; bybit: string }> = {
 };
 
 const toNumber = (v: string | number) => Number(v);
+const isValidKlineRow = (row: unknown): row is Array<string | number> => Array.isArray(row) && row.length >= 6;
 
 export class BinanceSpotProvider implements MarketDataProvider {
   async getCandles(symbol: string, timeframe: Timeframe, limit: number): Promise<Candle[]> {
@@ -16,9 +17,11 @@ export class BinanceSpotProvider implements MarketDataProvider {
     const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Binance candles failed: ${response.status}`);
-    const raw = (await response.json()) as (string | number)[][];
+    const body = (await response.json()) as unknown;
+    const raw = Array.isArray(body) ? body : [];
+    if (raw.length === 0) return [];
 
-    return raw.map((k) => ({
+    return raw.filter(isValidKlineRow).map((k) => ({
       openTime: toNumber(k[0]),
       open: toNumber(k[1]),
       high: toNumber(k[2]),
@@ -53,11 +56,12 @@ export class BybitSpotProvider implements MarketDataProvider {
     const url = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${symbol}&interval=${interval}&limit=${limit}`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Bybit candles failed: ${response.status}`);
-    const body = (await response.json()) as {
-      result: { list: string[][] };
-    };
+    const body = (await response.json()) as { result?: { list?: unknown } } | null;
+    const list = Array.isArray(body?.result?.list) ? body.result.list : [];
+    if (list.length === 0) return [];
 
-    return body.result.list
+    return list
+      .filter(isValidKlineRow)
       .map((k) => ({
         openTime: Number(k[0]),
         open: Number(k[1]),
