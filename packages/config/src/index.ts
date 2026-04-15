@@ -140,6 +140,7 @@ const envSchema = z.object({
   GOVERNANCE_MAX_CONSECUTIVE_LOSS_LOCK_ACTIVE: booleanFlagSchema.default(false),
   ENABLE_SIGNAL_MODE_OUTPUT: booleanFlagSchema.default(false),
   WORKER_LOOP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(15),
+  WORKER_DEBUG_VISIBILITY: booleanFlagSchema.default(false),
   ENABLE_PERSONAL_DEMO_CONNECTOR: booleanFlagSchema.default(true),
   ENABLE_PROP_DEMO_CONNECTOR: booleanFlagSchema.default(true),
   SKIP_INFRA_CHECKS: booleanFlagSchema.default(false),
