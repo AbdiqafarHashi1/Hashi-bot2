@@ -8,9 +8,15 @@ import { MeanReversionSnapbackStrategy, type MeanReversionProfileConfig, MEAN_RE
 import { ExpansionReloadContinuationStrategy, type ExpansionReloadProfileConfig, CONTINUATION_MODULE_FAMILY } from "./strategies/expansion-reload-continuation";
 import { CombinedBreakoutSwingArbitratedStrategy } from "./strategies/combined-breakout-swing-arbitrated";
 import { CONTINUATION_RECLAIM_5M_DEFAULT, MtfContinuation5mStrategy, MTF_CONTINUATION_MODULE_FAMILY } from "./strategies/mtf-continuation-5m";
+import {
+  MICRO_SCALP_CONTINUATION_DEFAULT,
+  MicroScalpContinuationStrategy,
+  type MicroScalpContinuationProfileConfig,
+  MICRO_SCALP_CONTINUATION_MODULE_FAMILY
+} from "./strategies/micro-scalp-continuation";
 
 export type StrategyRegistryEntry = {
-  id: "trend_pullback_strict" | "trend_pullback_balanced" | "swing_continuation_strict" | "swing_continuation_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced" | "expansion_reload_balanced" | "expansion_reload_v2_balanced" | "expansion_reload_v2_early" | "expansion_reload_v2_wide" | "continuation_reclaim_5m_v1" | "combined_breakout_swing_arbitrated";
+  id: "trend_pullback_strict" | "trend_pullback_balanced" | "swing_continuation_strict" | "swing_continuation_balanced" | "compression_breakout_strict" | "compression_breakout_balanced" | "mean_reversion_strict" | "mean_reversion_balanced" | "expansion_reload_balanced" | "expansion_reload_v2_balanced" | "expansion_reload_v2_early" | "expansion_reload_v2_wide" | "continuation_reclaim_5m_v1" | "micro_scalp_continuation_v1" | "combined_breakout_swing_arbitrated";
   label: string;
   moduleFamily: string;
   profileType: StrategyProfileType;
@@ -38,7 +44,8 @@ export const PRODUCTION_STRATEGY_ACTIVATION: Record<StrategyRegistryEntry["id"],
   compression_breakout_balanced: "active",
   mean_reversion_strict: "silenced",
   mean_reversion_balanced: "silenced",
-  continuation_reclaim_5m_v1: "silenced"
+  continuation_reclaim_5m_v1: "silenced",
+  micro_scalp_continuation_v1: "silenced"
 };
 
 export const ACTIVE_PRODUCTION_STRATEGY_IDS = (Object.entries(PRODUCTION_STRATEGY_ACTIVATION)
@@ -99,6 +106,21 @@ const breakout = (cfg: BreakoutProfileConfig) => () => new CompressionBreakoutRe
 const swing = (cfg: SwingProfileConfig) => () => new SwingContinuationStrategy(cfg);
 const meanReversion = (cfg: MeanReversionProfileConfig) => () => new MeanReversionSnapbackStrategy(cfg);
 const expansionReload = (cfg: ExpansionReloadProfileConfig) => () => new ExpansionReloadContinuationStrategy(cfg);
+const microScalpContinuation = (cfg: MicroScalpContinuationProfileConfig) => () => new MicroScalpContinuationStrategy(cfg);
+const resolveMicroScalpProfile = (): MicroScalpContinuationProfileConfig => {
+  const rawMin5mAtrPct = Number(process.env.ENGINE4_MIN_ATR_PCT ?? MICRO_SCALP_CONTINUATION_DEFAULT.min5mAtrPct);
+  const max5mChop = Number(process.env.ENGINE4_MAX_CHOP_5M ?? MICRO_SCALP_CONTINUATION_DEFAULT.max5mChop);
+  const maxExtensionAtr = Number(process.env.ENGINE4_MAX_EXTENSION_ATR ?? MICRO_SCALP_CONTINUATION_DEFAULT.maxExtensionAtr);
+  const min5mAtrPct = rawMin5mAtrPct > 0.02 ? rawMin5mAtrPct / 100 : rawMin5mAtrPct;
+  return {
+    ...MICRO_SCALP_CONTINUATION_DEFAULT,
+    min5mAtrPct: Number.isFinite(min5mAtrPct) ? Math.max(0, min5mAtrPct) : MICRO_SCALP_CONTINUATION_DEFAULT.min5mAtrPct,
+    max5mChop: Number.isFinite(max5mChop) ? Math.min(1.2, Math.max(0.1, max5mChop)) : MICRO_SCALP_CONTINUATION_DEFAULT.max5mChop,
+    maxExtensionAtr: Number.isFinite(maxExtensionAtr)
+      ? Math.min(5, Math.max(0.2, maxExtensionAtr))
+      : MICRO_SCALP_CONTINUATION_DEFAULT.maxExtensionAtr
+  };
+};
 const combinedBreakoutSwing = () =>
   new CombinedBreakoutSwingArbitratedStrategy(
     new CompressionBreakoutRetestStrategy({
@@ -186,6 +208,18 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
     experimental: true,
     minScore: 52,
     create: () => new MtfContinuation5mStrategy(CONTINUATION_RECLAIM_5M_DEFAULT)
+  },
+  {
+    id: "micro_scalp_continuation_v1",
+    label: "Micro Scalp Continuation v1",
+    moduleFamily: MICRO_SCALP_CONTINUATION_MODULE_FAMILY,
+    profileType: "balanced",
+    description: "High-cadence 5m continuation/reclaim/flag participation aligned to 15m+1h direction.",
+    regimeIntent: ["TREND_ORDERLY", "TREND_STRETCHED", "NEUTRAL"],
+    productionEligible: false,
+    experimental: true,
+    minScore: 48,
+    create: microScalpContinuation(resolveMicroScalpProfile())
   },
   {
     id: "trend_pullback_strict",

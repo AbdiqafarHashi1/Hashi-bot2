@@ -44,6 +44,17 @@ For signal-only operations, use `.env.signal` (dedicated signal-mode preset).
 | ENGINE2_STRATEGY | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `expansion_reload_v2_wide` | Yes | Locked Engine 2 winner id for runtime integration. |
 | ENGINE2_MIN_SCORE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `54` | Yes | Engine 2-specific floor before a candidate enters signal-mode eligible set. |
 | ENGINE2_RANKING_BIAS | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0` | Yes | Small explicit additive score bias for Engine 2 ranking fairness tuning (default neutral). |
+| SIGNAL_ENABLE_ENGINE3 | OPTIONAL_FEATURE_FLAG, SIGNAL_ONLY | `0` | Yes | Enables Engine 3 (`continuation_reclaim_5m_v1`) candidate participation in the unified selector path. |
+| ENGINE3_STRATEGY | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `continuation_reclaim_5m_v1` | Yes | Locked Engine 3 winner id for runtime integration. |
+| ENGINE3_MIN_SCORE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `52` | Yes | Engine 3-specific floor before a candidate enters signal-mode eligible set. |
+| ENGINE3_RANKING_BIAS | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0` | Yes | Small explicit additive score bias for Engine 3 ranking fairness tuning (default neutral). |
+| SIGNAL_ENABLE_ENGINE4 | OPTIONAL_FEATURE_FLAG, SIGNAL_ONLY | `0` | Yes | Enables Engine 4 (`micro_scalp_continuation_v1`) high-cadence scalp candidates in the unified selector path. |
+| ENGINE4_STRATEGY | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `micro_scalp_continuation_v1` | Yes | Locked Engine 4 winner id for runtime integration. |
+| ENGINE4_MIN_SCORE | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `36` | Yes | Engine 4-specific floor before a candidate enters signal-mode eligible set. |
+| ENGINE4_RANKING_BIAS | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `2` | Yes | Additive score bias for Engine 4 ranking fairness/cadence tuning. |
+| ENGINE4_MIN_ATR_PCT | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0.08` | Yes | Engine 4 activity floor (accepts either fraction or percent-style input; values > 0.02 are interpreted as percent). |
+| ENGINE4_MAX_CHOP_5M | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `0.82` | Yes | Engine 4 anti-chop threshold on the 5m execution timeframe. |
+| ENGINE4_MAX_EXTENSION_ATR | OPTIONAL_RUNTIME_WITH_DEFAULT, SIGNAL_ONLY | `3.4` | Yes | Engine 4 anti-late-entry extension guard (distance from 5m EMA20 in ATR units). |
 | ENABLE_SWING_RESEARCH_MODE | OPTIONAL_FEATURE_FLAG | `0` | Yes | Enables broader strategy catalog in control-room/runtime reporting. |
 | WORKER_LOOP_INTERVAL_SECONDS | OPTIONAL_RUNTIME_WITH_DEFAULT | `15` | Yes | Worker cycle interval. |
 | MARKET_TYPE | OPTIONAL_RUNTIME_WITH_DEFAULT | `crypto` | Yes | Non-signal modes: chooses crypto vs forex symbol build path. |
