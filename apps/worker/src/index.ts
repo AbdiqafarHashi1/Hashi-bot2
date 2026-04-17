@@ -415,7 +415,7 @@ type SymbolCycleSummary = {
   skipReason: string | null;
 };
 
-type EngineScanResultStatus = "candidate_generated" | "no_setup" | "skipped" | "blocked" | "engine_error";
+type EngineScanResultStatus = "candidate_generated" | "candidate_rejected" | "no_setup" | "skipped" | "blocked" | "engine_error";
 type EngineScanTrace = {
   symbol: string;
   marketType: SymbolMetadata["marketType"];
@@ -424,6 +424,9 @@ type EngineScanTrace = {
   executionTimeframe: Timeframe;
   htf1: Timeframe;
   htf2: Timeframe;
+  candleCountExecution: number;
+  candleCountHtf1: number;
+  candleCountHtf2: number;
   result: EngineScanResultStatus;
   reason: string;
   summary?: string;
@@ -463,6 +466,17 @@ function mapNoSetupReasonForStrategy(strategyId: string, reason: string | null):
     if (normalized.includes("stop") || normalized.includes("room")) return "stop_or_room_filter_failed";
     return "no_pullback_continuation";
   }
+  if (strategyId === "micro_scalp_continuation_v1") {
+    if (normalized.includes("bias") || normalized.includes("15m") || normalized.includes("1h")) return "directional_bias_not_aligned";
+    if (normalized.includes("atr") || normalized.includes("activity")) return "activity_too_low";
+    if (normalized.includes("chop")) return "anti_chop_filter_failed";
+    if (normalized.includes("extension")) return "entry_overextended";
+    if (normalized.includes("pullback")) return "no_shallow_pullback_continuation";
+    if (normalized.includes("reclaim")) return "no_reclaim_after_reset";
+    if (normalized.includes("flag") || normalized.includes("range")) return "no_micro_flag_break";
+    if (normalized.includes("stop") || normalized.includes("room")) return "stop_or_room_filter_failed";
+    return "no_micro_scalp_trigger";
+  }
   return "no_setup";
 }
 
@@ -470,6 +484,7 @@ function strategyEngineId(config: ReturnType<typeof getConfig>, strategyId: stri
   if (strategyId === config.ACTIVE_PRODUCTION_STRATEGY) return "engine1";
   if (strategyId === config.ENGINE2_STRATEGY) return "engine2";
   if (strategyId === config.ENGINE3_STRATEGY) return "engine3";
+  if (strategyId === config.ENGINE4_STRATEGY) return "engine4";
   return strategyId;
 }
 
@@ -683,9 +698,11 @@ function resolveCandidateEngineLabel(candidate: RuntimeCandidate, config: Return
   if (strategyId === config.ACTIVE_PRODUCTION_STRATEGY) return "engine1";
   if (strategyId === config.ENGINE2_STRATEGY) return "engine2";
   if (strategyId === config.ENGINE3_STRATEGY) return "engine3";
+  if (strategyId === config.ENGINE4_STRATEGY) return "engine4";
   const setupVariant = typeof candidate.signal.metadata?.setupVariant === "string" ? candidate.signal.metadata.setupVariant : "";
   if (setupVariant.includes("expansion_reload")) return "engine2";
   if (setupVariant.includes("continuation_reclaim")) return "engine3";
+  if (setupVariant.includes("micro_scalp")) return "engine4";
   return "engine1";
 }
 
@@ -850,14 +867,17 @@ function operatorManualRecommendation(signal: Pick<BreakoutSignal, "setupGrade" 
 
 function resolveRuntimeStrategyIds(config: ReturnType<typeof getConfig>): string[] {
   if (config.MULTI_ENGINE_EXECUTION_MODE === "independent") {
-    return Array.from(new Set([config.ACTIVE_PRODUCTION_STRATEGY, config.ENGINE2_STRATEGY, config.ENGINE3_STRATEGY]));
+    return Array.from(new Set([config.ACTIVE_PRODUCTION_STRATEGY, config.ENGINE2_STRATEGY, config.ENGINE3_STRATEGY, config.ENGINE4_STRATEGY]));
   }
-  const ids = [config.ACTIVE_PRODUCTION_STRATEGY];
+  const ids: string[] = [config.ACTIVE_PRODUCTION_STRATEGY];
   if (config.SIGNAL_ENABLE_ENGINE2) {
     ids.push(config.ENGINE2_STRATEGY);
   }
   if (config.SIGNAL_ENABLE_ENGINE3) {
     ids.push(config.ENGINE3_STRATEGY);
+  }
+  if (config.SIGNAL_ENABLE_ENGINE4) {
+    ids.push(config.ENGINE4_STRATEGY);
   }
   return Array.from(new Set(ids));
 }
@@ -867,6 +887,22 @@ function resolveRuntimeEnginePlanForSymbol(config: ReturnType<typeof getConfig>)
     strategyId,
     engineId: strategyEngineId(config, strategyId)
   }));
+}
+
+function resolveStrategyTimeframes(
+  strategyId: string,
+  marketContext: Awaited<ReturnType<MarketTypeAwareAnalysisLoader["loadContext"]>>,
+  config: ReturnType<typeof getConfig>
+): { executionTimeframe: Timeframe; htf1: Timeframe; htf2: Timeframe } {
+  const isFastEngine = strategyId === config.ENGINE3_STRATEGY || strategyId === config.ENGINE4_STRATEGY;
+  if (isFastEngine) {
+    return { executionTimeframe: "5m", htf1: "15m", htf2: "1h" };
+  }
+  return {
+    executionTimeframe: marketContext.executionTimeframe,
+    htf1: marketContext.htf1,
+    htf2: marketContext.htf2
+  };
 }
 
 async function generateUnifiedSignalsForContext(params: {
@@ -894,7 +930,7 @@ async function generateUnifiedSignalsForContext(params: {
   let postValidationCount = 0;
   const strategyAttempted: string[] = [];
   const engineScans: EngineScanTrace[] = [];
-  const baseValidation = validateContextCandles(marketContext.candles);
+  const sharedCandleBundle = normalizeLiveAnalysisCandles(marketContext.candles);
   const logEngineScanResult = (trace: EngineScanTrace) => {
     console.log(
       JSON.stringify(
@@ -916,6 +952,9 @@ async function generateUnifiedSignalsForContext(params: {
     executionTimeframe: string;
     htf1: string;
     htf2: string;
+    candleCountExecution: number;
+    candleCountHtf1: number;
+    candleCountHtf2: number;
   }) => {
     console.log(
       JSON.stringify(
@@ -930,52 +969,15 @@ async function generateUnifiedSignalsForContext(params: {
       )
     );
   };
-  if (!baseValidation.ready) {
-    for (const strategyId of strategyIds) {
-      const engineId = strategyEngineId(config, strategyId);
-      emitEngineScanBegin({
-        symbol: marketContext.symbol,
-        marketType: marketContext.marketType,
-        engineId,
-        strategyId,
-        executionTimeframe: marketContext.executionTimeframe,
-        htf1: marketContext.htf1,
-        htf2: marketContext.htf2
-      });
-      const trace: EngineScanTrace = {
-        symbol: marketContext.symbol,
-        marketType: marketContext.marketType,
-        engineId,
-        strategyId,
-        executionTimeframe: marketContext.executionTimeframe,
-        htf1: marketContext.htf1,
-        htf2: marketContext.htf2,
-        result: "blocked",
-        reason: mapNoSetupReasonForStrategy(strategyId, baseValidation.blockedReason ?? "context_not_ready_for_strategy"),
-        summary: "context_not_ready_for_strategy",
-        candidateGeneratedCount: 0,
-        candidateRejectedCount: 0
-      };
-      engineScans.push(trace);
-      logEngineScanResult(trace);
-    }
-    return {
-      signals,
-      evaluation: {
-        strategyCount: strategyIds.length,
-        strategyAttempted,
-        rawCandidateCount,
-        postValidationCount,
-        engineScans
-      }
-    };
-  }
-
   for (const strategyId of strategyIds) {
     const engineId = strategyEngineId(config, strategyId);
-    const defaultExecutionTimeframe = strategyId === config.ENGINE3_STRATEGY ? "5m" : marketContext.executionTimeframe;
-    const defaultHtf1 = strategyId === config.ENGINE3_STRATEGY ? "15m" : marketContext.htf1;
-    const defaultHtf2 = strategyId === config.ENGINE3_STRATEGY ? "1h" : marketContext.htf2;
+    const timeframeProfile = resolveStrategyTimeframes(strategyId, marketContext, config);
+    const defaultExecutionTimeframe = timeframeProfile.executionTimeframe;
+    const defaultHtf1 = timeframeProfile.htf1;
+    const defaultHtf2 = timeframeProfile.htf2;
+    const executionCandles = sharedCandleBundle[defaultExecutionTimeframe];
+    const htf1Candles = sharedCandleBundle[defaultHtf1];
+    const htf2Candles = sharedCandleBundle[defaultHtf2];
     emitEngineScanBegin({
       symbol: marketContext.symbol,
       marketType: marketContext.marketType,
@@ -983,41 +985,19 @@ async function generateUnifiedSignalsForContext(params: {
       strategyId,
       executionTimeframe: defaultExecutionTimeframe,
       htf1: defaultHtf1,
-      htf2: defaultHtf2
+      htf2: defaultHtf2,
+      candleCountExecution: executionCandles.length,
+      candleCountHtf1: htf1Candles.length,
+      candleCountHtf2: htf2Candles.length
     });
-    let strategyContext = marketContext;
-    if (strategyId === config.ENGINE3_STRATEGY) {
-      try {
-        strategyContext = await marketTypeLoader.loadContext({
-          symbol: marketContext.symbol,
-          marketType: marketContext.marketType,
-          executionTimeframe: "5m",
-          htf1: "15m",
-          htf2: "1h",
-          candleLimit: config.CANDLE_LIMIT,
-          cycleNumber,
-          debugVisibilityEnabled
-        });
-      } catch (error) {
-        const trace: EngineScanTrace = {
-          symbol: marketContext.symbol,
-          marketType: marketContext.marketType,
-          engineId,
-          strategyId,
-          executionTimeframe: defaultExecutionTimeframe,
-          htf1: defaultHtf1,
-          htf2: defaultHtf2,
-          result: "blocked",
-          reason: error instanceof Error ? error.message : "engine3_context_load_failed",
-          summary: "strategy_context_load_failed",
-          candidateGeneratedCount: 0,
-          candidateRejectedCount: 0
-        };
-        engineScans.push(trace);
-        logEngineScanResult(trace);
-        continue;
-      }
-    }
+    const strategyContext = {
+      ...marketContext,
+      executionTimeframe: defaultExecutionTimeframe,
+      htf1: defaultHtf1,
+      htf2: defaultHtf2,
+      latestPrice: executionCandles.at(-1)?.close ?? marketContext.latestPrice,
+      candles: sharedCandleBundle
+    };
     if (strategyId === config.ENGINE3_STRATEGY && marketContext.marketType !== "crypto") {
       const trace: EngineScanTrace = {
         symbol: strategyContext.symbol,
@@ -1027,6 +1007,9 @@ async function generateUnifiedSignalsForContext(params: {
         executionTimeframe: strategyContext.executionTimeframe,
         htf1: strategyContext.htf1,
         htf2: strategyContext.htf2,
+        candleCountExecution: executionCandles.length,
+        candleCountHtf1: htf1Candles.length,
+        candleCountHtf2: htf2Candles.length,
         result: "skipped",
         reason: "engine3_crypto_only",
         summary: "strategy_skipped_for_market_type",
@@ -1037,7 +1020,11 @@ async function generateUnifiedSignalsForContext(params: {
       logEngineScanResult(trace);
       continue;
     }
-    const strategyValidation = validateContextCandles(strategyContext.candles);
+    const strategyValidation = validateContextCandles(strategyContext.candles, [
+      strategyContext.executionTimeframe,
+      strategyContext.htf1,
+      strategyContext.htf2
+    ]);
     if (!strategyValidation.ready) {
       const blockedReason = mapNoSetupReasonForStrategy(strategyId, strategyValidation.blockedReason ?? null);
       const trace: EngineScanTrace = {
@@ -1048,6 +1035,9 @@ async function generateUnifiedSignalsForContext(params: {
         executionTimeframe: strategyContext.executionTimeframe,
         htf1: strategyContext.htf1,
         htf2: strategyContext.htf2,
+        candleCountExecution: executionCandles.length,
+        candleCountHtf1: htf1Candles.length,
+        candleCountHtf2: htf2Candles.length,
         result: "no_setup",
         reason: blockedReason,
         summary: "context_not_ready_for_strategy",
@@ -1068,6 +1058,9 @@ async function generateUnifiedSignalsForContext(params: {
         executionTimeframe: strategyContext.executionTimeframe,
         htf1: strategyContext.htf1,
         htf2: strategyContext.htf2,
+        candleCountExecution: executionCandles.length,
+        candleCountHtf1: htf1Candles.length,
+        candleCountHtf2: htf2Candles.length,
         result: "blocked",
         reason: "strategy_not_registered",
         summary: "strategy_not_registered",
@@ -1092,6 +1085,9 @@ async function generateUnifiedSignalsForContext(params: {
         executionTimeframe: strategyContext.executionTimeframe,
         htf1: strategyContext.htf1,
         htf2: strategyContext.htf2,
+        candleCountExecution: executionCandles.length,
+        candleCountHtf1: htf1Candles.length,
+        candleCountHtf2: htf2Candles.length,
         result: "engine_error",
         reason: error instanceof Error ? error.message : "strategy_generate_failed",
         summary: "candidate_generation_error",
@@ -1127,7 +1123,9 @@ async function generateUnifiedSignalsForContext(params: {
           ? boundedScore(scored.score + config.ENGINE2_RANKING_BIAS, 0, 100)
           : strategyId === config.ENGINE3_STRATEGY
             ? boundedScore(scored.score + config.ENGINE3_RANKING_BIAS, 0, 100)
-          : scored.score;
+            : strategyId === config.ENGINE4_STRATEGY
+              ? boundedScore(scored.score + config.ENGINE4_RANKING_BIAS, 0, 100)
+              : scored.score;
         const signal = buildBreakoutSignal(candidate, plan, { score: scoreWithBias, confidence: scored.confidence });
         const strategyRegime = classifyRegime(strategyContext);
         const quality = computeSignalQuality({ signal, regime: strategyRegime, marketContext: strategyContext });
@@ -1146,6 +1144,11 @@ async function generateUnifiedSignalsForContext(params: {
           if (!firstRejectionReason) firstRejectionReason = "below_engine3_min_score";
           continue;
         }
+        if (strategyId === config.ENGINE4_STRATEGY && quality.signalScore < config.ENGINE4_MIN_SCORE) {
+          engineCandidateRejectedCount += 1;
+          if (!firstRejectionReason) firstRejectionReason = "below_engine4_min_score";
+          continue;
+        }
 
         const recommendation = operatorManualRecommendation({ setupGrade: quality.tier, score: quality.signalScore });
         const engineFamily = typeof candidate.metadata?.engineFamily === "string"
@@ -1154,10 +1157,12 @@ async function generateUnifiedSignalsForContext(params: {
         const setupVariant = typeof candidate.metadata?.setupVariant === "string"
           ? candidate.metadata.setupVariant
           : strategyId === config.ACTIVE_PRODUCTION_STRATEGY
-            ? "trusted_a_plus_breakout_core_v1"
-            : strategyId === config.ENGINE2_STRATEGY
-              ? "expansion_reload_v2_wide"
-              : "continuation_reclaim_5m_v1";
+          ? "trusted_a_plus_breakout_core_v1"
+          : strategyId === config.ENGINE2_STRATEGY
+            ? "expansion_reload_v2_wide"
+            : strategyId === config.ENGINE3_STRATEGY
+              ? "continuation_reclaim_5m_v1"
+              : "micro_scalp_continuation_v1";
         signals.push({
           ...signal,
           score: quality.signalScore,
@@ -1170,7 +1175,9 @@ async function generateUnifiedSignalsForContext(params: {
               ? "trusted_a_plus_breakout_core"
               : strategyId === config.ENGINE2_STRATEGY
                 ? "engine2_expansion_reload_continuation_locked"
-                : "engine3_mtf_continuation_cadence",
+                : strategyId === config.ENGINE3_STRATEGY
+                  ? "engine3_mtf_continuation_cadence"
+                  : "engine4_micro_scalp_continuation_cadence",
             engineFamily,
             setupVariant,
             strategyId,
@@ -1194,7 +1201,11 @@ async function generateUnifiedSignalsForContext(params: {
         engineCandidateGeneratedCount += 1;
       }
       let result: EngineScanResultStatus = "no_setup";
-      if (engineCandidateGeneratedCount > 0) result = "candidate_generated";
+      if (engineCandidateGeneratedCount > 0) {
+        result = "candidate_generated";
+      } else if (candidates.length > 0 || engineCandidateRejectedCount > 0) {
+        result = "candidate_rejected";
+      }
       const reason = result === "candidate_generated"
         ? "setup_confirmed"
         : mapNoSetupReasonForStrategy(strategyId, firstRejectionReason ?? "no_candidates_from_strategy");
@@ -1206,6 +1217,9 @@ async function generateUnifiedSignalsForContext(params: {
         executionTimeframe: strategyContext.executionTimeframe,
         htf1: strategyContext.htf1,
         htf2: strategyContext.htf2,
+        candleCountExecution: executionCandles.length,
+        candleCountHtf1: htf1Candles.length,
+        candleCountHtf2: htf2Candles.length,
         result,
         reason,
         summary: firstRejectionReason ?? (result === "candidate_generated" ? "candidate_ready" : "no_candidates"),
@@ -1223,6 +1237,9 @@ async function generateUnifiedSignalsForContext(params: {
         executionTimeframe: strategyContext.executionTimeframe,
         htf1: strategyContext.htf1,
         htf2: strategyContext.htf2,
+        candleCountExecution: executionCandles.length,
+        candleCountHtf1: htf1Candles.length,
+        candleCountHtf2: htf2Candles.length,
         result: "engine_error",
         reason: error instanceof Error ? error.message : "strategy_evaluation_failed",
         summary: "strategy_evaluation_failed",
@@ -1518,9 +1535,11 @@ function minBarsForTimeframe(params: {
   return Math.max(20, scaled);
 }
 
-function validateContextCandles(candles: Partial<Record<Timeframe, Candle[] | undefined>>): ContextValidationResult {
+function validateContextCandles(
+  candles: Partial<Record<Timeframe, Candle[] | undefined>>,
+  required: Timeframe[] = ["5m", "15m", "1h", "4h"]
+): ContextValidationResult {
   const normalized = normalizeLiveAnalysisCandles(candles);
-  const required: Timeframe[] = ["5m", "15m", "1h", "4h"];
   const missingTimeframes = required.filter((tf) => !Array.isArray(normalized[tf]) || normalized[tf].length === 0);
   if (missingTimeframes.length > 0) {
     const firstMissing = missingTimeframes[0];
@@ -1635,6 +1654,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     not_selected_portfolio_priority: 0,
     not_selected_diversification_preference: 0,
     not_selected_selected_set_cap: 0,
+    not_selected_brain_same_symbol_duplication: 0,
+    not_selected_brain_opposite_side_conflict: 0,
+    not_selected_brain_engine_finalist_lower_priority: 0,
+    not_selected_brain_portfolio_capacity: 0,
+    not_selected_brain_redundancy: 0,
     not_actionable_not_in_final_selected_set: 0,
     blocked_invalid_stop_distance: 0,
     blocked_zero_or_negative_qty: 0,
@@ -1672,14 +1696,26 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const noSetupByEngine: Record<string, Record<string, number>> = {
     engine1: {},
     engine2: {},
-    engine3: {}
+    engine3: {},
+    engine4: {}
+  };
+  const engineContextCoverage: Record<string, { readySymbols: Set<string>; blockedSymbols: Set<string> }> = {
+    engine1: { readySymbols: new Set<string>(), blockedSymbols: new Set<string>() },
+    engine2: { readySymbols: new Set<string>(), blockedSymbols: new Set<string>() },
+    engine3: { readySymbols: new Set<string>(), blockedSymbols: new Set<string>() },
+    engine4: { readySymbols: new Set<string>(), blockedSymbols: new Set<string>() }
   };
   let engineScansAttempted = 0;
   let engineScansCandidates = 0;
+  let engineScansRejected = 0;
   let engineScansNoSetup = 0;
   let engineScansSkipped = 0;
   let engineScansBlocked = 0;
   let engineScansErrors = 0;
+  let engine4ScansAttempted = 0;
+  let engine4CandidatesGenerated = 0;
+  let engine4CandidatesRejected = 0;
+  let engine4NoSetup = 0;
   let providerFailures = 0;
   const symbolsSurvivedProviderStage = new Set<string>();
   const symbolsReachedEngineScan = new Set<string>();
@@ -2193,14 +2229,21 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     const enginePlan = resolveRuntimeEnginePlanForSymbol(config);
     const emitBlockedEngineScanForSymbol = (reason: string, summary: string) => {
       for (const engine of enginePlan) {
+        const usesFastContext = engine.strategyId === config.ENGINE3_STRATEGY || engine.strategyId === config.ENGINE4_STRATEGY;
+        const executionTimeframe = usesFastContext ? "5m" : config.DEFAULT_EXECUTION_TIMEFRAME;
+        const htf1 = usesFastContext ? "15m" : config.DEFAULT_HTF_1;
+        const htf2 = usesFastContext ? "1h" : config.DEFAULT_HTF_2;
         const trace: EngineScanTrace = {
           symbol: symbolContext.symbol,
           marketType: symbolContext.marketType,
           engineId: engine.engineId,
           strategyId: engine.strategyId,
-          executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
-          htf1: config.DEFAULT_HTF_1,
-          htf2: config.DEFAULT_HTF_2,
+          executionTimeframe,
+          htf1,
+          htf2,
+          candleCountExecution: 0,
+          candleCountHtf1: 0,
+          candleCountHtf2: 0,
           result: "blocked",
           reason,
           summary,
@@ -2209,6 +2252,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         };
         engineScansAttempted += 1;
         engineScansBlocked += 1;
+        const coverage = engineContextCoverage[engine.engineId] ?? (engineContextCoverage[engine.engineId] = { readySymbols: new Set<string>(), blockedSymbols: new Set<string>() });
+        coverage.blockedSymbols.add(symbolContext.symbol);
         const bucket = noSetupByEngine[engine.engineId] ?? (noSetupByEngine[engine.engineId] = {});
         bucket[reason] = (bucket[reason] ?? 0) + 1;
         console.log(
@@ -2220,9 +2265,12 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
               marketType: symbolContext.marketType,
               engineId: engine.engineId,
               strategyId: engine.strategyId,
-              executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
-              htf1: config.DEFAULT_HTF_1,
-              htf2: config.DEFAULT_HTF_2,
+              executionTimeframe,
+              htf1,
+              htf2,
+              candleCountExecution: 0,
+              candleCountHtf1: 0,
+              candleCountHtf2: 0,
               debugVisibilityEnabled
             },
             null,
@@ -2312,9 +2360,30 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       });
       engineScansAttempted += evaluation.engineScans.length;
       for (const scan of evaluation.engineScans) {
+        const coverage = engineContextCoverage[scan.engineId] ?? (engineContextCoverage[scan.engineId] = { readySymbols: new Set<string>(), blockedSymbols: new Set<string>() });
+        if (scan.result === "blocked" || scan.result === "skipped") {
+          coverage.blockedSymbols.add(scan.symbol);
+        } else {
+          coverage.readySymbols.add(scan.symbol);
+        }
+        if (scan.engineId === "engine4") {
+          engine4ScansAttempted += 1;
+        }
         if (scan.result === "candidate_generated") engineScansCandidates += 1;
+        if (scan.result === "candidate_rejected") {
+          engineScansRejected += 1;
+        }
         if (scan.result === "no_setup") {
           engineScansNoSetup += 1;
+        }
+        if (scan.engineId === "engine4" && scan.result === "candidate_generated") {
+          engine4CandidatesGenerated += 1;
+        }
+        if (scan.engineId === "engine4" && scan.result === "candidate_rejected") {
+          engine4CandidatesRejected += 1;
+        }
+        if (scan.engineId === "engine4" && scan.result === "no_setup") {
+          engine4NoSetup += 1;
         }
         if (scan.result === "skipped") {
           engineScansSkipped += 1;
@@ -2325,7 +2394,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         if (scan.result === "engine_error") {
           engineScansErrors += 1;
         }
-        if (scan.result === "no_setup" || scan.result === "skipped" || scan.result === "blocked" || scan.result === "engine_error") {
+        if (
+          scan.result === "candidate_rejected"
+          || scan.result === "no_setup"
+          || scan.result === "skipped"
+          || scan.result === "blocked"
+          || scan.result === "engine_error"
+        ) {
           const bucket = noSetupByEngine[scan.engineId] ?? (noSetupByEngine[scan.engineId] = {});
           bucket[scan.reason] = (bucket[scan.reason] ?? 0) + 1;
         }
@@ -2448,6 +2523,20 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       reason
     }, null, 2));
   };
+  const emitEngineFinalDecision = (candidate: RuntimeCandidate, result: "selected" | "blocked", reason: string) => {
+    console.log(JSON.stringify({
+      event: "ENGINE_FINAL_DECISION",
+      cycleNumber,
+      symbol: candidate.signal.symbol,
+      marketType: candidate.signal.marketType,
+      engineId: resolveCandidateEngineLabel(candidate, config),
+      strategyId: candidate.signal.strategyId,
+      side: candidate.signal.side,
+      score: candidate.signal.score,
+      result,
+      reason
+    }, null, 2));
+  };
   const independentMultiEngineMode = config.MULTI_ENGINE_EXECUTION_MODE === "independent";
 
   const latestPriceBySymbol = new Map<string, number>();
@@ -2516,6 +2605,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         candidatesRejectedCount += 1;
         logCandidateFilterResult(candidate, "rejected", "symbol_locked_open_trade");
+        emitEngineFinalDecision(candidate, "blocked", "active_symbol_gate");
         continue;
       }
       if (recentSymbolSet.has(symbol)) {
@@ -2888,39 +2978,79 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         rejectionCounts.not_actionable_not_in_final_selected_set += 1;
       }
     }
-  } else {
-    finalSelectedCandidates = cycleCandidates;
-  }
+  } else if (independentMultiEngineMode) {
+    const rankedIndependentCandidates = [...cycleCandidates].sort((a, b) => b.signal.score - a.signal.score);
+    const admittedBySymbol = new Map<string, RuntimeCandidate>();
+    const rejectedReasonByKey = new Map<string, SignalRejectionReason>();
+    const candidateKey = (candidate: RuntimeCandidate) =>
+      `${candidate.signal.symbol}|${candidate.signal.side}|${candidate.signal.strategyId}|${candidate.signal.score}`;
 
-  if (independentMultiEngineMode) {
-    cycleRankingAllocation = finalSelectedCandidates.map((candidate, index) => ({
-      symbol: candidate.signal.symbol,
-      marketType: candidate.signal.marketType,
-      side: candidate.signal.side,
-      score: candidate.signal.score,
-      rank: index + 1,
-      tier: candidate.signal.setupGrade,
-      setupVariant: typeof candidate.signal.metadata?.setupVariant === "string"
-        ? candidate.signal.metadata.setupVariant
-        : "trusted_a_plus_breakout_core_v1",
-      selected: true,
-      diversificationGroup: candidate.signal.marketType === "crypto" ? cryptoDiversificationGroup(candidate.signal.symbol) : "other",
-      riskRecommendationLabel: typeof candidate.signal.metadata?.riskRecommendationLabel === "string"
-        ? candidate.signal.metadata.riskRecommendationLabel
-        : "standard_a_plus_core",
-      suggestedManualRiskPctRange: typeof candidate.signal.metadata?.suggestedManualRiskPctRange === "string"
-        ? candidate.signal.metadata.suggestedManualRiskPctRange
-        : "0.50%–0.75%",
-      suggestedManualLeverageRange: typeof candidate.signal.metadata?.suggestedManualLeverageRange === "string"
-        ? candidate.signal.metadata.suggestedManualLeverageRange
-        : "3x–5x",
-      selectedReason: "selected_independent_multi_engine_mode",
-      rejectionReason: null
-    }));
+    for (const candidate of rankedIndependentCandidates) {
+      const symbolKey = candidate.signal.symbol.toUpperCase();
+      const existing = admittedBySymbol.get(symbolKey);
+      if (!existing) {
+        admittedBySymbol.set(symbolKey, candidate);
+        finalSelectedCandidates.push(candidate);
+        selectedReasonBySymbol.set(
+          candidate.signal.symbol,
+          `selected independent_engine_admission engine=${resolveCandidateEngineLabel(candidate, config)} score=${candidate.signal.score.toFixed(2)}`
+        );
+        logCandidateFilterResult(candidate, "passed", "selected_independent_engine_mode");
+        emitEngineFinalDecision(candidate, "selected", "selected_independent_engine_mode");
+        continue;
+      }
+
+      const sameSide = existing.signal.side === candidate.signal.side;
+      const rejectionReason: SignalRejectionReason = sameSide
+        ? "not_selected_brain_same_symbol_duplication"
+        : "not_selected_brain_opposite_side_conflict";
+      rejectedReasonByKey.set(candidateKey(candidate), rejectionReason);
+      rejectionCounts[rejectionReason] = (rejectionCounts[rejectionReason] ?? 0) + 1;
+      skippedCount += 1;
+      candidatesRejectedCount += 1;
+      logCandidateFilterResult(candidate, "rejected", rejectionReason);
+      emitEngineFinalDecision(candidate, "blocked", rejectionReason);
+    }
+
+    cycleRankingAllocation = rankedIndependentCandidates.map((candidate, index) => {
+      const selected = finalSelectedCandidates.some((entry) =>
+        entry.signal.symbol === candidate.signal.symbol
+        && entry.signal.side === candidate.signal.side
+        && entry.signal.strategyId === candidate.signal.strategyId
+        && entry.signal.score === candidate.signal.score
+      );
+      const rejectionReason = rejectedReasonByKey.get(candidateKey(candidate)) ?? null;
+      return {
+        symbol: candidate.signal.symbol,
+        marketType: candidate.signal.marketType,
+        side: candidate.signal.side,
+        score: candidate.signal.score,
+        rank: index + 1,
+        tier: candidate.signal.setupGrade,
+        setupVariant: typeof candidate.signal.metadata?.setupVariant === "string"
+          ? candidate.signal.metadata.setupVariant
+          : "trusted_a_plus_breakout_core_v1",
+        selected,
+        diversificationGroup: candidate.signal.marketType === "crypto" ? cryptoDiversificationGroup(candidate.signal.symbol) : "other",
+        riskRecommendationLabel: typeof candidate.signal.metadata?.riskRecommendationLabel === "string"
+          ? candidate.signal.metadata.riskRecommendationLabel
+          : "standard_a_plus_core",
+        suggestedManualRiskPctRange: typeof candidate.signal.metadata?.suggestedManualRiskPctRange === "string"
+          ? candidate.signal.metadata.suggestedManualRiskPctRange
+          : "0.50%–0.75%",
+        suggestedManualLeverageRange: typeof candidate.signal.metadata?.suggestedManualLeverageRange === "string"
+          ? candidate.signal.metadata.suggestedManualLeverageRange
+          : "3x–5x",
+        selectedReason: selected ? "selected_independent_multi_engine_mode" : null,
+        rejectionReason
+      };
+    });
     for (const candidate of finalSelectedCandidates) {
       const engineLabel = resolveCandidateEngineLabel(candidate, config).toUpperCase();
       console.log(`[${engineLabel}] SIGNAL_SELECTED ${candidate.signal.symbol} ${candidate.signal.side} score=${candidate.signal.score.toFixed(0)}`);
     }
+  } else {
+    finalSelectedCandidates = cycleCandidates;
   }
 
   if (prismaClient) {
@@ -3266,6 +3396,15 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             }
           }
         });
+        console.log(JSON.stringify({
+          event: "PAPER_EXECUTION_RESULT",
+          cycleNumber,
+          symbol: event.symbol,
+          engineId: signalCandidate ? strategyEngineId(config, signalCandidate.signal.strategyId) : null,
+          strategyId: signalCandidate?.signal.strategyId ?? null,
+          accepted: decision.accepted,
+          rejectionReason: decision.rejectionReason ?? null
+        }, null, 2));
 
         if (!decision.accepted) {
           if (debugVisibilityEnabled) {
@@ -4279,6 +4418,18 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           minScore: config.ENGINE2_MIN_SCORE,
           rankingBias: config.ENGINE2_RANKING_BIAS
         },
+        engine3: {
+          enabled: config.SIGNAL_ENABLE_ENGINE3,
+          lockedWinner: config.ENGINE3_STRATEGY,
+          minScore: config.ENGINE3_MIN_SCORE,
+          rankingBias: config.ENGINE3_RANKING_BIAS
+        },
+        engine4: {
+          enabled: config.SIGNAL_ENABLE_ENGINE4,
+          lockedWinner: config.ENGINE4_STRATEGY,
+          minScore: config.ENGINE4_MIN_SCORE,
+          rankingBias: config.ENGINE4_RANKING_BIAS
+        },
         swingResearchModeEnabled: config.ENABLE_SWING_RESEARCH_MODE,
         productionStrategies: productionStrategies.map((entry: { id: string }) => entry.id),
         governanceDefaults: LOCKED_MODE_GOVERNANCE_DEFAULTS,
@@ -4893,10 +5044,21 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         symbolsCompletedScan: symbolsCompletedEngineScan.size,
         totalEngineAttempts: engineScansAttempted,
         totalCandidates: engineScansCandidates,
+        totalRejected: engineScansRejected,
         totalNoSetup: engineScansNoSetup,
         totalSkipped: engineScansSkipped,
         totalBlocked: engineScansBlocked,
         totalErrors: engineScansErrors,
+        engine4ScansAttempted,
+        engine4CandidatesGenerated,
+        engine4CandidatesRejected,
+        engine4NoSetup,
+        engineContextCoverage: Object.fromEntries(
+          Object.entries(engineContextCoverage).map(([engineId, coverage]) => [
+            engineId,
+            { readySymbols: coverage.readySymbols.size, blockedSymbols: coverage.blockedSymbols.size }
+          ])
+        ),
         symbolsTotal: runtimeSymbols.length,
         symbolsContextReady: symbolReadiness.filter((entry) => entry.analysisReady).length,
         symbolsBlocked: symbolReadiness.filter((entry) => !entry.analysisReady).length,
@@ -4927,10 +5089,21 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         symbolsCompletedEngineScan: symbolsCompletedEngineScan.size,
         engineScansAttempted,
         engineScansCandidates,
+        engineScansRejected,
         engineScansNoSetup,
         engineScansSkipped,
         engineScansBlocked,
         engineScansErrors,
+        engine4ScansAttempted,
+        engine4CandidatesGenerated,
+        engine4CandidatesRejected,
+        engine4NoSetup,
+        engineContextCoverage: Object.fromEntries(
+          Object.entries(engineContextCoverage).map(([engineId, coverage]) => [
+            engineId,
+            { readySymbols: coverage.readySymbols.size, blockedSymbols: coverage.blockedSymbols.size }
+          ])
+        ),
         candidatesGenerated: candidatesGeneratedCount,
         candidatesRejected: candidatesRejectedCount,
         candidatesSelected: candidatesSelectedCount,

@@ -13,7 +13,7 @@ import {
   type Timeframe
 } from "../packages/core/src/index";
 
-const timeframeToMinutes: Record<Timeframe, number> = { "15m": 15, "1h": 60, "4h": 240 };
+const timeframeToMinutes: Record<Timeframe, number> = { "5m": 5, "15m": 15, "1h": 60, "4h": 240 };
 
 function minBarsForTimeframe(executionTimeframe: Timeframe, targetTimeframe: Timeframe, minExecutionBars: number) {
   const execMinutes = timeframeToMinutes[executionTimeframe];
@@ -31,7 +31,7 @@ function runtimeSymbolsFromConfig(config: ReturnType<typeof getConfig>): SymbolM
       symbols.push({ symbol: normalized, marketType });
     }
   };
-  const defaults = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+  const defaults = ["ETHUSDT", "BTCUSDT", "SOLUSDT"];
   for (const symbol of config.DEFAULT_SYMBOLS.length > 0 ? config.DEFAULT_SYMBOLS : defaults) append(symbol, "crypto");
   if (config.SIGNAL_ENABLE_FOREX) {
     for (const symbol of config.DEFAULT_FOREX_SYMBOLS) append(symbol, "forex");
@@ -42,6 +42,8 @@ function runtimeSymbolsFromConfig(config: ReturnType<typeof getConfig>): SymbolM
 function strategyIds(config: ReturnType<typeof getConfig>) {
   const ids = [config.ACTIVE_PRODUCTION_STRATEGY];
   if (config.SIGNAL_ENABLE_ENGINE2) ids.push(config.ENGINE2_STRATEGY);
+  if (config.SIGNAL_ENABLE_ENGINE3) ids.push(config.ENGINE3_STRATEGY);
+  if (config.SIGNAL_ENABLE_ENGINE4) ids.push(config.ENGINE4_STRATEGY);
   return Array.from(new Set(ids));
 }
 
