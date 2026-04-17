@@ -13,7 +13,10 @@ export type TelegramReadySignal = {
   tier: BreakoutSignal["setupGrade"];
   signalScore: number;
   score: number;
+  confidence: number | null;
   rank: number;
+  strategyId: string;
+  engineId: string;
   rationale: string[];
   riskRecommendationLabel: string;
   suggestedManualRiskPctRange: string;
@@ -59,7 +62,10 @@ function toTelegramReadySignal(signal: BreakoutSignal, rank: number): TelegramRe
     tier: signal.setupGrade,
     signalScore: signal.score,
     score: signal.score,
+    confidence: typeof signal.confidence === "number" ? signal.confidence : null,
     rank,
+    strategyId: signal.strategyId,
+    engineId: typeof signal.metadata?.engineId === "string" ? signal.metadata.engineId : "engine1",
     rationale: toRationale(signal),
     riskRecommendationLabel,
     suggestedManualRiskPctRange,
@@ -106,13 +112,17 @@ export function buildSignalModePayload(input: {
       "🔥 TRADE SIGNAL [A+]",
       "",
       `Symbol: ${signal.symbol}`,
+      `Market: ${signal.marketType}`,
       `Side: ${signal.side}`,
+      `Engine: ${signal.engineId}`,
+      `Strategy: ${signal.strategyId}`,
       `Entry: ${signal.entry.toFixed(6)}`,
       `Stop: ${signal.stop.toFixed(6)}`,
       `TP1: ${signal.tp1.toFixed(6)}`,
       `TP2: ${signal.tp2.toFixed(6)}`,
       "",
       `Score: ${signal.signalScore}`,
+      `Confidence: ${signal.confidence === null ? "n/a" : signal.confidence.toFixed(2)}`,
       `Operator Risk: ${signal.riskRecommendationLabel}`,
       `Manual Risk Range: ${signal.suggestedManualRiskPctRange}`,
       `Manual Leverage Range: ${signal.suggestedManualLeverageRange}`,
