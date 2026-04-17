@@ -3,7 +3,7 @@ import { getConfig } from "@hashi/config";
 import { buildPaperAccountSnapshot, type PaperCloseReason, type PaperExecutionDecision, type PaperPosition } from "@hashi/core";
 
 type EngineDescriptor = {
-  engineId: "engine1" | "engine2" | "engine3";
+  engineId: "engine1" | "engine2" | "engine3" | "engine4";
   engineLabel: string;
   strategyLabel: string;
 };
@@ -98,6 +98,33 @@ type ReconciliationPayload = {
       forexEnabled: boolean;
       forexReadinessOnly: boolean;
     };
+    engineCycleStats?: Record<string, {
+      scansAttempted: number;
+      candidateGenerated: number;
+      candidateRejected: number;
+      noSetup: number;
+      blocked: number;
+      skipped: number;
+      errors: number;
+    }>;
+    symbolScanBoard?: Array<{
+      symbol: string;
+      marketType: "crypto" | "forex";
+      preloadStatus: "context_ready" | "blocked";
+      contextStatus: "ready" | "blocked";
+      blockedReason: string | null;
+      engineResults: Record<string, {
+        result: string;
+        reason: string | null;
+        strategyId: string | null;
+      }>;
+      candidateGenerated: boolean;
+      selected: boolean;
+      paperExecuted: boolean;
+      telegramSent: boolean;
+      selectedReason: string | null;
+      rejectedReason: string | null;
+    }>;
   };
   currentCycle?: {
     candidatesEvaluatedThisCycle: number;
@@ -222,6 +249,9 @@ function resolveEngineDescriptor(strategyId: string | null | undefined): EngineD
   if (strategyId === "continuation_reclaim_5m_v1") {
     return { engineId: "engine3", engineLabel: "Engine 3", strategyLabel: "Continuation Reclaim" };
   }
+  if (strategyId === "micro_scalp_continuation_v1") {
+    return { engineId: "engine4", engineLabel: "Engine 4", strategyLabel: "Micro Scalp Continuation" };
+  }
   return { engineId: "engine1", engineLabel: "Engine 1", strategyLabel: "Compression Breakout" };
 }
 
@@ -249,7 +279,8 @@ export async function GET() {
     latestSignalEvent,
     recentExecutionDecisionEvents,
     recentTradeLifecycleEvents,
-    recentPersistedSignalDetails
+    recentPersistedSignalDetails,
+    recentRuntimeEvents
   ] = await Promise.all([
     prisma.signalTrade.findMany({
       where: {
@@ -303,6 +334,11 @@ export async function GET() {
       where: { type: "signal_persisted", mode: "signal" },
       orderBy: { createdAt: "desc" },
       take: 200
+    }),
+    prisma.runtimeEvent.findMany({
+      where: { mode: "signal" },
+      orderBy: { createdAt: "desc" },
+      take: 180
     })
   ]);
   const systemControl = await prisma.systemControl.findUnique({ where: { id: "system" } });
@@ -598,6 +634,77 @@ export async function GET() {
       createdAt: event.createdAt.toISOString()
     };
   });
+  const runtimeEventLabelMap: Record<string, string> = {
+    cycle_started: "WORKER_CYCLE_START",
+    cycle_completed: "WORKER_CYCLE_COMPLETE",
+    signal_cycle_reconciliation: "WORKER_CYCLE_SUMMARY",
+    signal_generated: "CANDIDATE_GENERATED",
+    signal_persisted: "ENGINE_FINAL_DECISION",
+    signal_paper_execution_decision: "PAPER_EXECUTION_RESULT",
+    dispatch_attempt: "TELEGRAM_DISPATCH_BEGIN",
+    dispatch_success: "TELEGRAM_DISPATCH_RESULT",
+    dispatch_failure: "TELEGRAM_DISPATCH_RESULT",
+    brain_engine_finalists: "BRAIN_SELECTION_RESULT",
+    brain_selected_actionable_set: "BRAIN_SELECTION_RESULT",
+    signal_skipped_active_symbol: "CANDIDATE_FILTER_RESULT",
+    signal_skipped_rr_filter: "CANDIDATE_FILTER_RESULT",
+    signal_skipped_entry_stretch: "CANDIDATE_FILTER_RESULT",
+    signal_skipped_symbol_cooldown: "CANDIDATE_FILTER_RESULT"
+  };
+  const liveRuntimeEvents = recentRuntimeEvents
+    .map((event) => {
+      const payload = (event.payload as Record<string, unknown> | null) ?? null;
+      return {
+        id: event.id,
+        at: event.createdAt.toISOString(),
+        eventType: runtimeEventLabelMap[event.type] ?? event.type.toUpperCase(),
+        runtimeType: event.type,
+        cycleId: typeof payload?.cycleId === "string" ? payload.cycleId : null,
+        cycleNumber: typeof payload?.cycleNumber === "number" ? payload.cycleNumber : null,
+        symbol: event.symbol ?? (typeof payload?.symbol === "string" ? payload.symbol : null),
+        marketType: (payload?.marketType === "crypto" || payload?.marketType === "forex") ? payload.marketType : null,
+        engineId: typeof payload?.engineId === "string" ? payload.engineId : null,
+        strategyId: typeof payload?.strategyId === "string" ? payload.strategyId : null,
+        result: typeof payload?.status === "string" ? payload.status : null,
+        reason: typeof payload?.reason === "string" ? payload.reason : null,
+        summary: event.message ?? null
+      };
+    })
+    .slice(0, 120);
+  const lifecycleByTradeId = new Map<string, typeof recentPaperLifecycleEvents>();
+  for (const event of recentPaperLifecycleEvents) {
+    if (!event.signalTradeId) continue;
+    const existing = lifecycleByTradeId.get(event.signalTradeId) ?? [];
+    existing.push(event);
+    lifecycleByTradeId.set(event.signalTradeId, existing);
+  }
+  const decorateWithLifecycle = <T extends { id: string }>(position: T) => {
+    const events = lifecycleByTradeId.get(position.id) ?? [];
+    const sorted = [...events].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const latest = sorted[0] ?? null;
+    return {
+      ...position,
+      lastLifecycleEvent: latest?.status ?? latest?.closeReason ?? null,
+      lastLifecycleEventAt: latest?.createdAt ?? null,
+      lifecycleTrail: sorted.slice(0, 12)
+    };
+  };
+  const currentCycleLive = {
+    cycleId: reconciliation?.cycleId ?? null,
+    cycleNumber: liveRuntimeEvents.find((event) => event.eventType === "WORKER_CYCLE_START")?.cycleNumber ?? null,
+    cycleStartedAt: liveRuntimeEvents.find((event) => event.eventType === "WORKER_CYCLE_START")?.at ?? null,
+    symbolsTotal: reconciliation?.cycleTruth?.symbolsActuallyScannedCount ?? 0,
+    symbolsReady: (reconciliation?.cycleTruth?.symbolsActuallyScannedCount ?? 0) - (reconciliation?.cycleTruth?.symbolsSkippedBeforeEvaluationCount ?? 0),
+    symbolsBlocked: reconciliation?.cycleTruth?.symbolsSkippedBeforeEvaluationCount ?? 0,
+    symbolsDispatchedToScan: reconciliation?.cycleTruth?.symbolsActuallyScannedCount ?? 0,
+    engineScanAttempts: Object.values(reconciliation?.cycleTruth?.engineCycleStats ?? {}).reduce((sum, engine) => sum + engine.scansAttempted, 0),
+    candidatesGenerated: reconciliation?.currentCycle?.candidatesEvaluatedThisCycle ?? 0,
+    candidatesRejected: reconciliation?.cycleTruth?.rejectedCountThisCycle ?? 0,
+    candidatesSelected: reconciliation?.cycleTruth?.selectedActionableCountThisCycle ?? 0,
+    paperExecuted: reconciliation?.cycleTruth?.signalsPersistedThisCycle ?? 0,
+    telegramSent: reconciliation?.currentCycle?.telegramSignalsDispatchedThisCycle ?? 0,
+    engineBreakdown: reconciliation?.cycleTruth?.engineCycleStats ?? {}
+  };
 
   const summary = {
     openCount: openTrades.length,
@@ -684,8 +791,8 @@ export async function GET() {
     },
     marketContexts,
     paperAccount,
-    openPaperPositions,
-    closedPaperPositions,
+    openPaperPositions: openPaperPositions.map((position) => decorateWithLifecycle(position)),
+    closedPaperPositions: closedPaperPositions.map((position) => decorateWithLifecycle(position)),
     recentExecutionDecisions,
     recentPaperLifecycleEvents,
     summary,
@@ -772,6 +879,9 @@ export async function GET() {
       diversificationNotes: cycleTruth?.diversificationNotes ?? []
     },
     cycleTruth,
+    liveRuntimeEvents,
+    currentCycleLive,
+    symbolScanBoard: reconciliation?.cycleTruth?.symbolScanBoard ?? [],
     dispatchBreakdown,
     selectedThisCycle,
     rejectedThisCycle,

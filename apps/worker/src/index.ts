@@ -384,6 +384,33 @@ type SignalCycleReconciliation = {
       forexEnabled: boolean;
       forexReadinessOnly: boolean;
     };
+    engineCycleStats: Record<string, {
+      scansAttempted: number;
+      candidateGenerated: number;
+      candidateRejected: number;
+      noSetup: number;
+      blocked: number;
+      skipped: number;
+      errors: number;
+    }>;
+    symbolScanBoard: Array<{
+      symbol: string;
+      marketType: SymbolMetadata["marketType"];
+      preloadStatus: "context_ready" | "blocked";
+      contextStatus: "ready" | "blocked";
+      blockedReason: string | null;
+      engineResults: Record<string, {
+        result: EngineScanResultStatus;
+        reason: string | null;
+        strategyId: string | null;
+      }>;
+      candidateGenerated: boolean;
+      selected: boolean;
+      paperExecuted: boolean;
+      telegramSent: boolean;
+      selectedReason: string | null;
+      rejectedReason: string | null;
+    }>;
   };
   currentCycle: {
     candidatesEvaluatedThisCycle: number;
@@ -413,6 +440,25 @@ type SymbolCycleSummary = {
     | "not_attempted_no_message_payload"
     | "not_attempted_not_in_final_selected_set";
   skipReason: string | null;
+};
+
+type SymbolScanBoardState = {
+  symbol: string;
+  marketType: SymbolMetadata["marketType"];
+  preloadStatus: "context_ready" | "blocked";
+  contextStatus: "ready" | "blocked";
+  blockedReason: string | null;
+  engineResults: Record<string, {
+    result: EngineScanResultStatus;
+    reason: string | null;
+    strategyId: string | null;
+  }>;
+  candidateGenerated: boolean;
+  selected: boolean;
+  paperExecuted: boolean;
+  telegramSent: boolean;
+  selectedReason: string | null;
+  rejectedReason: string | null;
 };
 
 type EngineScanResultStatus = "candidate_generated" | "candidate_rejected" | "no_setup" | "skipped" | "blocked" | "engine_error";
@@ -1673,6 +1719,21 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     no_message_payload: 0
   };
   const symbolSummaries = new Map<string, SymbolCycleSummary>();
+  const symbolScanBoard = new Map<string, SymbolScanBoardState>();
+  const engineCycleStats: Record<string, {
+    scansAttempted: number;
+    candidateGenerated: number;
+    candidateRejected: number;
+    noSetup: number;
+    blocked: number;
+    skipped: number;
+    errors: number;
+  }> = {
+    engine1: { scansAttempted: 0, candidateGenerated: 0, candidateRejected: 0, noSetup: 0, blocked: 0, skipped: 0, errors: 0 },
+    engine2: { scansAttempted: 0, candidateGenerated: 0, candidateRejected: 0, noSetup: 0, blocked: 0, skipped: 0, errors: 0 },
+    engine3: { scansAttempted: 0, candidateGenerated: 0, candidateRejected: 0, noSetup: 0, blocked: 0, skipped: 0, errors: 0 },
+    engine4: { scansAttempted: 0, candidateGenerated: 0, candidateRejected: 0, noSetup: 0, blocked: 0, skipped: 0, errors: 0 }
+  };
   let currentOpenPositionsCount = 0;
   let maxConcurrentBlockedCount = 0;
   let maxConcurrentBlockedThisCycle = false;
@@ -1840,7 +1901,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     data: {
       type: "cycle_started",
       mode: runtimeMode,
-      message: "Worker cycle started"
+      message: "Worker cycle started",
+      payload: {
+        cycleId,
+        cycleNumber
+      }
     }
   });
 
@@ -1928,13 +1993,28 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const runtimeSymbols = configuredSymbols.filter((entry) => allowedSymbolSet.has(entry.symbol.toUpperCase()));
   const symbolsSkippedBeforeEvaluation = configuredSymbolNames.filter((symbol) => !runtimeSymbols.some((entry) => entry.symbol.toUpperCase() === symbol));
   for (const entry of configuredSymbols) {
+    const isRuntimeSymbol = runtimeSymbols.some((symbolMeta) => symbolMeta.symbol === entry.symbol);
     symbolSummaries.set(entry.symbol, {
       symbol: entry.symbol,
-      scanned: runtimeSymbols.some((symbolMeta) => symbolMeta.symbol === entry.symbol),
+      scanned: isRuntimeSymbol,
       candidateFound: false,
       persisted: false,
       telegramDispatchStatus: "not_attempted_not_in_final_selected_set",
-      skipReason: runtimeSymbols.some((symbolMeta) => symbolMeta.symbol === entry.symbol) ? null : "not_allowed_by_system_control"
+      skipReason: isRuntimeSymbol ? null : "not_allowed_by_system_control"
+    });
+    symbolScanBoard.set(entry.symbol, {
+      symbol: entry.symbol,
+      marketType: entry.marketType,
+      preloadStatus: isRuntimeSymbol ? "blocked" : "blocked",
+      contextStatus: isRuntimeSymbol ? "blocked" : "blocked",
+      blockedReason: isRuntimeSymbol ? "awaiting_preload" : "not_allowed_by_system_control",
+      engineResults: {},
+      candidateGenerated: false,
+      selected: false,
+      paperExecuted: false,
+      telegramSent: false,
+      selectedReason: null,
+      rejectedReason: isRuntimeSymbol ? null : "not_allowed_by_system_control"
     });
   }
   if (runtimeSymbols.length === 0) {
@@ -2160,6 +2240,16 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   }
 
   const analysisReadySymbols = symbolReadiness.filter((entry) => entry.analysisReady).map((entry) => entry.symbol);
+  for (const readiness of symbolReadiness) {
+    const board = symbolScanBoard.get(readiness.symbol);
+    if (!board) continue;
+    board.preloadStatus = readiness.analysisReady ? "context_ready" : "blocked";
+    board.contextStatus = readiness.analysisReady ? "ready" : "blocked";
+    board.blockedReason = readiness.analysisReady ? null : readiness.blockedReason ?? "analysis_context_not_ready";
+    if (board.blockedReason && !board.rejectedReason) {
+      board.rejectedReason = board.blockedReason;
+    }
+  }
   const warmupIncomplete = analysisReadySymbols.length === 0;
   console.log(
     JSON.stringify(
@@ -2252,8 +2342,22 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         };
         engineScansAttempted += 1;
         engineScansBlocked += 1;
+        const engineStats = engineCycleStats[engine.engineId] ?? (engineCycleStats[engine.engineId] = {
+          scansAttempted: 0, candidateGenerated: 0, candidateRejected: 0, noSetup: 0, blocked: 0, skipped: 0, errors: 0
+        });
+        engineStats.scansAttempted += 1;
+        engineStats.blocked += 1;
         const coverage = engineContextCoverage[engine.engineId] ?? (engineContextCoverage[engine.engineId] = { readySymbols: new Set<string>(), blockedSymbols: new Set<string>() });
         coverage.blockedSymbols.add(symbolContext.symbol);
+        const board = symbolScanBoard.get(symbolContext.symbol);
+        if (board) {
+          board.engineResults[engine.engineId] = {
+            result: "blocked",
+            reason,
+            strategyId: engine.strategyId
+          };
+          board.rejectedReason = board.rejectedReason ?? reason;
+        }
         const bucket = noSetupByEngine[engine.engineId] ?? (noSetupByEngine[engine.engineId] = {});
         bucket[reason] = (bucket[reason] ?? 0) + 1;
         console.log(
@@ -2360,6 +2464,24 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       });
       engineScansAttempted += evaluation.engineScans.length;
       for (const scan of evaluation.engineScans) {
+        const engineStats = engineCycleStats[scan.engineId] ?? (engineCycleStats[scan.engineId] = {
+          scansAttempted: 0, candidateGenerated: 0, candidateRejected: 0, noSetup: 0, blocked: 0, skipped: 0, errors: 0
+        });
+        engineStats.scansAttempted += 1;
+        if (scan.result === "candidate_generated") engineStats.candidateGenerated += 1;
+        if (scan.result === "candidate_rejected") engineStats.candidateRejected += 1;
+        if (scan.result === "no_setup") engineStats.noSetup += 1;
+        if (scan.result === "blocked") engineStats.blocked += 1;
+        if (scan.result === "skipped") engineStats.skipped += 1;
+        if (scan.result === "engine_error") engineStats.errors += 1;
+        const board = symbolScanBoard.get(scan.symbol);
+        if (board) {
+          board.engineResults[scan.engineId] = {
+            result: scan.result,
+            reason: scan.reason,
+            strategyId: scan.strategyId
+          };
+        }
         const coverage = engineContextCoverage[scan.engineId] ?? (engineContextCoverage[scan.engineId] = { readySymbols: new Set<string>(), blockedSymbols: new Set<string>() });
         if (scan.result === "blocked" || scan.result === "skipped") {
           coverage.blockedSymbols.add(scan.symbol);
@@ -2413,6 +2535,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           summary.candidateFound = false;
           summary.skipReason = "no_setup_found";
         }
+        const board = symbolScanBoard.get(symbolContext.symbol);
+        if (board) {
+          board.candidateGenerated = false;
+          board.rejectedReason = board.rejectedReason ?? "no_setup_found";
+        }
         console.log(
           JSON.stringify(
             {
@@ -2436,6 +2563,10 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       if (summary) {
         summary.candidateFound = true;
         summary.skipReason = null;
+      }
+      const board = symbolScanBoard.get(symbolContext.symbol);
+      if (board) {
+        board.candidateGenerated = true;
       }
 
       for (const signal of generatedSignals) {
@@ -3407,6 +3538,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         }, null, 2));
 
         if (!decision.accepted) {
+          const board = symbolScanBoard.get(event.symbol);
+          if (board) {
+            board.paperExecuted = false;
+            board.rejectedReason = decision.rejectionReason ?? "paper_execution_rejected";
+          }
           if (debugVisibilityEnabled) {
             console.log(JSON.stringify({
               event: "PAPER_EXECUTION_RESULT",
@@ -3454,6 +3590,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         });
         paperExecutedSignalSymbols.add(event.symbol.toUpperCase());
         paperExecutedCount += 1;
+        const board = symbolScanBoard.get(event.symbol);
+        if (board) {
+          board.paperExecuted = true;
+          board.selected = true;
+          board.selectedReason = selectedReasonBySymbol.get(event.symbol) ?? board.selectedReason;
+          board.rejectedReason = null;
+        }
         if (debugVisibilityEnabled) {
           console.log(JSON.stringify({
             event: "PAPER_EXECUTION_RESULT",
@@ -3866,6 +4009,20 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const emittedCandidates = runtimeMode === "signal"
     ? finalSelectedCandidates.filter((entry) => paperExecutedSignalSymbols.has(entry.signal.symbol.toUpperCase()))
     : finalSelectedCandidates;
+  for (const candidate of finalSelectedCandidates) {
+    const board = symbolScanBoard.get(candidate.signal.symbol);
+    if (!board) continue;
+    board.selected = true;
+    board.selectedReason = board.selectedReason ?? "selected_for_final_candidate_set";
+    board.rejectedReason = null;
+  }
+  for (const [symbol, summary] of symbolSummaries.entries()) {
+    const board = symbolScanBoard.get(symbol);
+    if (!board || board.selected) continue;
+    if (summary.skipReason) {
+      board.rejectedReason = board.rejectedReason ?? summary.skipReason;
+    }
+  }
   if (runtimeMode === "signal" && emittedCandidates.length > 0) {
     for (const candidate of emittedCandidates) {
       const detail = buildSignalDetailPayload({
@@ -4533,6 +4690,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         if (summary) {
           summary.telegramDispatchStatus = status;
         }
+        const board = symbolScanBoard.get(dispatch.symbol);
+        if (board) {
+          board.telegramSent = status === "sent";
+          if (status !== "sent") {
+            board.rejectedReason = board.rejectedReason ?? dispatch.reason ?? "telegram_dispatch_not_sent";
+          }
+        }
         if (status === "not_attempted_no_message_payload") {
           rejectionCounts.no_message_payload += 1;
         }
@@ -4957,7 +5121,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           cryptoEnabled: config.SIGNAL_ENABLE_CRYPTO,
           forexEnabled: config.SIGNAL_ENABLE_FOREX,
           forexReadinessOnly: config.SIGNAL_FOREX_READINESS_ONLY
-        }
+        },
+        engineCycleStats,
+        symbolScanBoard: Array.from(symbolScanBoard.values())
       },
       currentCycle: {
         candidatesEvaluatedThisCycle: candidateCount,
@@ -5017,7 +5183,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       data: {
         type: "cycle_completed",
         mode: runtimeMode,
-        message: "Worker cycle completed"
+        message: "Worker cycle completed",
+        payload: {
+          cycleId,
+          cycleNumber
+        }
       }
     });
   }

@@ -153,7 +153,7 @@ export type SignalRoomPayload = {
     unrealizedPnl: number;
     realizedPnl: number;
     strategy: string | null;
-    engineId?: "engine1" | "engine2" | "engine3";
+    engineId?: "engine1" | "engine2" | "engine3" | "engine4";
     engineLabel?: string;
     strategyLabel?: string;
     signalScore?: number | null;
@@ -170,6 +170,21 @@ export type SignalRoomPayload = {
     riskPct: number | null;
     stopPips: number | null;
     exposureBasis: number | null;
+    lastLifecycleEvent?: string | null;
+    lastLifecycleEventAt?: string | null;
+    lifecycleTrail?: Array<{
+      signalTradeId: string | null;
+      marketType: "crypto" | "forex";
+      symbol: string | null;
+      status: string | null;
+      outcome: string | null;
+      closeReason: "stop_hit" | "tp1_hit" | "tp2_hit" | "manual_close" | "time_stop" | "liquidation_guard_close" | "policy_close" | null;
+      currentPrice: number | null;
+      remainingQty: number | null;
+      remainingNotional: number | null;
+      stopPrice: number | null;
+      createdAt: string;
+    }>;
   }>;
   closedPaperPositions: Array<{
     id: string;
@@ -197,7 +212,7 @@ export type SignalRoomPayload = {
     unrealizedPnl: number;
     realizedPnl: number;
     strategy: string | null;
-    engineId?: "engine1" | "engine2" | "engine3";
+    engineId?: "engine1" | "engine2" | "engine3" | "engine4";
     engineLabel?: string;
     strategyLabel?: string;
     signalScore?: number | null;
@@ -214,6 +229,21 @@ export type SignalRoomPayload = {
     riskPct: number | null;
     stopPips: number | null;
     exposureBasis: number | null;
+    lastLifecycleEvent?: string | null;
+    lastLifecycleEventAt?: string | null;
+    lifecycleTrail?: Array<{
+      signalTradeId: string | null;
+      marketType: "crypto" | "forex";
+      symbol: string | null;
+      status: string | null;
+      outcome: string | null;
+      closeReason: "stop_hit" | "tp1_hit" | "tp2_hit" | "manual_close" | "time_stop" | "liquidation_guard_close" | "policy_close" | null;
+      currentPrice: number | null;
+      remainingQty: number | null;
+      remainingNotional: number | null;
+      stopPrice: number | null;
+      createdAt: string;
+    }>;
   }>;
   recentExecutionDecisions: Array<{
     signalEventId: string | null;
@@ -321,7 +351,7 @@ export type SignalRoomPayload = {
     selectedReason: string;
     telegramDispatchStatus: string;
     paperTradeStatus: string;
-    engineId?: "engine1" | "engine2" | "engine3";
+    engineId?: "engine1" | "engine2" | "engine3" | "engine4";
     engineLabel?: string;
     strategyId?: string | null;
     strategyLabel?: string;
@@ -340,7 +370,7 @@ export type SignalRoomPayload = {
     suggestedManualRiskPctRange: string;
     suggestedManualLeverageRange: string;
     rejectionReason: string | null;
-    engineId?: "engine1" | "engine2" | "engine3";
+    engineId?: "engine1" | "engine2" | "engine3" | "engine4";
     engineLabel?: string;
     strategyId?: string | null;
     strategyLabel?: string;
@@ -362,6 +392,63 @@ export type SignalRoomPayload = {
       rejectionReason: string | null;
     }>;
   } | null;
+  liveRuntimeEvents: Array<{
+    id: string;
+    at: string;
+    eventType: string;
+    runtimeType: string;
+    cycleId: string | null;
+    cycleNumber: number | null;
+    symbol: string | null;
+    marketType: "crypto" | "forex" | null;
+    engineId: string | null;
+    strategyId: string | null;
+    result: string | null;
+    reason: string | null;
+    summary: string | null;
+  }>;
+  currentCycleLive: {
+    cycleId: string | null;
+    cycleNumber: number | null;
+    cycleStartedAt: string | null;
+    symbolsTotal: number;
+    symbolsReady: number;
+    symbolsBlocked: number;
+    symbolsDispatchedToScan: number;
+    engineScanAttempts: number;
+    candidatesGenerated: number;
+    candidatesRejected: number;
+    candidatesSelected: number;
+    paperExecuted: number;
+    telegramSent: number;
+    engineBreakdown: Record<string, {
+      scansAttempted: number;
+      candidateGenerated: number;
+      candidateRejected: number;
+      noSetup: number;
+      blocked: number;
+      skipped: number;
+      errors: number;
+    }>;
+  };
+  symbolScanBoard: Array<{
+    symbol: string;
+    marketType: "crypto" | "forex";
+    preloadStatus: "context_ready" | "blocked";
+    contextStatus: "ready" | "blocked";
+    blockedReason: string | null;
+    engineResults: Record<string, {
+      result: string;
+      reason: string | null;
+      strategyId: string | null;
+    }>;
+    candidateGenerated: boolean;
+    selected: boolean;
+    paperExecuted: boolean;
+    telegramSent: boolean;
+    selectedReason: string | null;
+    rejectedReason: string | null;
+  }>;
   controlPlane: {
     allowedSymbolsConfiguredDefaults: string[];
     allowedSymbolsRuntime: string[];
