@@ -63,6 +63,120 @@ export type SignalEvent = {
 };
 
 export type SignalRoomPayload = {
+  performanceSummary?: {
+    sourceOfTruth: string;
+    totalTrades: number;
+    openTrades: number;
+    closedTrades: number;
+    wins: number;
+    losses: number;
+    partialWins: number;
+    breakeven: number;
+    winRate: number | null;
+    avgR: number | null;
+    netR: number | null;
+    avgRealizedPnl: number | null;
+    netRealizedPnl: number;
+    unrealizedPnl: number;
+    expectancy: number | null;
+    profitFactor: number | null;
+    avgTimeToOutcomeMinutes: number | null;
+    avgWinnerDurationMinutes: number | null;
+    avgLoserDurationMinutes: number | null;
+  };
+  performanceWindows?: {
+    todayUtc: PerformanceWindowMetrics;
+    last24h: PerformanceWindowMetrics;
+    allTime: PerformanceWindowMetrics;
+  };
+  perEnginePerformance?: Array<{
+    engineId: "engine1" | "engine2" | "engine3" | "engine4";
+    strategyId: string | null;
+    tradesOpened: number;
+    openTrades: number;
+    closedTrades: number;
+    wins: number;
+    losses: number;
+    partialWins: number;
+    breakeven: number;
+    realizedPnl: number;
+    netR: number | null;
+    avgR: number | null;
+    winRate: number | null;
+    avgDurationMinutes: number | null;
+  }>;
+  duplicateSafetyDiagnostics?: {
+    duplicateBlocksThisCycle: number;
+    activeSymbolBlocksThisCycle: number;
+    cooldownBlocksThisCycle: number;
+    sameMoveBlocksThisCycle: number;
+    duplicateTelegramBlocksThisCycle: number;
+  };
+  duplicateBurstRootCauseAudit?: {
+    symbol: string;
+    exactCauseConfirmed: boolean;
+    rootCause: string;
+    evidence: {
+      candidateLayer: string;
+      admissionLayer: string;
+      paperExecutionLayer: string;
+      persistenceLayer: string;
+      telegramLayer: string;
+      uiLayer: string;
+      replayLayer: string;
+    };
+  };
+  accountSummary?: {
+    sourceOfTruth: string;
+    lastUpdatedAt: string;
+    combined: {
+      startingEquity: number;
+      currentEquity: number;
+      realizedPnl: number;
+      unrealizedPnl: number;
+      netPnl: number;
+      netR: number | null;
+      usedMargin: number;
+      freeMargin: number;
+      openRisk: number | null;
+      openPositionsCount: number;
+      closedPositionsCount: number;
+      wins: number;
+      losses: number;
+      partialWins: number;
+    } | null;
+    crypto: {
+      startingEquity: number;
+      currentEquity: number;
+      realizedPnl: number;
+      unrealizedPnl: number;
+      netPnl: number;
+      usedMargin: number;
+      freeMargin: number;
+      openRisk: number | null;
+      openPositionsCount: number;
+      closedPositionsCount: number;
+      wins: number;
+      losses: number;
+      partialWins: number;
+    } | null;
+    forex: {
+      startingEquity: number;
+      currentEquity: number;
+      realizedPnl: number;
+      unrealizedPnl: number;
+      netPnl: number;
+      usedMargin: number;
+      freeMargin: number;
+      openRisk: number | null;
+      openPositionsCount: number;
+      closedPositionsCount: number;
+      wins: number;
+      losses: number;
+      partialWins: number;
+    } | null;
+    combinedIsTruthful: boolean;
+  };
   cryptoAccount?: {
     balance: number;
     equity: number;
@@ -448,6 +562,14 @@ export type SignalRoomPayload = {
     telegramSent: boolean;
     selectedReason: string | null;
     rejectedReason: string | null;
+    stateFlags?: {
+      activeOpenTrade: boolean;
+      duplicateBlocked: boolean;
+      cooldownBlocked: boolean;
+      sameMoveBlocked: boolean;
+      noNewStructureBlocked: boolean;
+      duplicateTelegramBlocked: boolean;
+    };
   }>;
   controlPlane: {
     allowedSymbolsConfiguredDefaults: string[];
@@ -509,4 +631,19 @@ export type SignalRoomPayload = {
   openTrades: SignalTrade[];
   closedTrades: SignalTrade[];
   recentActionableSignals: SignalEvent[];
+};
+
+export type PerformanceWindowMetrics = {
+  windowLabel: string;
+  openedTrades: number;
+  closedTrades: number;
+  wins: number;
+  losses: number;
+  partialWins: number;
+  breakeven: number;
+  realizedPnl: number;
+  netR: number | null;
+  avgR: number | null;
+  winRate: number | null;
+  avgDurationMinutes: number | null;
 };

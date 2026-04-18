@@ -150,6 +150,23 @@ type ReconciliationPayload = {
   };
 };
 
+type TradeWithSignal = {
+  id: string;
+  signalEventId: string;
+  symbol: string;
+  side: string;
+  status: string;
+  openedAt: Date;
+  closedAt: Date | null;
+  outcome: string | null;
+  realizedPnl: number | null;
+  unrealizedPnl: number | null;
+  riskAmount: number | null;
+  signalEvent: {
+    strategy: string | null;
+  };
+};
+
 function normalizeSymbol(value: string): string {
   return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
@@ -170,6 +187,78 @@ function pipSize(symbol: string): number {
   const normalized = normalizeSymbol(symbol);
   if (normalized.endsWith("JPY")) return 0.01;
   return 0.0001;
+}
+
+function hasBlockedReason(reason: string | null | undefined, patterns: string[]) {
+  const normalized = (reason ?? "").toLowerCase();
+  return patterns.some((pattern) => normalized.includes(pattern));
+}
+
+function durationMinutes(openedAt: Date, closedAt: Date | null) {
+  if (!closedAt) return null;
+  return (closedAt.getTime() - openedAt.getTime()) / 60_000;
+}
+
+function average(values: number[]) {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function buildPerformanceMetrics(trades: TradeWithSignal[], label: string) {
+  const openTrades = trades.filter((trade) => !trade.closedAt);
+  const closedTrades = trades.filter((trade) => !!trade.closedAt);
+  const wins = closedTrades.filter((trade) => trade.outcome === "win").length;
+  const losses = closedTrades.filter((trade) => trade.outcome === "loss").length;
+  const partialWins = closedTrades.filter((trade) => trade.outcome === "partial_win").length;
+  const breakeven = closedTrades.filter((trade) => trade.outcome === "breakeven" || Math.abs(trade.realizedPnl ?? 0) < 0.000001).length;
+  const realizedValues = closedTrades.map((trade) => trade.realizedPnl ?? 0);
+  const netRealizedPnl = realizedValues.reduce((sum, value) => sum + value, 0);
+  const unrealizedPnl = openTrades.reduce((sum, trade) => sum + (trade.unrealizedPnl ?? 0), 0);
+  const rValues = closedTrades
+    .map((trade) => {
+      const risk = trade.riskAmount ?? 0;
+      if (risk <= 0) return null;
+      return (trade.realizedPnl ?? 0) / risk;
+    })
+    .filter((value): value is number => value !== null);
+  const positivePnl = realizedValues.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
+  const negativePnlAbs = Math.abs(realizedValues.filter((value) => value < 0).reduce((sum, value) => sum + value, 0));
+  const durations = closedTrades
+    .map((trade) => durationMinutes(trade.openedAt, trade.closedAt))
+    .filter((value): value is number => value !== null && value >= 0);
+  const winnerDurations = closedTrades
+    .filter((trade) => trade.outcome === "win" || trade.outcome === "partial_win")
+    .map((trade) => durationMinutes(trade.openedAt, trade.closedAt))
+    .filter((value): value is number => value !== null && value >= 0);
+  const loserDurations = closedTrades
+    .filter((trade) => trade.outcome === "loss")
+    .map((trade) => durationMinutes(trade.openedAt, trade.closedAt))
+    .filter((value): value is number => value !== null && value >= 0);
+
+  return {
+    windowLabel: label,
+    totalTrades: trades.length,
+    openTrades: openTrades.length,
+    closedTrades: closedTrades.length,
+    wins,
+    losses,
+    partialWins,
+    breakeven,
+    winRate: closedTrades.length > 0 ? (wins / closedTrades.length) * 100 : null,
+    avgR: average(rValues),
+    netR: rValues.length > 0 ? rValues.reduce((sum, value) => sum + value, 0) : null,
+    avgRealizedPnl: closedTrades.length > 0 ? netRealizedPnl / closedTrades.length : null,
+    netRealizedPnl,
+    unrealizedPnl,
+    expectancy: average(rValues),
+    profitFactor: negativePnlAbs > 0 ? positivePnl / negativePnlAbs : positivePnl > 0 ? null : 0,
+    avgTimeToOutcomeMinutes: average(durations),
+    avgWinnerDurationMinutes: average(winnerDurations),
+    avgLoserDurationMinutes: average(loserDurations),
+    openedTradesCount: trades.length,
+    realizedPnl: netRealizedPnl,
+    avgDurationMinutes: average(durations)
+  };
 }
 
 function withPaperComputedFields<T extends {
@@ -287,7 +376,8 @@ export async function GET() {
     recentExecutionDecisionEvents,
     recentTradeLifecycleEvents,
     recentPersistedSignalDetails,
-    recentRuntimeEvents
+    recentRuntimeEvents,
+    allSignalTrades
   ] = await Promise.all([
     prisma.signalTrade.findMany({
       where: {
@@ -346,6 +436,16 @@ export async function GET() {
       where: { mode: "signal" },
       orderBy: { createdAt: "desc" },
       take: 180
+    }),
+    prisma.signalTrade.findMany({
+      include: {
+        signalEvent: {
+          select: {
+            strategy: true
+          }
+        }
+      },
+      orderBy: { openedAt: "asc" }
     })
   ]);
   const systemControl = await prisma.systemControl.findUnique({ where: { id: "system" } });
@@ -766,6 +866,80 @@ export async function GET() {
         strategyLabel: engine.strategyLabel
       };
     });
+  const allTradesForPerformance = allSignalTrades as TradeWithSignal[];
+  const now = new Date();
+  const todayUtcStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const last24hStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+  const allTimePerformance = buildPerformanceMetrics(allTradesForPerformance, "all_time");
+  const todayTrades = allTradesForPerformance.filter((trade) => trade.openedAt >= todayUtcStart || (trade.closedAt ? trade.closedAt >= todayUtcStart : false));
+  const last24hTrades = allTradesForPerformance.filter((trade) => trade.openedAt >= last24hStart || (trade.closedAt ? trade.closedAt >= last24hStart : false));
+  const todayPerformance = buildPerformanceMetrics(todayTrades, "today_utc");
+  const last24hPerformance = buildPerformanceMetrics(last24hTrades, "last_24h");
+
+  const perEnginePerformance = (["engine1", "engine2", "engine3", "engine4"] as const).map((engineId) => {
+    const engineTrades = allTradesForPerformance.filter((trade) => resolveEngineDescriptor(trade.signalEvent?.strategy ?? null).engineId === engineId);
+    const metrics = buildPerformanceMetrics(engineTrades, engineId);
+    const mostCommonStrategy = engineTrades
+      .map((trade) => trade.signalEvent?.strategy ?? null)
+      .find((strategy) => strategy !== null) ?? null;
+    return {
+      engineId,
+      strategyId: mostCommonStrategy,
+      tradesOpened: engineTrades.length,
+      openTrades: metrics.openTrades,
+      closedTrades: metrics.closedTrades,
+      wins: metrics.wins,
+      losses: metrics.losses,
+      partialWins: metrics.partialWins,
+      breakeven: metrics.breakeven,
+      realizedPnl: metrics.netRealizedPnl,
+      netR: metrics.netR,
+      avgR: metrics.avgR,
+      winRate: metrics.winRate,
+      avgDurationMinutes: metrics.avgDurationMinutes
+    };
+  });
+
+  const duplicateSafetyDiagnostics = {
+    duplicateBlocksThisCycle: cycleTruth?.candidatesRejectedBy?.not_selected_brain_same_symbol_duplication ?? 0,
+    activeSymbolBlocksThisCycle: cycleTruth?.candidatesRejectedBy?.active_symbol_gate ?? 0,
+    cooldownBlocksThisCycle: cycleTruth?.candidatesRejectedBy?.cooldown ?? 0,
+    sameMoveBlocksThisCycle: cycleTruth?.candidatesRejectedBy?.same_move_reentry ?? 0,
+    duplicateTelegramBlocksThisCycle: cycleTruth?.candidatesRejectedBy?.not_selected_telegram_cap ?? 0
+  };
+
+  const duplicateEthTrades = allTradesForPerformance
+    .filter((trade) => trade.symbol.toUpperCase() === "ETHUSDT")
+    .sort((a, b) => a.openedAt.getTime() - b.openedAt.getTime());
+  let overlappingEthSameSide = 0;
+  for (let i = 0; i < duplicateEthTrades.length; i += 1) {
+    for (let j = i + 1; j < duplicateEthTrades.length; j += 1) {
+      const a = duplicateEthTrades[i];
+      const b = duplicateEthTrades[j];
+      if (a.side !== b.side) continue;
+      const aClose = a.closedAt ?? now;
+      const bClose = b.closedAt ?? now;
+      const overlaps = a.openedAt <= bClose && b.openedAt <= aClose;
+      if (overlaps) overlappingEthSameSide += 1;
+    }
+  }
+  const duplicateBurstRootCauseAudit = {
+    symbol: "ETHUSDT",
+    exactCauseConfirmed: false,
+    rootCause: overlappingEthSameSide > 0
+      ? "historical data shows overlapping same-side ETH paper executions, but runtime candidate/admission snapshots for those moments are insufficient to prove exact single-layer root cause"
+      : "historical persisted data does not contain an ETH overlapping same-side burst; exact prior burst root cause cannot be proven from retained persistence/runtime event history",
+    evidence: {
+      candidateLayer: "No retained per-candidate ephemeral queue snapshots; cannot conclusively prove candidate-layer duplication retrospectively.",
+      admissionLayer: "Cycle rejection counters are available only for retained cycles, not all historical incidents.",
+      paperExecutionLayer: overlappingEthSameSide > 0 ? `Observed ${overlappingEthSameSide} overlapping same-side ETH trade intervals in persisted signalTrade history.` : "No overlapping same-side ETH trade intervals currently found in persisted signalTrade history.",
+      persistenceLayer: "signalTrade has unique signalEventId, so duplicate persistence for the exact same signalEvent is prevented by schema.",
+      telegramLayer: "Telegram dispatch truth is persisted per signalEvent, but historical message-level dedupe evidence is incomplete for old incidents.",
+      uiLayer: "UI now reads persisted account/performance truth and no longer infers account state from runtime feed.",
+      replayLayer: "Runtime reboot/reconciliation events exist but historical replay context is incomplete for exact incident reconstruction."
+    }
+  };
   const paperEquity = paperAccount.equity;
   const usedNotional = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.notional ?? 0), 0);
   const usedRiskBudget = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.riskAmount ?? 0), 0);
@@ -775,8 +949,169 @@ export async function GET() {
   const maxOpenRiskBudget = paperEquity * config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT;
   const availableRiskBudget = Math.max(maxOpenRiskBudget - usedRiskBudget, 0);
   const effectivePortfolioLeverage = paperEquity > 0 ? usedNotional / paperEquity : 0;
+  const totalRiskAmountOpen = openTradesWithDispatch.reduce((sum, trade) => sum + (trade.riskAmount ?? 0), 0);
+  const totalNetPnl = paperAccount.realizedPnl + paperAccount.unrealizedPnl;
+  const totalNetR = totalRiskAmountOpen > 0 ? totalNetPnl / totalRiskAmountOpen : null;
+
+  const cryptoOpen = openPaperPositions.filter((position) => position.marketType === "crypto");
+  const forexOpen = openPaperPositions.filter((position) => position.marketType === "forex");
+  const cryptoClosed = closedPaperPositions.filter((position) => position.marketType === "crypto");
+  const forexClosed = closedPaperPositions.filter((position) => position.marketType === "forex");
+
+  const cryptoRiskOpen = cryptoOpen.reduce((sum, trade) => sum + trade.riskAmountAtEntry, 0);
+  const forexRiskOpen = forexOpen.reduce((sum, trade) => sum + trade.riskAmountAtEntry, 0);
+
+  const outcomeBuckets = (positions: typeof closedPaperPositions) => ({
+    wins: positions.filter((trade) => trade.closeReason === "tp2_hit").length,
+    losses: positions.filter((trade) => trade.closeReason === "stop_hit").length,
+    partialWins: positions.filter((trade) => trade.closeReason === "tp1_hit").length
+  });
+  const cryptoOutcome = outcomeBuckets(cryptoClosed);
+  const forexOutcome = outcomeBuckets(forexClosed);
+
+  const splitLedgerConfigured = config.SIGNAL_CRYPTO_PAPER_EQUITY > 0 || config.SIGNAL_FOREX_PAPER_EQUITY > 0;
+  const combinedIsTruthful = splitLedgerConfigured
+    ? Math.abs(config.SIGNAL_PAPER_EQUITY - (config.SIGNAL_CRYPTO_PAPER_EQUITY + config.SIGNAL_FOREX_PAPER_EQUITY)) < 0.000001
+    : true;
+
+  const symbolScanBoard = (reconciliation?.cycleTruth?.symbolScanBoard ?? []).map((entry) => {
+    const normalizedRejected = entry.rejectedReason ?? entry.blockedReason;
+    const matchingOpenPosition = openPaperPositions.some((position) => position.symbol === entry.symbol);
+    return {
+      ...entry,
+      stateFlags: {
+        activeOpenTrade: matchingOpenPosition,
+        duplicateBlocked: hasBlockedReason(normalizedRejected, ["duplicate", "active_symbol_gate", "same_symbol"]),
+        cooldownBlocked: hasBlockedReason(normalizedRejected, ["cooldown"]),
+        sameMoveBlocked: hasBlockedReason(normalizedRejected, ["same_move", "same-move", "reentry"]),
+        noNewStructureBlocked: hasBlockedReason(normalizedRejected, ["no_new_structure", "no-new-structure"]),
+        duplicateTelegramBlocked: hasBlockedReason(normalizedRejected, ["telegram", "dispatch"])
+      }
+    };
+  });
 
   const responsePayload = {
+    performanceSummary: {
+      sourceOfTruth: "persisted signalTrade + signalEvent linkage",
+      totalTrades: allTimePerformance.totalTrades,
+      openTrades: allTimePerformance.openTrades,
+      closedTrades: allTimePerformance.closedTrades,
+      wins: allTimePerformance.wins,
+      losses: allTimePerformance.losses,
+      partialWins: allTimePerformance.partialWins,
+      breakeven: allTimePerformance.breakeven,
+      winRate: allTimePerformance.winRate,
+      avgR: allTimePerformance.avgR,
+      netR: allTimePerformance.netR,
+      avgRealizedPnl: allTimePerformance.avgRealizedPnl,
+      netRealizedPnl: allTimePerformance.netRealizedPnl,
+      unrealizedPnl: allTimePerformance.unrealizedPnl,
+      expectancy: allTimePerformance.expectancy,
+      profitFactor: allTimePerformance.profitFactor,
+      avgTimeToOutcomeMinutes: allTimePerformance.avgTimeToOutcomeMinutes,
+      avgWinnerDurationMinutes: allTimePerformance.avgWinnerDurationMinutes,
+      avgLoserDurationMinutes: allTimePerformance.avgLoserDurationMinutes
+    },
+    performanceWindows: {
+      todayUtc: {
+        windowLabel: "today_utc",
+        openedTrades: todayPerformance.openedTradesCount,
+        closedTrades: todayPerformance.closedTrades,
+        wins: todayPerformance.wins,
+        losses: todayPerformance.losses,
+        partialWins: todayPerformance.partialWins,
+        breakeven: todayPerformance.breakeven,
+        realizedPnl: todayPerformance.realizedPnl,
+        netR: todayPerformance.netR,
+        avgR: todayPerformance.avgR,
+        winRate: todayPerformance.winRate,
+        avgDurationMinutes: todayPerformance.avgDurationMinutes
+      },
+      last24h: {
+        windowLabel: "last_24h",
+        openedTrades: last24hPerformance.openedTradesCount,
+        closedTrades: last24hPerformance.closedTrades,
+        wins: last24hPerformance.wins,
+        losses: last24hPerformance.losses,
+        partialWins: last24hPerformance.partialWins,
+        breakeven: last24hPerformance.breakeven,
+        realizedPnl: last24hPerformance.realizedPnl,
+        netR: last24hPerformance.netR,
+        avgR: last24hPerformance.avgR,
+        winRate: last24hPerformance.winRate,
+        avgDurationMinutes: last24hPerformance.avgDurationMinutes
+      },
+      allTime: {
+        windowLabel: "all_time",
+        openedTrades: allTimePerformance.openedTradesCount,
+        closedTrades: allTimePerformance.closedTrades,
+        wins: allTimePerformance.wins,
+        losses: allTimePerformance.losses,
+        partialWins: allTimePerformance.partialWins,
+        breakeven: allTimePerformance.breakeven,
+        realizedPnl: allTimePerformance.realizedPnl,
+        netR: allTimePerformance.netR,
+        avgR: allTimePerformance.avgR,
+        winRate: allTimePerformance.winRate,
+        avgDurationMinutes: allTimePerformance.avgDurationMinutes
+      }
+    },
+    perEnginePerformance,
+    duplicateSafetyDiagnostics,
+    duplicateBurstRootCauseAudit,
+    accountSummary: {
+      sourceOfTruth: "authoritative signal-mode room state (persisted signalTrade ledger + reconciled paper state)",
+      lastUpdatedAt: new Date().toISOString(),
+      combined: combinedIsTruthful
+        ? {
+          startingEquity: paperAccount.balance - paperAccount.realizedPnl,
+          currentEquity: paperAccount.equity,
+          realizedPnl: paperAccount.realizedPnl,
+          unrealizedPnl: paperAccount.unrealizedPnl,
+          netPnl: totalNetPnl,
+          netR: totalNetR,
+          usedMargin: paperAccount.usedMargin,
+          freeMargin: paperAccount.freeMargin,
+          openRisk: totalRiskAmountOpen,
+          openPositionsCount: paperAccount.openPositionsCount,
+          closedPositionsCount: paperAccount.closedPositionsCount,
+          wins: summary.winCount,
+          losses: summary.lossCount,
+          partialWins: summary.partialWinCount
+        }
+        : null,
+      crypto: {
+        startingEquity: config.SIGNAL_CRYPTO_PAPER_EQUITY,
+        currentEquity: marketContexts.crypto.paperAccount.equity,
+        realizedPnl: marketContexts.crypto.paperAccount.realizedPnl,
+        unrealizedPnl: marketContexts.crypto.paperAccount.unrealizedPnl,
+        netPnl: marketContexts.crypto.paperAccount.realizedPnl + marketContexts.crypto.paperAccount.unrealizedPnl,
+        usedMargin: marketContexts.crypto.paperAccount.usedMargin,
+        freeMargin: marketContexts.crypto.paperAccount.freeMargin,
+        openRisk: cryptoRiskOpen,
+        openPositionsCount: marketContexts.crypto.paperAccount.openPositionsCount,
+        closedPositionsCount: marketContexts.crypto.paperAccount.closedPositionsCount,
+        wins: cryptoOutcome.wins,
+        losses: cryptoOutcome.losses,
+        partialWins: cryptoOutcome.partialWins
+      },
+      forex: {
+        startingEquity: config.SIGNAL_FOREX_PAPER_EQUITY,
+        currentEquity: marketContexts.forex.paperAccount.equity,
+        realizedPnl: marketContexts.forex.paperAccount.realizedPnl,
+        unrealizedPnl: marketContexts.forex.paperAccount.unrealizedPnl,
+        netPnl: marketContexts.forex.paperAccount.realizedPnl + marketContexts.forex.paperAccount.unrealizedPnl,
+        usedMargin: marketContexts.forex.paperAccount.usedMargin,
+        freeMargin: marketContexts.forex.paperAccount.freeMargin,
+        openRisk: forexRiskOpen,
+        openPositionsCount: marketContexts.forex.paperAccount.openPositionsCount,
+        closedPositionsCount: marketContexts.forex.paperAccount.closedPositionsCount,
+        wins: forexOutcome.wins,
+        losses: forexOutcome.losses,
+        partialWins: forexOutcome.partialWins
+      },
+      combinedIsTruthful
+    },
     cryptoAccount: {
       balance: marketContexts.crypto.paperAccount.balance,
       equity: marketContexts.crypto.paperAccount.equity,
@@ -891,7 +1226,7 @@ export async function GET() {
     cycleTruth,
     liveRuntimeEvents,
     currentCycleLive,
-    symbolScanBoard: reconciliation?.cycleTruth?.symbolScanBoard ?? [],
+    symbolScanBoard,
     dispatchBreakdown,
     selectedThisCycle,
     rejectedThisCycle,
