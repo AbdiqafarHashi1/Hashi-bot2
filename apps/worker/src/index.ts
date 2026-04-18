@@ -263,6 +263,12 @@ type TelegramDispatchResult = {
   reason?: string;
   parseMode: TelegramParseMode | "none";
 };
+type EntryDispatchCandidate = {
+  signalEventId: string;
+  signalTradeId: string;
+  symbol: string;
+  message: string;
+};
 type CycleOutcome = "completed" | "skipped" | "error";
 type WorkerCycleSummary = {
   cycleId: string;
@@ -413,6 +419,13 @@ type SignalCycleReconciliation = {
     }>;
   };
   currentCycle: {
+    symbolsDispatchedToScan?: number;
+    engineScanAttempts?: number;
+    candidatesGenerated?: number;
+    candidatesRejected?: number;
+    candidatesSelected?: number;
+    paperExecuted?: number;
+    telegramSent?: number;
     candidatesEvaluatedThisCycle: number;
     signalsPersistedThisCycle: number;
     telegramSignalsDispatchedThisCycle: number;
@@ -1785,6 +1798,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   let candidatesRejectedCount = 0;
   let candidatesSelectedCount = 0;
   let paperExecutedCount = 0;
+  const entryDispatchCandidates: EntryDispatchCandidate[] = [];
   let cycleExitPathEmitted = false;
   const emitCycleExitPath = (exitStage: "preload" | "context_filtering" | "engine_dispatch" | "candidate_filtering" | "cycle_complete", reason: string) => {
     cycleExitPathEmitted = true;
@@ -3562,7 +3576,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           continue;
         }
 
-        await prismaClient.signalTrade.upsert({
+        const persistedTrade = await prismaClient.signalTrade.upsert({
           where: { signalEventId: event.id },
           update: {},
           create: {
@@ -3607,6 +3621,26 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           }, null, 2));
         }
 
+        const dispatchSignal = signalCandidate?.signal;
+        if (dispatchSignal) {
+          const entryMessage = buildSignalModePayload({
+            rankedSetups: [],
+            decisions: [],
+            selectedSignals: [dispatchSignal],
+            cycleId,
+            minTier: config.SIGNAL_MIN_TIER,
+            maxSignals: 1
+          }).messages[0];
+          if (entryMessage) {
+            entryDispatchCandidates.push({
+              signalEventId: event.id,
+              signalTradeId: persistedTrade.id,
+              symbol: event.symbol,
+              message: entryMessage
+            });
+          }
+        }
+
         mutableOpenPositions.push({
           id: event.id,
           symbol: event.symbol,
@@ -3646,6 +3680,25 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       const latestPrice = latestPriceBySymbol.get(trade.symbol);
       if (latestPrice !== undefined) {
         markPriceBySymbol.set(trade.symbol, latestPrice);
+        continue;
+      }
+      try {
+        const dynamicContext = await marketTypeLoader.loadContext({
+          symbol: trade.symbol,
+          marketType: "crypto",
+          executionTimeframe: config.DEFAULT_EXECUTION_TIMEFRAME,
+          htf1: config.DEFAULT_HTF_1,
+          htf2: config.DEFAULT_HTF_2,
+          candleLimit: 50,
+          cycleNumber,
+          debugVisibilityEnabled
+        });
+        if (dynamicContext.latestPrice !== undefined) {
+          markPriceBySymbol.set(trade.symbol, dynamicContext.latestPrice);
+          latestPriceBySymbol.set(trade.symbol, dynamicContext.latestPrice);
+        }
+      } catch {
+        continue;
       }
     }
 
@@ -3700,6 +3753,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       }> = {
         currentPrice: marked.markPrice,
         unrealizedPnl: marked.unrealizedPnl
+      };
+      const originalValues = {
+        status: trade.status,
+        outcome: trade.outcome,
+        currentPrice: trade.currentPrice,
+        stopPrice: trade.stopPrice,
+        unrealizedPnl: trade.unrealizedPnl,
+        realizedPnl: trade.realizedPnl,
+        quantity: trade.quantity,
+        notional: trade.notional,
+        riskAmount: trade.riskAmount
       };
 
       const isShort = trade.side.toUpperCase() === "SHORT";
@@ -3799,26 +3863,57 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         closedSignalsThisCycle += 1;
       }
 
+      const tolerance = 1e-9;
+      const nextValues = {
+        status: updates.status ?? originalValues.status,
+        outcome: updates.outcome ?? originalValues.outcome,
+        currentPrice: updates.currentPrice ?? originalValues.currentPrice,
+        stopPrice: updates.stopPrice ?? originalValues.stopPrice,
+        unrealizedPnl: updates.unrealizedPnl ?? originalValues.unrealizedPnl,
+        realizedPnl: updates.realizedPnl ?? originalValues.realizedPnl,
+        quantity: updates.quantity ?? originalValues.quantity,
+        notional: updates.notional ?? originalValues.notional,
+        riskAmount: updates.riskAmount ?? originalValues.riskAmount
+      };
+      const hasStateChange = (
+        nextValues.status !== originalValues.status ||
+        nextValues.outcome !== originalValues.outcome ||
+        Math.abs((nextValues.currentPrice ?? 0) - (originalValues.currentPrice ?? 0)) > tolerance ||
+        Math.abs((nextValues.stopPrice ?? 0) - (originalValues.stopPrice ?? 0)) > tolerance ||
+        Math.abs((nextValues.unrealizedPnl ?? 0) - (originalValues.unrealizedPnl ?? 0)) > tolerance ||
+        Math.abs((nextValues.realizedPnl ?? 0) - (originalValues.realizedPnl ?? 0)) > tolerance ||
+        Math.abs((nextValues.quantity ?? 0) - (originalValues.quantity ?? 0)) > tolerance ||
+        Math.abs((nextValues.notional ?? 0) - (originalValues.notional ?? 0)) > tolerance ||
+        Math.abs((nextValues.riskAmount ?? 0) - (originalValues.riskAmount ?? 0)) > tolerance
+      );
+
+      if (!hasStateChange) {
+        continue;
+      }
+
       await prismaClient.signalTrade.update({
         where: { id: trade.id },
         data: updates
       });
 
+      const closeReason = closeReasonFromTradeStatus(nextValues.status);
+      const lifecycleResolved = closeReason !== null || nextValues.status === "closed";
       await prismaClient.runtimeEvent.create({
         data: {
-          type: "signal_trade_updated",
+          type: lifecycleResolved ? "signal_trade_result" : "signal_trade_updated",
           mode: "signal",
           symbol: trade.symbol,
-          message: "Signal trade lifecycle updated",
+          message: lifecycleResolved ? "Signal trade lifecycle resolved" : "Signal trade lifecycle updated",
           payload: {
             signalTradeId: trade.id,
-            status: updates.status ?? trade.status,
-            outcome: updates.outcome ?? trade.outcome,
-            currentPrice: updates.currentPrice ?? trade.currentPrice,
-            closeReason: closeReasonFromTradeStatus(updates.status ?? trade.status),
-            remainingQty: updates.quantity ?? trade.quantity ?? 0,
-            remainingNotional: updates.notional ?? trade.notional ?? 0,
-            stopPrice: updates.stopPrice ?? trade.stopPrice
+            signalEventId: trade.signalEventId,
+            status: nextValues.status,
+            outcome: nextValues.outcome,
+            currentPrice: nextValues.currentPrice,
+            closeReason,
+            remainingQty: nextValues.quantity ?? 0,
+            remainingNotional: nextValues.notional ?? 0,
+            stopPrice: nextValues.stopPrice
           }
         }
       });
@@ -4615,13 +4710,14 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     )
   );
 
-  if (signalModeOutput) {
+  const entryDispatchPlan = entryDispatchCandidates.filter((entry) => Boolean(entry.message));
+  if (runtimeMode === "signal" && entryDispatchPlan.length > 0) {
     if (debugVisibilityEnabled) {
       console.log(JSON.stringify({
         event: "TELEGRAM_DISPATCH_BEGIN",
         cycleNumber,
-        messageCount: signalModeOutput.messages.length,
-        selectedCount: signalModeOutput.json.signals.length
+        messageCount: entryDispatchPlan.length,
+        selectedCount: entryDispatchPlan.length
       }, null, 2));
     }
     if (prismaClient) {
@@ -4630,7 +4726,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           type: "dispatch_attempt",
           mode: "signal",
           message: "Dispatching Telegram signal messages",
-          payload: { messageCount: signalModeOutput.messages.length }
+          payload: { messageCount: entryDispatchPlan.length }
         }
       });
     }
@@ -4639,8 +4735,14 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       JSON.stringify(
         {
           event: "signal_mode_payload",
-          payload: signalModeOutput.json,
-          telegramMessages: signalModeOutput.messages
+          payload: {
+            mode: "signal_only",
+            generatedAt: cycleNow.toISOString(),
+            cycleId,
+            signalCount: entryDispatchPlan.length,
+            signals: entryDispatchPlan.map((entry) => ({ symbol: entry.symbol, signalEventId: entry.signalEventId }))
+          },
+          telegramMessages: entryDispatchPlan.map((entry) => entry.message)
         },
         null,
         2
@@ -4648,7 +4750,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     );
 
     const dispatchResults = await sendSignalModeTelegramMessages({
-      messages: signalModeOutput.messages,
+      messages: entryDispatchPlan.map((entry) => entry.message),
       botToken: config.TELEGRAM_BOT_TOKEN,
       chatId: config.TELEGRAM_CHAT_ID,
       parseMode: config.TELEGRAM_PARSE_MODE
@@ -4665,10 +4767,12 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
 
     if (prismaClient) {
-      const selectedSignalDispatches = signalModeOutput.json.signals.map((signal, index) => {
+      const selectedSignalDispatches = entryDispatchPlan.map((entry, index) => {
         const result = dispatchResults[index];
         return {
-          symbol: signal.symbol,
+          symbol: entry.symbol,
+          signalEventId: entry.signalEventId,
+          signalTradeId: entry.signalTradeId,
           status: result?.status ?? "not_attempted_no_message_payload",
           reason: result?.reason ?? (result ? undefined : "not_attempted_no_message_payload")
         };
@@ -4678,8 +4782,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         const status = dispatch.status === "sent" || dispatch.status === "failed"
           ? dispatch.status
           : "not_attempted_no_message_payload";
-        await prismaClient.signalEvent.updateMany({
-          where: { cycleId, symbol: dispatch.symbol },
+        await prismaClient.signalEvent.update({
+          where: { id: dispatch.signalEventId },
           data: {
             telegramDispatchStatus: status,
             telegramDispatchReason: dispatch.reason,
@@ -4701,11 +4805,28 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           rejectionCounts.no_message_payload += 1;
         }
       }
+      if (selectedSignalDispatches.length > 0) {
+        await prismaClient.runtimeEvent.createMany({
+          data: selectedSignalDispatches.map((dispatch) => ({
+            type: "signal_entry_dispatch",
+            mode: "signal",
+            symbol: dispatch.symbol,
+            message: dispatch.status === "sent" ? "Signal entry telegram sent" : "Signal entry telegram not sent",
+            payload: {
+              signalEventId: dispatch.signalEventId,
+              signalTradeId: dispatch.signalTradeId,
+              status: dispatch.status,
+              reason: dispatch.reason ?? null
+            }
+          }))
+        });
+      }
 
       const notSelectedTelegram = await prismaClient.signalEvent.updateMany({
         where: {
           cycleId,
-          telegramDispatchStatus: "not_dispatched"
+          telegramDispatchStatus: "not_dispatched",
+          signalTrade: { is: null }
         },
         data: {
           telegramDispatchStatus: "not_dispatched",
@@ -4721,11 +4842,14 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
       if (dispatchResults.length > 0) {
         await prismaClient.transportEvent.createMany({
-          data: dispatchResults.map((result) => ({
+          data: dispatchResults.map((result, index) => ({
             channel: "telegram",
             status: result.status,
             message: result.status === "sent" ? "telegram_message_sent" : "telegram_message_failed",
             payload: {
+              signalEventId: entryDispatchPlan[index]?.signalEventId ?? null,
+              signalTradeId: entryDispatchPlan[index]?.signalTradeId ?? null,
+              symbol: entryDispatchPlan[index]?.symbol ?? null,
               messageNumber: result.messageNumber,
               reason: result.reason ?? null,
               parseMode: result.parseMode
@@ -4769,14 +4893,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         });
       }
     }
-  }
-  if (!signalModeOutput) {
+  } else if (runtimeMode === "signal") {
     if (debugVisibilityEnabled) {
       console.log(JSON.stringify({
         event: "TELEGRAM_DISPATCH_RESULT",
         cycleNumber,
         status: "not_dispatched",
-        reason: "no_message_payload"
+        reason: entryDispatchCandidates.length === 0 ? "no_entry_dispatch_candidates" : "no_message_payload"
       }, null, 2));
     }
     if (prismaClient && runtimeMode === "signal") {
@@ -5126,6 +5249,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         symbolScanBoard: Array.from(symbolScanBoard.values())
       },
       currentCycle: {
+        symbolsDispatchedToScan: symbolsReachedEngineScan.size,
+        engineScanAttempts: engineScansAttempted,
+        candidatesGenerated: candidatesGeneratedCount,
+        candidatesRejected: candidatesRejectedCount,
+        candidatesSelected: candidatesSelectedCount,
+        paperExecuted: paperExecutedCount,
+        telegramSent: dispatchedTelegramCount,
         candidatesEvaluatedThisCycle: candidateCount,
         signalsPersistedThisCycle: persistedSignalCount,
         telegramSignalsDispatchedThisCycle: dispatchedTelegramCount,

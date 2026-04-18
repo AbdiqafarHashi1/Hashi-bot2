@@ -127,6 +127,13 @@ type ReconciliationPayload = {
     }>;
   };
   currentCycle?: {
+    symbolsDispatchedToScan?: number;
+    engineScanAttempts?: number;
+    candidatesGenerated?: number;
+    candidatesRejected?: number;
+    candidatesSelected?: number;
+    paperExecuted?: number;
+    telegramSent?: number;
     candidatesEvaluatedThisCycle: number;
     signalsPersistedThisCycle: number;
     telegramSignalsDispatchedThisCycle: number;
@@ -649,7 +656,9 @@ export async function GET() {
     signal_skipped_active_symbol: "CANDIDATE_FILTER_RESULT",
     signal_skipped_rr_filter: "CANDIDATE_FILTER_RESULT",
     signal_skipped_entry_stretch: "CANDIDATE_FILTER_RESULT",
-    signal_skipped_symbol_cooldown: "CANDIDATE_FILTER_RESULT"
+    signal_skipped_symbol_cooldown: "CANDIDATE_FILTER_RESULT",
+    signal_trade_result: "PAPER_EXECUTION_RESULT",
+    signal_entry_dispatch: "TELEGRAM_ENTRY_DISPATCH"
   };
   const liveRuntimeEvents = recentRuntimeEvents
     .map((event) => {
@@ -696,13 +705,14 @@ export async function GET() {
     symbolsTotal: reconciliation?.cycleTruth?.symbolsActuallyScannedCount ?? 0,
     symbolsReady: (reconciliation?.cycleTruth?.symbolsActuallyScannedCount ?? 0) - (reconciliation?.cycleTruth?.symbolsSkippedBeforeEvaluationCount ?? 0),
     symbolsBlocked: reconciliation?.cycleTruth?.symbolsSkippedBeforeEvaluationCount ?? 0,
-    symbolsDispatchedToScan: reconciliation?.cycleTruth?.symbolsActuallyScannedCount ?? 0,
-    engineScanAttempts: Object.values(reconciliation?.cycleTruth?.engineCycleStats ?? {}).reduce((sum, engine) => sum + engine.scansAttempted, 0),
-    candidatesGenerated: reconciliation?.currentCycle?.candidatesEvaluatedThisCycle ?? 0,
-    candidatesRejected: reconciliation?.cycleTruth?.rejectedCountThisCycle ?? 0,
-    candidatesSelected: reconciliation?.cycleTruth?.selectedActionableCountThisCycle ?? 0,
-    paperExecuted: reconciliation?.cycleTruth?.signalsPersistedThisCycle ?? 0,
-    telegramSent: reconciliation?.currentCycle?.telegramSignalsDispatchedThisCycle ?? 0,
+    symbolsDispatchedToScan: reconciliation?.currentCycle?.symbolsDispatchedToScan ?? reconciliation?.cycleTruth?.symbolsActuallyScannedCount ?? 0,
+    engineScanAttempts: reconciliation?.currentCycle?.engineScanAttempts
+      ?? Object.values(reconciliation?.cycleTruth?.engineCycleStats ?? {}).reduce((sum, engine) => sum + engine.scansAttempted, 0),
+    candidatesGenerated: reconciliation?.currentCycle?.candidatesGenerated ?? reconciliation?.currentCycle?.candidatesEvaluatedThisCycle ?? 0,
+    candidatesRejected: reconciliation?.currentCycle?.candidatesRejected ?? reconciliation?.cycleTruth?.rejectedCountThisCycle ?? 0,
+    candidatesSelected: reconciliation?.currentCycle?.candidatesSelected ?? reconciliation?.cycleTruth?.selectedActionableCountThisCycle ?? 0,
+    paperExecuted: reconciliation?.currentCycle?.paperExecuted ?? reconciliation?.cycleTruth?.signalsPersistedThisCycle ?? 0,
+    telegramSent: reconciliation?.currentCycle?.telegramSent ?? reconciliation?.currentCycle?.telegramSignalsDispatchedThisCycle ?? 0,
     engineBreakdown: reconciliation?.cycleTruth?.engineCycleStats ?? {}
   };
 
