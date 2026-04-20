@@ -41,7 +41,10 @@ import {
   type Candle,
   type MarketDataProvider,
   type SymbolMetadata,
-  type Timeframe
+  type Timeframe,
+  runStrategyBrain,
+  type StrategyBrainCandidate,
+  type BrainEngineId
 } from "@hashi/core";
 
 class ForcedFailureProvider implements MarketDataProvider {
@@ -556,28 +559,21 @@ type MarketPaperSizingProfile = {
   leverage: number;
   riskPct: number;
   maxConcurrentPositions: number;
-  marketSizingModel: "crypto_fixed_notional" | "forex_risk_lot";
-  perTradeAllocation?: number;
-  perTradeExposureBasis?: number;
+  marketSizingModel: "crypto_leveraged" | "forex_leveraged";
+  capitalAllocationPct: number;
   forexLotSize?: number;
   forexPipValuePerStandardLot?: number;
 };
-
-function forexPipSize(symbol: string): number {
-  if (symbol === "XAUUSD") return 0.1;
-  if (symbol.endsWith("JPY")) return 0.01;
-  return 0.0001;
-}
 
 function resolvePaperSizingProfile(config: ReturnType<typeof getConfig>, marketType: SymbolMetadata["marketType"]): MarketPaperSizingProfile {
   if (marketType === "forex") {
     return {
       accountEquity: config.SIGNAL_FOREX_PAPER_EQUITY,
-      leverage: config.SIGNAL_FOREX_LEVERAGE,
+      leverage: 10,
       riskPct: config.SIGNAL_FOREX_RISK_PCT,
       maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
-      marketSizingModel: "forex_risk_lot",
-      perTradeExposureBasis: config.SIGNAL_FOREX_PER_TRADE_EXPOSURE_BASIS,
+      marketSizingModel: "forex_leveraged",
+      capitalAllocationPct: 0.1,
       forexLotSize: config.SIGNAL_FOREX_LOT_SIZE,
       forexPipValuePerStandardLot: config.SIGNAL_FOREX_PIP_VALUE_PER_STANDARD_LOT
     };
@@ -585,11 +581,88 @@ function resolvePaperSizingProfile(config: ReturnType<typeof getConfig>, marketT
 
   return {
     accountEquity: config.SIGNAL_CRYPTO_PAPER_EQUITY,
-    leverage: config.SIGNAL_CRYPTO_LEVERAGE,
+    leverage: 10,
     riskPct: config.SIGNAL_PAPER_RISK_PCT,
     maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
-    marketSizingModel: "crypto_fixed_notional",
-    perTradeAllocation: config.SIGNAL_CRYPTO_PER_TRADE_ALLOCATION
+    marketSizingModel: "crypto_leveraged",
+    capitalAllocationPct: 0.1
+  };
+}
+
+type EngineExitProfile = {
+  exitModel: string;
+  stopModel: string;
+  targetModel: string;
+  timeStopModel: string;
+  volatilityRegime: "compressed" | "normal" | "expansion";
+  expectedHoldProfile: "scalp_fast" | "intraday_fast" | "intraday_balanced" | "intraday_continuation";
+  maxHoldSeconds: number;
+  staleTradePolicy: "tighten_then_force_close" | "force_close";
+};
+
+function resolveEngineExitProfile(engineId: string, atrPct: number): EngineExitProfile {
+  const volatilityRegime: EngineExitProfile["volatilityRegime"] = atrPct < 0.003 ? "compressed" : atrPct > 0.012 ? "expansion" : "normal";
+  if (engineId === "engine4") {
+    return {
+      exitModel: "engine4_micro_scalp_dynamic",
+      stopModel: "micro_structure_atr_tight",
+      targetModel: "quick_scalp_two_step",
+      timeStopModel: "micro_timeout",
+      volatilityRegime,
+      expectedHoldProfile: "scalp_fast",
+      maxHoldSeconds: 20 * 60,
+      staleTradePolicy: "tighten_then_force_close"
+    };
+  }
+  if (engineId === "engine3") {
+    return {
+      exitModel: "engine3_reclaim_dynamic",
+      stopModel: "reclaim_structure_atr",
+      targetModel: "momentum_quality_targets",
+      timeStopModel: "reclaim_timeout",
+      volatilityRegime,
+      expectedHoldProfile: "intraday_fast",
+      maxHoldSeconds: 75 * 60,
+      staleTradePolicy: "tighten_then_force_close"
+    };
+  }
+  if (engineId === "engine2") {
+    return {
+      exitModel: "engine2_reload_dynamic",
+      stopModel: "reload_structure_atr",
+      targetModel: "continuation_expansion_targets",
+      timeStopModel: "reload_timeout",
+      volatilityRegime,
+      expectedHoldProfile: "intraday_continuation",
+      maxHoldSeconds: 3 * 60 * 60,
+      staleTradePolicy: "tighten_then_force_close"
+    };
+  }
+  return {
+    exitModel: "engine1_breakout_dynamic",
+    stopModel: "breakout_structure_atr",
+    targetModel: "balanced_regime_targets",
+    timeStopModel: "breakout_timeout",
+    volatilityRegime,
+    expectedHoldProfile: "intraday_balanced",
+    maxHoldSeconds: 2 * 60 * 60,
+    staleTradePolicy: "tighten_then_force_close"
+  };
+}
+
+function buildDynamicExitPrices(params: { signal: BreakoutSignal; profile: EngineExitProfile; atr: number; }) {
+  const { signal, profile } = params;
+  const direction = signal.side === "SHORT" ? -1 : 1;
+  const baseRisk = Math.max(Math.abs(signal.entryPrice - signal.stopPrice), params.atr * 0.35);
+  const stopMult = profile.expectedHoldProfile === "scalp_fast" ? 0.65 : profile.expectedHoldProfile === "intraday_fast" ? 0.9 : 1.05;
+  const adjustedRisk = Math.max(baseRisk * stopMult, signal.entryPrice * 0.0005);
+  const tp1R = profile.expectedHoldProfile === "scalp_fast" ? 0.9 : profile.expectedHoldProfile === "intraday_fast" ? 1.2 : 1.5;
+  const tp2Base = profile.expectedHoldProfile === "scalp_fast" ? 1.4 : profile.expectedHoldProfile === "intraday_fast" ? 1.9 : 2.4;
+  const tp2R = profile.volatilityRegime === "expansion" ? tp2Base + 0.5 : profile.volatilityRegime === "compressed" ? tp2Base - 0.3 : tp2Base;
+  return {
+    stopPrice: signal.entryPrice - (direction * adjustedRisk),
+    tp1Price: signal.entryPrice + (direction * adjustedRisk * tp1R),
+    tp2Price: signal.entryPrice + (direction * adjustedRisk * tp2R)
   };
 }
 
@@ -830,17 +903,17 @@ function buildSignalDetailPayload(params: {
       leverageRecommendation: manualLeverage,
       allocationBasis: candidate.signal.marketType === "crypto"
         ? {
-            model: "crypto_fixed_notional",
+            model: "crypto_leveraged_capital_basis",
             accountBasis: config.SIGNAL_CRYPTO_PAPER_EQUITY,
-            perTradeAllocation: config.SIGNAL_CRYPTO_PER_TRADE_ALLOCATION,
-            leverage: config.SIGNAL_CRYPTO_LEVERAGE
+            capitalAllocationPct: 0.1,
+            leverage: 10
           }
         : {
-            model: "forex_risk_lot",
+            model: "forex_leveraged_capital_basis",
             accountBasis: config.SIGNAL_FOREX_PAPER_EQUITY,
             riskPct: config.SIGNAL_FOREX_RISK_PCT,
-            leverageCap: config.SIGNAL_FOREX_LEVERAGE,
-            perTradeExposureBasis: config.SIGNAL_FOREX_PER_TRADE_EXPOSURE_BASIS,
+            leverageCap: 10,
+            capitalAllocationPct: 0.1,
             stopDistance: sizingComputed?.stopDistance ?? null,
             stopPips: sizingComputed?.stopPips ?? null,
             lotEstimate: sizingComputed?.lotEstimate ?? null,
@@ -1724,6 +1797,10 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     blocked_notional_cap: 0,
     blocked_margin_unavailable: 0,
     blocked_risk_invalid: 0,
+    blocked_risk_clamped_to_zero: 0,
+    blocked_unsupported_sizing_model: 0,
+    blocked_leverage_or_open_risk_cap: 0,
+    blocked_active_symbol_open_position: 0,
     blocked_symbol_cooldown: 0,
     blocked_policy_gate: 0,
     blocked_invalid_entry_price: 0,
@@ -2690,6 +2767,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   }
 
   let finalSelectedCandidates: typeof cycleCandidates = [];
+  const recentArbitratedEngines: BrainEngineId[] = [];
+  const arbitrationBySymbol = new Map<string, {
+    selected: Record<string, unknown> | null;
+    candidates: Array<Record<string, unknown>>;
+    rejected: Array<Record<string, unknown>>;
+    diagnostics: Record<string, unknown> | null;
+  }>();
   const paperExecutedSignalSymbols = new Set<string>();
   const selectedReasonBySymbol = new Map<string, string>();
   let diversificationNotes: string[] = [];
@@ -2739,6 +2823,20 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     const eligibleCandidates: typeof cycleCandidates = [];
     const rankedCycleCandidates = [...cycleCandidates].sort((a, b) => b.signal.score - a.signal.score);
     const currentOpenTradeCount = openSignalTrades.length;
+    if (recentArbitratedEngines.length === 0) {
+      const recentBrainEvents = await prismaClient.runtimeEvent.findMany({
+        where: { type: "brain_arbitration_decision", mode: "signal" },
+        orderBy: { createdAt: "desc" },
+        take: 100
+      });
+      for (const event of recentBrainEvents) {
+        const payload = (event.payload as { selected?: { engineId?: BrainEngineId | null } } | null) ?? null;
+        const engineId = payload?.selected?.engineId;
+        if (engineId && (engineId === "engine1" || engineId === "engine2" || engineId === "engine3" || engineId === "engine4")) {
+          recentArbitratedEngines.unshift(engineId);
+        }
+      }
+    }
 
     for (const candidate of rankedCycleCandidates) {
       const symbol = candidate.signal.symbol;
@@ -2773,11 +2871,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         logCandidateFilterResult(candidate, "rejected", "cooldown_active");
         continue;
       }
+      const candidateEngineId = strategyEngineId(config, candidate.signal.strategyId);
+      const tierBypassForAggressiveScalp = (
+        runtimeMode === "signal"
+        && candidateEngineId === "engine4"
+        && candidate.signal.score >= config.ENGINE4_MIN_SCORE
+      );
       if (!passesMinTier({
         candidateTier: candidate.signal.setupGrade,
         minTier: config.SIGNAL_MIN_TIER,
         requireAPlusOnly: effectiveRequireAPlusOnly
-      })) {
+      }) && !tierBypassForAggressiveScalp) {
         skippedCount += 1;
         rejectionCounts.below_min_tier += 1;
         const summary = symbolSummaries.get(symbol);
@@ -2913,17 +3017,16 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       const selectedCap = config.SIGNAL_MAX_SELECTED_PER_CYCLE;
       const availableSlots = Math.max(selectedCap - currentOpenTradeCount, 0);
 
+      const engineFinalists = rankedForSelection.map((candidate) => ({
+        engine: resolveCandidateEngineLabel(candidate, config),
+        candidate
+      }));
       const finalistsByEngine = new Map<string, RuntimeCandidate>();
-      for (const candidate of rankedForSelection) {
-        const engine = resolveCandidateEngineLabel(candidate, config);
-        const current = finalistsByEngine.get(engine);
-        if (!current || candidate.signal.score > current.signal.score) {
-          finalistsByEngine.set(engine, candidate);
+      for (const entry of engineFinalists) {
+        if (!finalistsByEngine.has(entry.engine)) {
+          finalistsByEngine.set(entry.engine, entry.candidate);
         }
       }
-      const engineFinalists = [...finalistsByEngine.entries()]
-        .map(([engine, candidate]) => ({ engine, candidate }))
-        .sort((a, b) => b.candidate.signal.score - a.candidate.signal.score);
 
       console.log(
         JSON.stringify({
@@ -2966,30 +3069,104 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         }
       });
 
+      const toBrainCandidate = (entry: RuntimeCandidate): StrategyBrainCandidate => {
+        const stopDistance = Math.abs(entry.signal.entryPrice - entry.signal.stopPrice);
+        const tp2Distance = entry.signal.side === "SHORT"
+          ? entry.signal.entryPrice - entry.signal.tp2
+          : entry.signal.tp2 - entry.signal.entryPrice;
+        const rr = stopDistance > 0 ? tp2Distance / stopDistance : 0;
+        const structureScore = Math.max(0, Math.min(1, (entry.signal.score / 100) * 0.9 + (entry.signal.confidence * 0.1)));
+        const cleanlinessScore = rr >= 1.8 ? 0.92 : rr >= 1.2 ? 0.78 : 0.55;
+        return {
+          id: `${entry.signal.strategyId}:${entry.signal.symbol}:${entry.signal.side}:${entry.signal.entryPrice}:${entry.signal.stopPrice}`,
+          engineId: resolveCandidateEngineLabel(entry, config) as BrainEngineId,
+          symbol: entry.signal.symbol,
+          side: entry.signal.side,
+          entry: entry.signal.entryPrice,
+          stop: entry.signal.stopPrice,
+          tp1: entry.signal.tp1,
+          tp2: entry.signal.tp2,
+          structureScore,
+          cleanlinessScore,
+          volatilityRegime: entry.regime.regime === "SHOCK_UNSTABLE"
+            ? "expansion"
+            : entry.regime.regime === "CHOP"
+              ? "compressed"
+              : "normal"
+        };
+      };
+      const brainInputCandidates = rankedForSelection.map(toBrainCandidate);
+      const brainDecision = runStrategyBrain({
+        candidates: brainInputCandidates,
+        account: {
+          equity: config.SIGNAL_PAPER_EQUITY,
+          freeMargin: config.SIGNAL_PAPER_EQUITY,
+          openPositions: currentOpenTradeCount
+        },
+        market: {},
+        recentSelectedEngines: recentArbitratedEngines
+      });
+      const selectedBrainCandidates = rankedForSelection.filter((entry) => {
+        const id = toBrainCandidate(entry).id;
+        return brainDecision.selected?.id === id;
+      }).slice(0, availableSlots);
       const brainRejections = new Map<RuntimeCandidate, SignalRejectionReason>();
-      const selectedBrainCandidates: RuntimeCandidate[] = [];
-      for (const entry of engineFinalists) {
-        const candidate = entry.candidate;
-        if (selectedBrainCandidates.length >= availableSlots) {
-          brainRejections.set(candidate, "not_selected_brain_portfolio_capacity");
-          continue;
+      for (const entry of rankedForSelection) {
+        if (selectedBrainCandidates.includes(entry)) continue;
+        const rejection = brainDecision.rejected.find((item) => item.candidate.id === toBrainCandidate(entry).id);
+        if (rejection?.reason === "scalp_overridden_by_higher_expected_r_non_scalp") {
+          brainRejections.set(entry, "not_selected_brain_engine_finalist_lower_priority");
+        } else if (rejection?.reason === "engine4_consecutive_limit_override") {
+          brainRejections.set(entry, "not_selected_brain_redundancy");
+        } else {
+          brainRejections.set(entry, "not_selected_portfolio_priority");
         }
-        const sameSymbolSelected = selectedBrainCandidates.find((selected) => selected.signal.symbol === candidate.signal.symbol);
-        if (sameSymbolSelected) {
-          if (sameSymbolSelected.signal.side !== candidate.signal.side) {
-            brainRejections.set(candidate, "not_selected_brain_opposite_side_conflict");
-          } else {
-            const scoreDiff = Math.abs(sameSymbolSelected.signal.score - candidate.signal.score);
-            brainRejections.set(candidate, scoreDiff <= 5
-              ? "not_selected_brain_same_symbol_duplication"
-              : "not_selected_brain_redundancy");
-          }
-          continue;
-        }
-        selectedBrainCandidates.push(candidate);
       }
-
       finalSelectedCandidates = selectedBrainCandidates;
+      if (brainDecision.selected?.engineId) {
+        recentArbitratedEngines.push(brainDecision.selected.engineId);
+      }
+      if (brainDecision.selected?.symbol) {
+        arbitrationBySymbol.set(brainDecision.selected.symbol.toUpperCase(), {
+          selected: brainDecision.selected as Record<string, unknown>,
+          candidates: brainDecision.scoredCandidates.map((entry) => ({
+            id: entry.candidate.id,
+            engineId: entry.candidate.engineId,
+            symbol: entry.candidate.symbol,
+            side: entry.candidate.side,
+            totalScore: entry.breakdown.totalScore,
+            breakdown: entry.breakdown
+          })),
+          rejected: brainDecision.rejected.map((entry) => ({
+            id: entry.candidate.id,
+            engineId: entry.candidate.engineId,
+            symbol: entry.candidate.symbol,
+            side: entry.candidate.side,
+            reason: entry.reason
+          })),
+          diagnostics: brainDecision.diagnostics as Record<string, unknown>
+        });
+      }
+      await prismaClient.runtimeEvent.create({
+        data: {
+          type: "brain_arbitration_decision",
+          mode: "signal",
+          message: "Strategy-brain arbitration decision",
+          payload: {
+            candidates: brainDecision.scoredCandidates.map((entry) => ({
+              id: entry.candidate.id,
+              engineId: entry.candidate.engineId,
+              symbol: entry.candidate.symbol,
+              side: entry.candidate.side,
+              totalScore: entry.breakdown.totalScore,
+              breakdown: entry.breakdown
+            })),
+            selected: brainDecision.selected,
+            rejected: brainDecision.rejected,
+            diagnostics: brainDecision.diagnostics
+          }
+        }
+      });
       cycleRankingAllocation = rankedForSelection.map((candidate, index) => ({
         symbol: candidate.signal.symbol,
         marketType: candidate.signal.marketType,
@@ -3446,6 +3623,18 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         const signalCandidate = finalSelectedCandidates.find((entry) => entry.signal.symbol === event.symbol);
         const marketTypeForEvent = signalCandidate?.signal.marketType ?? "crypto";
         const sizingProfile = resolvePaperSizingProfile(config, marketTypeForEvent);
+        const duplicateOpenOnSymbol = mutableOpenPositions.some((position) => (
+          position.symbol.toUpperCase() === event.symbol.toUpperCase()
+          && (position.status === "open" || position.status === "partially_closed")
+        ));
+        const strategyId = signalCandidate?.signal.strategyId ?? "";
+        const engineId = strategyEngineId(config, strategyId);
+        const atr = signalCandidate ? (atrFromContext(signalCandidate.marketContext) ?? Math.abs(event.entry - event.stop)) : Math.abs(event.entry - event.stop);
+        const atrPct = event.entry > 0 ? atr / event.entry : 0;
+        const exitProfile = resolveEngineExitProfile(engineId, atrPct);
+        const dynamicExits = signalCandidate
+          ? buildDynamicExitPrices({ signal: signalCandidate.signal, profile: exitProfile, atr })
+          : { stopPrice: event.stop, tp1Price: event.tp1, tp2Price: event.tp2 };
         if (debugVisibilityEnabled) {
           console.log(JSON.stringify({
             event: "PAPER_EXECUTION_BEGIN",
@@ -3465,63 +3654,40 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         });
 
         let decision: PaperExecutionDecision;
-        if (sizingProfile.marketSizingModel === "forex_risk_lot") {
-          const stopDistance = Math.abs(event.entry - event.stop);
-          const pipSize = forexPipSize(event.symbol);
-          const stopPips = pipSize > 0 ? stopDistance / pipSize : 0;
-          const riskAmount = account.equity * sizingProfile.riskPct;
-          const pipValuePerLot = sizingProfile.forexPipValuePerStandardLot ?? 10;
-          const lotSize = sizingProfile.forexLotSize ?? 100_000;
-          const estimatedLots = stopPips > 0 ? riskAmount / (stopPips * pipValuePerLot) : 0;
-          const qtyFromRisk = estimatedLots * lotSize;
-          const requestedNotional = qtyFromRisk * event.entry;
-          const maxNotionalByExposure = (sizingProfile.perTradeExposureBasis ?? 1_000) * sizingProfile.leverage;
-          const cappedNotional = Math.min(requestedNotional, maxNotionalByExposure);
-          const computedQty = event.entry > 0 ? cappedNotional / event.entry : 0;
-          const margin = sizingProfile.leverage > 0 ? cappedNotional / sizingProfile.leverage : 0;
-          const computedRiskAmount = computedQty * stopDistance;
-          const accepted = (
-            Number.isFinite(computedQty) &&
-            computedQty > 0 &&
-            Number.isFinite(stopDistance) &&
-            stopDistance > 0 &&
-            Number.isFinite(margin) &&
-            margin > 0 &&
-            margin <= account.freeMargin &&
-            account.openPositionsCount < account.maxConcurrentPositions
-          );
-
-          decision = accepted
-            ? {
-                accepted: true,
-                rejectionReason: null,
-                computedQty,
-                computedNotional: cappedNotional,
-                computedMargin: margin,
-                computedRiskAmount
-              }
-            : {
-                accepted: false,
-                rejectionReason: account.openPositionsCount >= account.maxConcurrentPositions
-                  ? "blocked_max_concurrent_positions"
-                  : margin > account.freeMargin
-                    ? "blocked_margin_unavailable"
-                    : "blocked_risk_invalid",
-                computedQty: 0,
-                computedNotional: 0,
-                computedMargin: 0,
-                computedRiskAmount: 0
-              };
+        if (marketTypeForEvent === "forex" && event.symbol.toUpperCase() === "XAUUSD") {
+          decision = {
+            accepted: false,
+            rejectionReason: "blocked_unsupported_sizing_model",
+            computedQty: 0,
+            computedNotional: 0,
+            computedMargin: 0,
+            computedRiskAmount: 0
+          };
         } else {
           decision = computePaperExecutionDecision({
             account,
             candidate: {
               entryPrice: event.entry,
-              stopPrice: event.stop
+              stopPrice: dynamicExits.stopPrice,
+              symbol: event.symbol
             },
             configuredLeverage: sizingProfile.leverage,
-            riskPct: sizingProfile.riskPct
+            riskPct: sizingProfile.riskPct,
+            capitalAllocationPct: sizingProfile.capitalAllocationPct,
+            effectiveLeverageTarget: sizingProfile.leverage,
+            activeSymbolBlocked: duplicateOpenOnSymbol,
+            maxCapitalBasis: account.freeMargin
           });
+          if (decision.accepted && marketTypeForEvent === "forex") {
+            const lotSize = sizingProfile.forexLotSize ?? 100_000;
+            const stopDistance = Math.abs(event.entry - dynamicExits.stopPrice);
+            const snappedLots = Math.max(Math.floor((decision.computedQty / lotSize) * 100) / 100, 0.01);
+            const snappedQty = snappedLots * lotSize;
+            decision.computedQty = snappedQty;
+            decision.computedNotional = snappedQty * event.entry;
+            decision.computedMargin = decision.computedNotional / sizingProfile.leverage;
+            decision.computedRiskAmount = snappedQty * stopDistance;
+          }
         }
 
         await prismaClient.runtimeEvent.create({
@@ -3530,15 +3696,31 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             mode: "signal",
             symbol: event.symbol,
             message: decision.accepted ? "paper_order_accepted" : `paper_order_rejected:${decision.rejectionReason}`,
-            payload: {
+            payload: toInputJson({
               signalEventId: event.id,
               sourceCandidateId: event.id,
               selectedReason: selectedReasonBySymbol.get(event.symbol) ?? null,
               decision,
               accountSnapshot: account,
               marketType: marketTypeForEvent,
-              marketSizingModel: sizingProfile.marketSizingModel
-            }
+              marketSizingModel: sizingProfile.marketSizingModel,
+              executionTruth: {
+                capitalAllocationPct: sizingProfile.capitalAllocationPct,
+                effectiveLeverageTarget: sizingProfile.leverage,
+                freeMarginAfterAdmission: decision.freeMarginAfter ?? account.freeMargin,
+                openRiskAfterAdmission: mutableOpenPositions.reduce((sum, p) => sum + p.riskAmountAtEntry, 0) + decision.computedRiskAmount,
+                duplicateActiveSymbolBlocked: duplicateOpenOnSymbol,
+                exitModel: exitProfile.exitModel,
+                stopModel: exitProfile.stopModel,
+                targetModel: exitProfile.targetModel,
+                timeStopModel: exitProfile.timeStopModel,
+                volatilityRegime: exitProfile.volatilityRegime,
+                expectedHoldProfile: exitProfile.expectedHoldProfile,
+                maxHoldSeconds: exitProfile.maxHoldSeconds,
+                staleTradePolicy: exitProfile.staleTradePolicy,
+                arbitration: arbitrationBySymbol.get(event.symbol.toUpperCase()) ?? null
+              }
+            })
           }
         });
         console.log(JSON.stringify({
@@ -3567,7 +3749,10 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             }, null, 2));
           }
           if (decision.rejectionReason) {
-            rejectionCounts[decision.rejectionReason] = (rejectionCounts[decision.rejectionReason] ?? 0) + 1;
+            if (decision.rejectionReason in rejectionCounts) {
+              const key = decision.rejectionReason as keyof typeof rejectionCounts;
+              rejectionCounts[key] = (rejectionCounts[key] ?? 0) + 1;
+            }
           }
           if (decision.rejectionReason === "blocked_max_concurrent_positions") {
             maxConcurrentBlockedCount += 1;
@@ -3585,9 +3770,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             symbol: event.symbol,
             side: event.side,
             entryPrice: event.entry,
-            stopPrice: event.stop,
-            tp1Price: event.tp1,
-            tp2Price: event.tp2,
+            stopPrice: dynamicExits.stopPrice,
+            tp1Price: dynamicExits.tp1Price,
+            tp2Price: dynamicExits.tp2Price,
             paperEquityBase: account.balance,
             leverage: sizingProfile.leverage,
             riskPct: sizingProfile.riskPct,
@@ -3647,12 +3832,12 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           side: event.side.toUpperCase() === "SHORT" ? "SHORT" : "LONG",
           entryPrice: event.entry,
           markPrice: event.entry,
-          stopPrice: event.stop,
-          tp1Price: event.tp1,
-          tp2Price: event.tp2,
+          stopPrice: dynamicExits.stopPrice,
+          tp1Price: dynamicExits.tp1Price,
+          tp2Price: dynamicExits.tp2Price,
           qty: decision.computedQty,
           notional: decision.computedNotional,
-          leverage: config.SIGNAL_PAPER_LEVERAGE,
+          leverage: sizingProfile.leverage,
           marginUsed: decision.computedMargin,
           riskAmountAtEntry: decision.computedRiskAmount,
           status: "open",
@@ -3674,6 +3859,35 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     const openSignalTrades = await prismaClient.signalTrade.findMany({
       where: activeSignalTradeWhereClause()
     });
+    const openSignalEventIds = openSignalTrades.map((trade) => trade.signalEventId);
+    const executionDecisionEvents = openSignalEventIds.length > 0
+      ? await prismaClient.runtimeEvent.findMany({
+          where: {
+            type: "signal_paper_execution_decision",
+            mode: "signal"
+          },
+          orderBy: { createdAt: "desc" },
+          take: 500
+        })
+      : [];
+    const executionTruthBySignalEventId = new Map<string, {
+      maxHoldSeconds: number;
+      staleTradePolicy: string;
+    }>();
+    for (const evt of executionDecisionEvents) {
+      const payload = (evt.payload as {
+        signalEventId?: string;
+        executionTruth?: {
+          maxHoldSeconds?: number;
+          staleTradePolicy?: string;
+        };
+      } | null) ?? null;
+      if (!payload?.signalEventId || executionTruthBySignalEventId.has(payload.signalEventId) || !openSignalEventIds.includes(payload.signalEventId)) continue;
+      executionTruthBySignalEventId.set(payload.signalEventId, {
+        maxHoldSeconds: payload.executionTruth?.maxHoldSeconds ?? config.SIGNAL_OUTCOME_MAX_AGE_SECONDS,
+        staleTradePolicy: payload.executionTruth?.staleTradePolicy ?? "force_close"
+      });
+    }
 
     const markPriceBySymbol = new Map<string, number>();
     for (const trade of openSignalTrades) {
@@ -3844,23 +4058,33 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             closedSignalsThisCycle += 1;
           }
         }
-      } else if (tradeAgeSeconds > config.SIGNAL_OUTCOME_MAX_AGE_SECONDS) {
-        const closed = closePaperPosition({
-          position: marked,
-          exitPrice: marked.markPrice,
-          closeReason: "time_stop",
-          closedAtIso: cycleNow.toISOString()
-        });
-        updates.status = "closed";
-        updates.closedAt = cycleNow;
-        updates.currentPrice = marked.markPrice;
-        updates.unrealizedPnl = 0;
-        updates.realizedPnl = closed.position.realizedPnl;
-        updates.quantity = 0;
-        updates.notional = 0;
-        updates.riskAmount = 0;
-        updates.outcome = closed.position.realizedPnl > 0 ? "win" : closed.position.realizedPnl < 0 ? "loss" : "partial_win";
-        closedSignalsThisCycle += 1;
+      } else {
+        const tradeExecutionTruth = executionTruthBySignalEventId.get(trade.signalEventId);
+        const maxHoldSeconds = tradeExecutionTruth?.maxHoldSeconds ?? config.SIGNAL_OUTCOME_MAX_AGE_SECONDS;
+        const isStale = tradeAgeSeconds > maxHoldSeconds;
+        if (isStale && tradeExecutionTruth?.staleTradePolicy === "tighten_then_force_close" && !trade.tp1HitAt) {
+          const tightenDistance = Math.max(Math.abs(trade.entryPrice - trade.stopPrice) * 0.55, trade.entryPrice * 0.0005);
+          updates.stopPrice = trade.side.toUpperCase() === "SHORT"
+            ? Math.min(trade.stopPrice, latestPrice + tightenDistance)
+            : Math.max(trade.stopPrice, latestPrice - tightenDistance);
+        } else if (isStale) {
+          const closed = closePaperPosition({
+            position: marked,
+            exitPrice: marked.markPrice,
+            closeReason: "time_stop",
+            closedAtIso: cycleNow.toISOString()
+          });
+          updates.status = "closed";
+          updates.closedAt = cycleNow;
+          updates.currentPrice = marked.markPrice;
+          updates.unrealizedPnl = 0;
+          updates.realizedPnl = closed.position.realizedPnl;
+          updates.quantity = 0;
+          updates.notional = 0;
+          updates.riskAmount = 0;
+          updates.outcome = closed.position.realizedPnl > 0 ? "win" : closed.position.realizedPnl < 0 ? "loss" : "partial_win";
+          closedSignalsThisCycle += 1;
+        }
       }
 
       const tolerance = 1e-9;

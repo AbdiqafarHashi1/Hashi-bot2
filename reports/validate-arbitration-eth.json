@@ -1,0 +1,55 @@
+{
+  "phase": "arbitration-eth-v2",
+  "datasets": {
+    "execution5m": "data/ETHUSDT_5m.csv",
+    "context15m": "data/ETHUSDT_15m.csv"
+  },
+  "engineShareBefore": {
+    "engine1": 0.07833974711379879,
+    "engine2": 0.11627267729521715,
+    "engine3": 0.12534359538207807,
+    "engine4": 0.680043980208906
+  },
+  "engineShareAfter": {
+    "engine1": 0.14397575145238697,
+    "engine2": 0.21369032583985856,
+    "engine3": 0.22000505178075272,
+    "engine4": 0.4223288709270018
+  },
+  "beforeDistribution": {
+    "engine1": 570,
+    "engine2": 846,
+    "engine3": 912,
+    "engine4": 4948
+  },
+  "afterDistribution": {
+    "engine1": 570,
+    "engine2": 846,
+    "engine3": 871,
+    "engine4": 1672
+  },
+  "consecutiveEngine4Blocks": 0,
+  "sharePenaltyApplications": 6041,
+  "sharePenaltyApplied": 6041,
+  "sharePenaltyMagnitude": 50528.5,
+  "participationFloorReliefApplied": 0,
+  "fatiguePenaltyApplications": 4007,
+  "fatiguePenaltyApplied": 4007,
+  "fatiguePenaltyMagnitude": 26079,
+  "fatigueReliefAppliedForStrongScalp": 0,
+  "consecutiveEngine4Count": 9055,
+  "noTradeSelections": 3317,
+  "noTradeReason": "no_trade_low_brain_score_or_filter",
+  "scalpOverrides": 0,
+  "selectedTradeCount": 3959,
+  "admittedOpenedCount": 3959,
+  "averageExpectedRSelectedBefore": 1.9114936778449534,
+  "averageExpectedRSelectedAfter": 2.046799191715043,
+  "avgCandidateScoreSelected": 70.53127604560355,
+  "avgCandidateScoreRejected": 53.8218921310274,
+  "avgHoldScoreSelected": 0.8080747663551656,
+  "totalTradesBefore": 7276,
+  "totalTradesAfter": 3959,
+  "measurableExpectedRImprovement": 0.1353055138700896,
+  "measurableAvgRImprovement": 0.1353055138700896
+}

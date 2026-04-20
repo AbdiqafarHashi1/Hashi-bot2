@@ -1,0 +1,42 @@
+{
+  "phase": "arbitration-eth-v2",
+  "datasets": {
+    "execution5m": "data/ETHUSDT_5m.csv",
+    "context15m": "data/ETHUSDT_15m.csv"
+  },
+  "engineShareBefore": {
+    "engine1": 0.07833974711379879,
+    "engine2": 0.11627267729521715,
+    "engine3": 0.12534359538207807,
+    "engine4": 0.680043980208906
+  },
+  "engineShareAfter": {
+    "engine1": 0.34355345911949686,
+    "engine2": 0.3671383647798742,
+    "engine3": 0.2893081761006289,
+    "engine4": 0
+  },
+  "beforeDistribution": {
+    "engine1": 570,
+    "engine2": 846,
+    "engine3": 912,
+    "engine4": 4948
+  },
+  "afterDistribution": {
+    "engine1": 437,
+    "engine2": 467,
+    "engine3": 368,
+    "engine4": 0
+  },
+  "consecutiveEngine4Blocks": 0,
+  "sharePenaltyApplications": 1978,
+  "fatiguePenaltyApplications": 0,
+  "noTradeSelections": 6004,
+  "scalpOverrides": 0,
+  "avgCandidateScoreSelected": 71.17177983641372,
+  "avgCandidateScoreRejected": 53.45599028282592,
+  "totalTradesBefore": 7276,
+  "totalTradesAfter": 1272,
+  "measurableExpectedRImprovement": 0.4176289636644961,
+  "measurableAvgRImprovement": 0.4176289636644961
+}
