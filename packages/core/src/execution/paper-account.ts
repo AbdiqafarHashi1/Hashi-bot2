@@ -2,11 +2,15 @@ export type PaperPositionStatus = "pending_open" | "open" | "partially_closed" |
 
 export type PaperExecutionRejectionReason =
   | "blocked_max_concurrent_positions"
+  | "blocked_active_symbol_open_position"
   | "blocked_invalid_stop_distance"
   | "blocked_zero_or_negative_qty"
   | "blocked_notional_cap"
   | "blocked_margin_unavailable"
   | "blocked_risk_invalid"
+  | "blocked_risk_clamped_to_zero"
+  | "blocked_unsupported_sizing_model"
+  | "blocked_leverage_or_open_risk_cap"
   | "blocked_symbol_cooldown"
   | "blocked_policy_gate"
   | "blocked_invalid_entry_price";
@@ -53,6 +57,11 @@ export type PaperExecutionDecision = {
   computedNotional: number;
   computedMargin: number;
   computedRiskAmount: number;
+  capitalBasisUsed?: number;
+  targetNotional?: number;
+  riskClampApplied?: boolean;
+  freeMarginAfter?: number;
+  effectiveLeverage?: number;
 };
 
 export type PaperPosition = {
@@ -247,18 +256,29 @@ export function buildPaperAccountSnapshot(params: {
 }
 
 export function computePaperExecutionDecision(params: {
-  account: Pick<PaperAccountSnapshot, "equity" | "freeMargin" | "openPositionsCount" | "maxConcurrentPositions">;
-  candidate: Pick<PaperTradeCandidate, "entryPrice" | "stopPrice">;
+  account: Pick<PaperAccountSnapshot, "equity" | "freeMargin" | "openPositionsCount" | "maxConcurrentPositions" | "usedMargin">;
+  candidate: Pick<PaperTradeCandidate, "entryPrice" | "stopPrice" | "symbol">;
   configuredLeverage: number;
   riskPct: number;
+  capitalAllocationPct?: number;
+  effectiveLeverageTarget?: number;
+  maxCapitalBasis?: number;
+  maxNotionalAllowed?: number;
+  activeSymbolBlocked?: boolean;
+  allowedOpenRiskAmount?: number;
   policyBlocked?: boolean;
   symbolCooldownBlocked?: boolean;
 }): PaperExecutionDecision {
   const policyBlocked = params.policyBlocked ?? false;
   const symbolCooldownBlocked = params.symbolCooldownBlocked ?? false;
+  const capitalAllocationPct = params.capitalAllocationPct ?? 0.1;
+  const effectiveLeverageTarget = params.effectiveLeverageTarget ?? params.configuredLeverage;
 
   if (policyBlocked) {
     return rejectedDecision("blocked_policy_gate");
+  }
+  if (params.activeSymbolBlocked) {
+    return rejectedDecision("blocked_active_symbol_open_position");
   }
   if (symbolCooldownBlocked) {
     return rejectedDecision("blocked_symbol_cooldown");
@@ -277,18 +297,31 @@ export function computePaperExecutionDecision(params: {
     return rejectedDecision("blocked_invalid_stop_distance");
   }
 
-  const slotEquity = params.account.equity / params.account.maxConcurrentPositions;
-  const riskAmount = params.account.equity * params.riskPct;
-  const riskQty = riskAmount / stopDistance;
-  const maxNotional = slotEquity * params.configuredLeverage;
-  const notionalQty = maxNotional / params.candidate.entryPrice;
-  const finalQty = Math.min(riskQty, notionalQty);
+  const allowedRiskAmount = params.allowedOpenRiskAmount ?? (params.account.equity * params.riskPct);
+  const capitalBasis = Math.max(
+    0,
+    Math.min(
+      params.account.equity * capitalAllocationPct,
+      params.maxCapitalBasis ?? Number.POSITIVE_INFINITY,
+      params.account.freeMargin
+    )
+  );
+  const unclampedNotional = capitalBasis * effectiveLeverageTarget;
+  const maxNotionalByMargin = params.account.freeMargin * params.configuredLeverage;
+  const targetNotional = Math.min(
+    unclampedNotional,
+    maxNotionalByMargin,
+    params.maxNotionalAllowed ?? Number.POSITIVE_INFINITY
+  );
+  const qtyFromNotional = targetNotional / params.candidate.entryPrice;
+  const qtyFromRisk = allowedRiskAmount / stopDistance;
+  const finalQty = Math.min(qtyFromNotional, qtyFromRisk);
 
-  if (!Number.isFinite(notionalQty) || notionalQty <= 0) {
+  if (!Number.isFinite(qtyFromNotional) || qtyFromNotional <= 0 || targetNotional <= 0 || capitalBasis <= 0) {
     return rejectedDecision("blocked_notional_cap");
   }
   if (!Number.isFinite(finalQty) || finalQty <= 0) {
-    return rejectedDecision("blocked_zero_or_negative_qty");
+    return rejectedDecision(qtyFromRisk <= 0 ? "blocked_risk_clamped_to_zero" : "blocked_zero_or_negative_qty");
   }
 
   const notional = finalQty * params.candidate.entryPrice;
@@ -305,7 +338,12 @@ export function computePaperExecutionDecision(params: {
     computedQty: finalQty,
     computedNotional: notional,
     computedMargin: margin,
-    computedRiskAmount
+    computedRiskAmount,
+    capitalBasisUsed: margin,
+    targetNotional,
+    riskClampApplied: qtyFromRisk < qtyFromNotional,
+    freeMarginAfter: params.account.freeMargin - margin,
+    effectiveLeverage: margin > 0 ? notional / margin : params.configuredLeverage
   };
 }
 

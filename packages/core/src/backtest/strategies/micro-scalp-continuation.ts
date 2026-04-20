@@ -37,7 +37,7 @@ type MicroScalpSignal = {
   stop: number;
   tp1: number;
   tp2: number;
-  setupType: "shallow_pullback_continuation" | "reclaim_after_reset" | "micro_flag_break";
+  setupType: "shallow_pullback_continuation" | "reclaim_after_reset" | "micro_flag_break" | "momentum_pulse_continuation";
   roomToTp1R: number;
 };
 
@@ -46,24 +46,24 @@ export const MICRO_SCALP_CONTINUATION_DEFAULT: MicroScalpContinuationProfileConf
   profileType: "balanced",
   engineFamily: "micro_scalp_continuation",
   setupVariant: "micro_scalp_continuation_v1",
-  min15mSlope: 0.00022,
-  max15mChop: 0.66,
-  max5mChop: 0.7,
-  min5mAtrPct: 0.0012,
-  minMomentumBodyAtr: 0.2,
+  min15mSlope: 0.00012,
+  max15mChop: 0.82,
+  max5mChop: 0.88,
+  min5mAtrPct: 0.0007,
+  minMomentumBodyAtr: 0.1,
   pullbackMinRetraceAtr: 0.12,
-  pullbackMaxRetraceAtr: 0.95,
-  reclaimLookbackBars: 7,
-  rangeLookbackBars: 4,
-  rangeMaxAtr: 1.05,
+  pullbackMaxRetraceAtr: 1.4,
+  reclaimLookbackBars: 9,
+  rangeLookbackBars: 5,
+  rangeMaxAtr: 1.6,
   rangeMinAtr: 0.16,
-  maxExtensionAtr: 1.3,
-  stopPadAtr: 0.07,
-  minStopAtr: 0.24,
-  maxStopAtr: 1.45,
-  minRoomToTp1R: 0.95,
-  tp1R: 0.75,
-  tp2R: 1.35
+  maxExtensionAtr: 2.6,
+  stopPadAtr: 0.05,
+  minStopAtr: 0.12,
+  maxStopAtr: 1.8,
+  minRoomToTp1R: 0.8,
+  tp1R: 0.9,
+  tp2R: 1.75
 };
 
 export function evaluateMicroScalpContinuation(
@@ -94,7 +94,8 @@ export function evaluateMicroScalpContinuation(
 
   const setup = detectShallowPullbackContinuation(candles5m, bias, atr5, cfg)
     ?? detectReclaimAfterReset(candles5m, bias, atr5, cfg)
-    ?? detectMicroFlagBreak(candles5m, bias, atr5, cfg);
+    ?? detectMicroFlagBreak(candles5m, bias, atr5, cfg)
+    ?? detectMomentumPulseContinuation(candles5m, bias, atr5, cfg);
   if (!setup) return null;
 
   const entry = last.close;
@@ -189,11 +190,11 @@ export class MicroScalpContinuationStrategy implements StrategyContract {
   async scoreCandidate(candidate: StrategyCandidate): Promise<CandidateScore> {
     const setupType = candidate.metadata?.setupType;
     const base = setupType === "reclaim_after_reset"
-      ? 58
+      ? 63
       : setupType === "shallow_pullback_continuation"
-        ? 56
-        : 55;
-    return { score: base, confidence: 0.56, reasons: ["Engine 4 micro scalp cadence score"] };
+        ? 61
+        : 60;
+    return { score: base, confidence: 0.61, reasons: ["Engine 4 micro scalp cadence score"] };
   }
 
   async validateCandidate(candidate: StrategyCandidate): Promise<CandidateValidationResult> {
@@ -224,8 +225,8 @@ export class MicroScalpContinuationStrategy implements StrategyContract {
       stop,
       tp1,
       tp2,
-      confidence: 0.56,
-      score: 56,
+      confidence: 0.61,
+      score: 61,
       reasons: [...candidate.rationale, `${this.config.engineFamily}/${this.config.setupVariant}`],
       source: "engine4_micro_scalp_continuation"
     };
@@ -353,6 +354,25 @@ function detectMicroFlagBreak(candles5m: Candle[], side: "LONG" | "SHORT", atr5:
   }
   if (side === "SHORT" && last.close < rangeLow && last.close < last.open) {
     return { setupType: "micro_flag_break" as const, stop: rangeHigh + atr5 * cfg.stopPadAtr };
+  }
+
+  return null;
+}
+
+function detectMomentumPulseContinuation(candles5m: Candle[], side: "LONG" | "SHORT", atr5: number, cfg: MicroScalpContinuationProfileConfig) {
+  const last = candles5m.at(-1);
+  const prev = candles5m.at(-2);
+  if (!last || !prev) return null;
+  const bodyAtr = Math.abs(last.close - last.open) / Math.max(atr5, 1e-9);
+  if (bodyAtr < Math.max(cfg.minMomentumBodyAtr * 0.85, 0.08)) return null;
+
+  if (side === "LONG" && last.close > prev.high && last.close > last.open) {
+    const swingLow = recentSwingExtreme(candles5m.slice(0, -1), "LOW", 6);
+    return { setupType: "momentum_pulse_continuation" as const, stop: Math.min(swingLow, prev.low) - atr5 * cfg.stopPadAtr };
+  }
+  if (side === "SHORT" && last.close < prev.low && last.close < last.open) {
+    const swingHigh = recentSwingExtreme(candles5m.slice(0, -1), "HIGH", 6);
+    return { setupType: "momentum_pulse_continuation" as const, stop: Math.max(swingHigh, prev.high) + atr5 * cfg.stopPadAtr };
   }
 
   return null;

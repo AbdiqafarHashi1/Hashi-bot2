@@ -284,6 +284,22 @@ export type SignalRoomPayload = {
     riskPct: number | null;
     stopPips: number | null;
     exposureBasis: number | null;
+    capitalBasisUsed?: number;
+    freeMarginAfterTrade?: number | null;
+    openRiskAfterAdmission?: number | null;
+    pnlPctOnEntryMove?: number;
+    pnlPctOnMargin?: number;
+    effectiveR?: number;
+    exitModel?: string | null;
+    stopModel?: string | null;
+    targetModel?: string | null;
+    timeStopModel?: string | null;
+    volatilityRegime?: string | null;
+    expectedHoldProfile?: string | null;
+    maxHoldSeconds?: number | null;
+    elapsedHoldSeconds?: number | null;
+    staleTradePolicy?: string | null;
+    activeSymbolGuardStatus?: "clear" | "blocked";
     lastLifecycleEvent?: string | null;
     lastLifecycleEventAt?: string | null;
     lifecycleTrail?: Array<{
@@ -343,6 +359,16 @@ export type SignalRoomPayload = {
     riskPct: number | null;
     stopPips: number | null;
     exposureBasis: number | null;
+    capitalBasisUsed?: number;
+    effectiveR?: number;
+    exitModel?: string | null;
+    stopModel?: string | null;
+    targetModel?: string | null;
+    timeStopModel?: string | null;
+    volatilityRegime?: string | null;
+    expectedHoldProfile?: string | null;
+    maxHoldSeconds?: number | null;
+    staleTradePolicy?: string | null;
     lastLifecycleEvent?: string | null;
     lastLifecycleEventAt?: string | null;
     lifecycleTrail?: Array<{
@@ -365,11 +391,15 @@ export type SignalRoomPayload = {
     accepted: boolean;
     rejectionReason:
       | "blocked_max_concurrent_positions"
+      | "blocked_active_symbol_open_position"
       | "blocked_invalid_stop_distance"
       | "blocked_zero_or_negative_qty"
       | "blocked_notional_cap"
       | "blocked_margin_unavailable"
       | "blocked_risk_invalid"
+      | "blocked_risk_clamped_to_zero"
+      | "blocked_unsupported_sizing_model"
+      | "blocked_leverage_or_open_risk_cap"
       | "blocked_symbol_cooldown"
       | "blocked_policy_gate"
       | "blocked_invalid_entry_price"
@@ -378,6 +408,12 @@ export type SignalRoomPayload = {
     computedNotional: number;
     computedMargin: number;
     computedRiskAmount: number;
+    capitalBasisUsed?: number;
+    targetNotional?: number;
+    riskClampApplied?: boolean;
+    freeMarginAfter?: number | null;
+    effectiveLeverage?: number | null;
+    executionTruth?: Record<string, unknown> | null;
     selectedReason: string | null;
     createdAt: string;
   }>;

@@ -562,10 +562,48 @@ export async function GET() {
     });
   }
   const signalEventById = new Map(recentSignals.map((signal) => [signal.id, signal]));
+  const executionTruthBySignalEventId = new Map<string, {
+    capitalAllocationPct?: number;
+    effectiveLeverageTarget?: number;
+    freeMarginAfterAdmission?: number;
+    openRiskAfterAdmission?: number;
+    duplicateActiveSymbolBlocked?: boolean;
+    exitModel?: string;
+    stopModel?: string;
+    targetModel?: string;
+    timeStopModel?: string;
+    volatilityRegime?: string;
+    expectedHoldProfile?: string;
+    maxHoldSeconds?: number;
+    staleTradePolicy?: string;
+  }>();
+  for (const event of recentExecutionDecisionEvents) {
+    const payload = (event.payload as {
+      signalEventId?: string;
+      executionTruth?: {
+        capitalAllocationPct?: number;
+        effectiveLeverageTarget?: number;
+        freeMarginAfterAdmission?: number;
+        openRiskAfterAdmission?: number;
+        duplicateActiveSymbolBlocked?: boolean;
+        exitModel?: string;
+        stopModel?: string;
+        targetModel?: string;
+        timeStopModel?: string;
+        volatilityRegime?: string;
+        expectedHoldProfile?: string;
+        maxHoldSeconds?: number;
+        staleTradePolicy?: string;
+      };
+    } | null) ?? null;
+    if (!payload?.signalEventId || executionTruthBySignalEventId.has(payload.signalEventId)) continue;
+    executionTruthBySignalEventId.set(payload.signalEventId, payload.executionTruth ?? {});
+  }
   const openPaperPositions = openTradesWithDispatch.map((trade) => {
     const strategyId = signalEventById.get(trade.signalEventId)?.strategy ?? null;
     const engine = resolveEngineDescriptor(strategyId);
     const detail = signalDetailBySignalEventId.get(trade.signalEventId);
+    const executionTruth = executionTruthBySignalEventId.get(trade.signalEventId);
     return ({
     marketType: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }),
     id: trade.id,
@@ -612,13 +650,32 @@ export async function GET() {
       : null,
     exposureBasis: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }) === "forex"
       ? config.SIGNAL_FOREX_PER_TRADE_EXPOSURE_BASIS
-      : null
+      : null,
+    capitalBasisUsed: trade.leverage && trade.leverage > 0 && trade.notional ? trade.notional / trade.leverage : 0,
+    freeMarginAfterTrade: executionTruth?.freeMarginAfterAdmission ?? null,
+    openRiskAfterAdmission: executionTruth?.openRiskAfterAdmission ?? null,
+    pnlPctOnEntryMove: trade.entryPrice > 0
+      ? (((trade.currentPrice ?? trade.entryPrice) - trade.entryPrice) / trade.entryPrice) * (trade.side.toUpperCase() === "SHORT" ? -100 : 100)
+      : 0,
+    pnlPctOnMargin: trade.leverage && trade.leverage > 0 && trade.notional ? ((trade.unrealizedPnl ?? 0) / (trade.notional / trade.leverage)) * 100 : 0,
+    effectiveR: trade.riskAmount && trade.riskAmount > 0 ? ((trade.realizedPnl ?? 0) + (trade.unrealizedPnl ?? 0)) / trade.riskAmount : 0,
+    exitModel: executionTruth?.exitModel ?? null,
+    stopModel: executionTruth?.stopModel ?? null,
+    targetModel: executionTruth?.targetModel ?? null,
+    timeStopModel: executionTruth?.timeStopModel ?? null,
+    volatilityRegime: executionTruth?.volatilityRegime ?? null,
+    expectedHoldProfile: executionTruth?.expectedHoldProfile ?? null,
+    maxHoldSeconds: executionTruth?.maxHoldSeconds ?? null,
+    elapsedHoldSeconds: trade.openedAt ? Math.floor((Date.now() - trade.openedAt.getTime()) / 1000) : null,
+    staleTradePolicy: executionTruth?.staleTradePolicy ?? null,
+    activeSymbolGuardStatus: executionTruth?.duplicateActiveSymbolBlocked ? "blocked" : "clear"
   });
   });
   const closedPaperPositions = closedTradesWithPaper.map((trade) => {
     const strategyId = signalEventById.get(trade.signalEventId)?.strategy ?? null;
     const engine = resolveEngineDescriptor(strategyId);
     const detail = signalDetailBySignalEventId.get(trade.signalEventId);
+    const executionTruth = executionTruthBySignalEventId.get(trade.signalEventId);
     return ({
     marketType: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }),
     id: trade.id,
@@ -665,7 +722,17 @@ export async function GET() {
       : null,
     exposureBasis: inferMarketType({ symbol: trade.symbol, forexSymbols, rankingMarketTypeBySymbol }) === "forex"
       ? config.SIGNAL_FOREX_PER_TRADE_EXPOSURE_BASIS
-      : null
+      : null,
+    capitalBasisUsed: trade.leverage && trade.leverage > 0 && trade.notional ? trade.notional / trade.leverage : 0,
+    effectiveR: trade.riskAmount && trade.riskAmount > 0 ? (trade.realizedPnl ?? 0) / trade.riskAmount : 0,
+    exitModel: executionTruth?.exitModel ?? null,
+    stopModel: executionTruth?.stopModel ?? null,
+    targetModel: executionTruth?.targetModel ?? null,
+    timeStopModel: executionTruth?.timeStopModel ?? null,
+    volatilityRegime: executionTruth?.volatilityRegime ?? null,
+    expectedHoldProfile: executionTruth?.expectedHoldProfile ?? null,
+    maxHoldSeconds: executionTruth?.maxHoldSeconds ?? null,
+    staleTradePolicy: executionTruth?.staleTradePolicy ?? null
   });
   });
   const paperAccount = buildPaperAccountSnapshot({
@@ -701,6 +768,7 @@ export async function GET() {
       signalEventId?: string;
       selectedReason?: string | null;
       decision?: PaperExecutionDecision;
+      executionTruth?: Record<string, unknown> | null;
     } | null) ?? null;
     const decision = payload?.decision;
     return {
@@ -712,6 +780,12 @@ export async function GET() {
       computedNotional: decision?.computedNotional ?? 0,
       computedMargin: decision?.computedMargin ?? 0,
       computedRiskAmount: decision?.computedRiskAmount ?? 0,
+      capitalBasisUsed: decision?.capitalBasisUsed ?? 0,
+      targetNotional: decision?.targetNotional ?? 0,
+      riskClampApplied: decision?.riskClampApplied ?? false,
+      freeMarginAfter: decision?.freeMarginAfter ?? null,
+      effectiveLeverage: decision?.effectiveLeverage ?? null,
+      executionTruth: payload?.executionTruth ?? null,
       selectedReason: payload?.selectedReason ?? null,
       createdAt: event.createdAt.toISOString()
     };
