@@ -45,6 +45,7 @@ export function processTradeOnCandle(
       trade.remainingQty -= qtyToClose;
       trade.state = "partial";
       trade.hadPartialExit = true;
+      trade.stop = trade.entry;
 
       if (tp2Hit) {
         const exitFee = takerFee(trade.tp2, trade.remainingQty, takerFeeRate);
@@ -59,7 +60,8 @@ export function processTradeOnCandle(
   }
 
   if (trade.state === "partial") {
-    if (stopHit) {
+    const partialStopHit = trade.side === "LONG" ? candle.low <= trade.stop : candle.high >= trade.stop;
+    if (partialStopHit) {
       const exitFee = takerFee(trade.stop, trade.remainingQty, takerFeeRate);
       trade.feesPaid += exitFee;
       const pnl = trade.realizedPnl + pnlFor(trade.side, trade.entry, trade.stop, trade.remainingQty) - exitFee;

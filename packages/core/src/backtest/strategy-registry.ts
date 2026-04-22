@@ -139,7 +139,7 @@ const combinedBreakoutSwing = () =>
       minPreBreakImpulseRatio: 0.3,
       entryBufferAtr: 0.05,
       tp1RMultiple: 1.1,
-      tp2RMultiple: 2.35,
+      tp2RMultiple: 2.6,
       strongBreakoutThreshold: 0.72,
       strongTp2Boost: 1.08
     }),
@@ -577,8 +577,8 @@ export const STRATEGY_REGISTRY: StrategyRegistryEntry[] = [
       minRangeExpansionRatio: 1.3,
       minPreBreakImpulseRatio: 0.38,
       entryBufferAtr: 0.05,
-      tp1RMultiple: 1.1,
-      tp2RMultiple: 2.35,
+      tp1RMultiple: 1.25,
+      tp2RMultiple: 2.6,
       strongBreakoutThreshold: 0.72,
       strongTp2Boost: 1.08
     })

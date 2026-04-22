@@ -1,11 +1,12 @@
 import { Prisma } from "@prisma/client";
 import { Redis } from "ioredis";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { getConfig } from "@hashi/config";
 import {
   ACTIVE_PRODUCTION_STRATEGY_IDS,
   allocatePortfolioCapital,
+  BacktestEngine,
   BinanceSpotProvider,
   buildPersonalDemoDispatchPlan,
   buildPropDemoDispatchPlan,
@@ -146,8 +147,30 @@ function buildProvider(name: "binance" | "bybit") {
   return name === "binance" ? new BinanceSpotProvider() : new BybitSpotProvider();
 }
 
+function resolveWorkspaceFilePath(targetPath: string) {
+  if (path.isAbsolute(targetPath)) return targetPath;
+  const cwdResolved = path.resolve(process.cwd(), targetPath);
+  if (existsSync(cwdResolved)) return cwdResolved;
+  let current = process.cwd();
+  while (true) {
+    const marker = path.join(current, "pnpm-workspace.yaml");
+    if (existsSync(marker)) {
+      return path.resolve(current, targetPath);
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return cwdResolved;
+}
+
 function buildRuntimeSymbols(config: ReturnType<typeof getConfig>): SymbolMetadata[] {
-  const defaultCryptoSymbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "APTUSDT", "LINKUSDT", "ATOMUSDT", "DOGEUSDT", "PEPEUSDT", "MATICUSDT"];
+  const runtimeMode = toRuntimeMode(config);
+  const defaultCryptoSymbols = runtimeMode === "signal"
+    ? SIGNAL_MODE_DEFAULT_CRYPTO_SYMBOLS
+    : runtimeMode === "personal"
+      ? PERSONAL_MODE_DEFAULT_CRYPTO_SYMBOLS
+      : SIGNAL_MODE_DEFAULT_CRYPTO_SYMBOLS;
   const defaultForexSymbols = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "USDCAD", "USDCHF", "EURJPY", "GBPJPY", "XAUUSD"];
   const symbols: SymbolMetadata[] = [];
   const seen = new Set<string>();
@@ -160,7 +183,7 @@ function buildRuntimeSymbols(config: ReturnType<typeof getConfig>): SymbolMetada
     symbols.push({ symbol: normalized, marketType });
   };
 
-  if (config.EXECUTION_MODE === "signal_only") {
+  if (runtimeMode === "signal") {
     const forexUniverse = config.DEFAULT_FOREX_SYMBOLS.length > 0 ? config.DEFAULT_FOREX_SYMBOLS : defaultForexSymbols;
     const forexSymbolSet = new Set(forexUniverse.map((symbol) => symbol.toUpperCase()));
 
@@ -204,6 +227,41 @@ type PersistedSignalTradeStatus = "open" | "tp1_hit" | "tp2_hit" | "stop_hit" | 
 type PersistedSignalTradeOutcome = "win" | "loss" | "partial_win" | "open";
 type SignalOutcomeStatus = "OPEN" | "TP1_HIT" | "TP2_HIT" | "STOP_HIT" | "EXPIRED" | "PARTIAL_WIN" | "BE_AFTER_TP1";
 type RuntimeMode = "signal" | "personal" | "prop";
+type RuntimeControlConfig = {
+  mode: RuntimeMode;
+  modes: Record<RuntimeMode, {
+    symbols: string[];
+    riskPerTradePct: number;
+    maxOpenRiskPct: number;
+    baseLeverage: number;
+    maxLeverage: number;
+  }>;
+  enginePhaseLock: "engine1_only";
+  updatedAt: string;
+};
+type RuntimeSystemControl = {
+  isRunning: boolean;
+  activeMode: RuntimeMode;
+  allowedSymbols: string[];
+  killSwitchActive?: boolean;
+};
+type InMemoryPerformanceTracker = {
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  sumR: number;
+  equity: number;
+  peakEquity: number;
+  drawdownPct: number;
+};
+const ENGINE1_LOCKED_STRATEGY_ID = "compression_breakout_balanced";
+const ENGINE1_LOCKED_ENGINE_ID = "engine1_breakout";
+const ENGINE1_ACCEPTED_BASELINE = true;
+const SIGNAL_MODE_DEFAULT_CRYPTO_SYMBOLS = ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "MATICUSDT"];
+const PERSONAL_MODE_DEFAULT_CRYPTO_SYMBOLS = ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "LINKUSDT"];
+const PERFORMANCE_SUMMARY_INTERVAL_CYCLES = 10;
+const performanceByMode = new Map<RuntimeMode, InMemoryPerformanceTracker>();
+const initialRiskByTradeId = new Map<string, number>();
 type SystemControlState = {
   isRunning: boolean;
   activeMode: RuntimeMode;
@@ -234,6 +292,7 @@ type SignalRejectionReason =
   | "analysis_feed_unavailable"
   | "below_min_tier"
   | "below_min_score"
+  | "active_position_exists"
   | "active_symbol_gate"
   | "cooldown"
   | "rr_threshold"
@@ -543,6 +602,8 @@ function mapNoSetupReasonForStrategy(strategyId: string, reason: string | null):
 }
 
 function strategyEngineId(config: ReturnType<typeof getConfig>, strategyId: string) {
+  if (config.ENGINE_PHASE_LOCK === "engine1_only") return ENGINE1_LOCKED_ENGINE_ID;
+  if (strategyId === ENGINE1_LOCKED_STRATEGY_ID) return ENGINE1_LOCKED_ENGINE_ID;
   if (strategyId === config.ACTIVE_PRODUCTION_STRATEGY) return "engine1";
   if (strategyId === config.ENGINE2_STRATEGY) return "engine2";
   if (strategyId === config.ENGINE3_STRATEGY) return "engine3";
@@ -565,7 +626,42 @@ type MarketPaperSizingProfile = {
   forexPipValuePerStandardLot?: number;
 };
 
-function resolvePaperSizingProfile(config: ReturnType<typeof getConfig>, marketType: SymbolMetadata["marketType"]): MarketPaperSizingProfile {
+function resolvePaperSizingProfileForMode(
+  config: ReturnType<typeof getConfig>,
+  marketType: SymbolMetadata["marketType"],
+  mode: RuntimeMode,
+  score: number
+): MarketPaperSizingProfile {
+  const isAPlus = score >= 90;
+  if (mode === "personal") {
+    const baseRisk = Math.min(config.SIGNAL_PAPER_RISK_PCT, 0.01);
+    const aPlusRisk = Math.min(baseRisk * 1.5, 0.01);
+    const baseLeverage = Math.max(config.SIGNAL_PAPER_LEVERAGE, 1);
+    const maxLeverage = Math.max(config.SIGNAL_CRYPTO_LEVERAGE, baseLeverage);
+    return {
+      accountEquity: config.SIGNAL_CRYPTO_PAPER_EQUITY,
+      leverage: Math.min(isAPlus ? maxLeverage : baseLeverage, 10),
+      riskPct: Math.min(isAPlus ? aPlusRisk : baseRisk, 0.01),
+      maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+      marketSizingModel: marketType === "forex" ? "forex_leveraged" : "crypto_leveraged",
+      capitalAllocationPct: 1,
+      forexLotSize: config.SIGNAL_FOREX_LOT_SIZE,
+      forexPipValuePerStandardLot: config.SIGNAL_FOREX_PIP_VALUE_PER_STANDARD_LOT
+    };
+  }
+  if (mode === "prop") {
+    return {
+      accountEquity: config.SIGNAL_CRYPTO_PAPER_EQUITY,
+      leverage: Math.min(isAPlus ? 3 : 2, 4),
+      riskPct: isAPlus ? 0.004 : 0.0025,
+      maxConcurrentPositions: config.SIGNAL_PAPER_MAX_CONCURRENT_POSITIONS,
+      marketSizingModel: marketType === "forex" ? "forex_leveraged" : "crypto_leveraged",
+      capitalAllocationPct: 1,
+      forexLotSize: config.SIGNAL_FOREX_LOT_SIZE,
+      forexPipValuePerStandardLot: config.SIGNAL_FOREX_PIP_VALUE_PER_STANDARD_LOT
+    };
+  }
+
   if (marketType === "forex") {
     return {
       accountEquity: config.SIGNAL_FOREX_PAPER_EQUITY,
@@ -697,14 +793,100 @@ function toInputJson(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
 }
 
-function toRuntimeMode(executionMode: ReturnType<typeof getConfig>["EXECUTION_MODE"]): RuntimeMode {
+function toRuntimeMode(config: ReturnType<typeof getConfig>): RuntimeMode {
+  if (config.CAPITAL_MODE === "personal") return "personal";
+  if (config.CAPITAL_MODE === "prop") return "prop";
+  if (config.CAPITAL_MODE === "signal") return "signal";
+  const executionMode = config.EXECUTION_MODE;
   if (executionMode === "live_personal") return "personal";
   if (executionMode === "live_prop") return "prop";
   return "signal";
 }
 
+function readRuntimeControlConfig(): RuntimeControlConfig | null {
+  try {
+    const filePath = resolveWorkspaceFilePath("runtime/control-config.json");
+    if (!existsSync(filePath)) return null;
+    const raw = readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as RuntimeControlConfig;
+    if (!parsed || !parsed.modes || !parsed.mode) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function applyRuntimeControlConfig(config: ReturnType<typeof getConfig>): ReturnType<typeof getConfig> {
+  const runtimeControl = readRuntimeControlConfig();
+  if (!runtimeControl) return config;
+  const activeMode: RuntimeMode = runtimeControl.mode;
+  const modeConfig = runtimeControl.modes[activeMode];
+  const executionMode = activeMode === "personal" ? "live_personal" : activeMode === "prop" ? "live_prop" : "signal_only";
+  return {
+    ...config,
+    CAPITAL_MODE: activeMode,
+    EXECUTION_MODE: executionMode,
+    ENGINE_PHASE_LOCK: "engine1_only",
+    DEFAULT_SYMBOLS: modeConfig?.symbols ?? config.DEFAULT_SYMBOLS,
+    SIGNAL_PAPER_RISK_PCT: Math.max((modeConfig?.riskPerTradePct ?? config.SIGNAL_PAPER_RISK_PCT) / 100, 0.0005),
+    SIGNAL_PAPER_MAX_OPEN_RISK_PCT: Math.max((modeConfig?.maxOpenRiskPct ?? (config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT * 100)) / 100, 0.001),
+    SIGNAL_PAPER_LEVERAGE: modeConfig?.baseLeverage ?? config.SIGNAL_PAPER_LEVERAGE,
+    SIGNAL_CRYPTO_LEVERAGE: modeConfig?.maxLeverage ?? config.SIGNAL_CRYPTO_LEVERAGE
+  };
+}
+
+function readRuntimeSystemControl(): RuntimeSystemControl | null {
+  try {
+    const filePath = resolveWorkspaceFilePath("runtime/system-control.json");
+    if (!existsSync(filePath)) return null;
+    const raw = readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as RuntimeSystemControl;
+    if (!parsed || !Array.isArray(parsed.allowedSymbols)) return null;
+    return {
+      isRunning: parsed.isRunning === true,
+      activeMode: parsed.activeMode === "personal" || parsed.activeMode === "prop" ? parsed.activeMode : "signal",
+      allowedSymbols: normalizeAllowedSymbols(parsed.allowedSymbols),
+      killSwitchActive: parsed.killSwitchActive === true
+    };
+  } catch {
+    return null;
+  }
+}
+
 function normalizeAllowedSymbols(symbols: string[]) {
   return Array.from(new Set(symbols.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean)));
+}
+
+function inferSetupType(setupVariant: string | undefined, strategyId: string) {
+  const source = (setupVariant ?? strategyId ?? "").toLowerCase();
+  if (source.includes("pullback")) return "pullback";
+  if (source.includes("reclaim")) return "reclaim";
+  if (source.includes("breakout")) return "breakout";
+  return "breakout";
+}
+
+function toExpectedR(entry: number, stop: number, tp2: number, side: string) {
+  const isShort = side.toUpperCase() === "SHORT";
+  const risk = isShort ? stop - entry : entry - stop;
+  const reward = isShort ? entry - tp2 : tp2 - entry;
+  if (risk <= 0) return 0;
+  return reward / risk;
+}
+
+function getPerformanceTracker(mode: RuntimeMode, startingEquity: number) {
+  const existing = performanceByMode.get(mode);
+  if (existing) return existing;
+  const created: InMemoryPerformanceTracker = {
+    totalTrades: 0,
+    wins: 0,
+    losses: 0,
+    sumR: 0,
+    equity: startingEquity,
+    peakEquity: startingEquity,
+    drawdownPct: 0
+  };
+  performanceByMode.set(mode, created);
+  return created;
 }
 
 function tierForScore(score: number): SignalTier | null {
@@ -827,6 +1009,7 @@ type RuntimeCandidate = {
 
 function resolveCandidateEngineLabel(candidate: RuntimeCandidate, config: ReturnType<typeof getConfig>) {
   const strategyId = typeof candidate.signal.metadata?.strategyId === "string" ? candidate.signal.metadata.strategyId : "";
+  if (strategyId === ENGINE1_LOCKED_STRATEGY_ID) return ENGINE1_LOCKED_ENGINE_ID;
   if (strategyId === config.ACTIVE_PRODUCTION_STRATEGY) return "engine1";
   if (strategyId === config.ENGINE2_STRATEGY) return "engine2";
   if (strategyId === config.ENGINE3_STRATEGY) return "engine3";
@@ -954,7 +1137,15 @@ function computeSignalQuality(params: {
   const extensionRatio = Math.abs(signal.entryPrice - marketContext.latestPrice) / Math.max(marketContext.latestPrice, 1e-6);
   const entryScore = boundedScore(Math.round((1 - Math.min(extensionRatio, 0.01) / 0.01) * 10), 0, 10);
   const signalScore = trendScore + breakoutScore + volatilityScore + structureScore + entryScore;
-  const tier = tierForScore(signalScore);
+  const rr = tp2RewardToRisk(signal);
+  const scoreTier = tierForScore(signalScore);
+  const tier: SignalTier | null = scoreTier === "A+"
+    && signal.setupGrade === "A+"
+    && rr >= 1.8
+    ? "A+"
+    : scoreTier && (scoreTier === "A+" || scoreTier === "A") && rr >= 1.25
+      ? "A"
+      : null;
 
   const candidates: Array<{ component: ScoreComponentName; score: number; reason: string }> = [
     { component: "trend", score: trendScore, reason: "HTF/LTF trend aligned" },
@@ -998,20 +1189,8 @@ function operatorManualRecommendation(signal: Pick<BreakoutSignal, "setupGrade" 
 }
 
 function resolveRuntimeStrategyIds(config: ReturnType<typeof getConfig>): string[] {
-  if (config.MULTI_ENGINE_EXECUTION_MODE === "independent") {
-    return Array.from(new Set([config.ACTIVE_PRODUCTION_STRATEGY, config.ENGINE2_STRATEGY, config.ENGINE3_STRATEGY, config.ENGINE4_STRATEGY]));
-  }
-  const ids: string[] = [config.ACTIVE_PRODUCTION_STRATEGY];
-  if (config.SIGNAL_ENABLE_ENGINE2) {
-    ids.push(config.ENGINE2_STRATEGY);
-  }
-  if (config.SIGNAL_ENABLE_ENGINE3) {
-    ids.push(config.ENGINE3_STRATEGY);
-  }
-  if (config.SIGNAL_ENABLE_ENGINE4) {
-    ids.push(config.ENGINE4_STRATEGY);
-  }
-  return Array.from(new Set(ids));
+  void config;
+  return [ENGINE1_LOCKED_STRATEGY_ID];
 }
 
 function resolveRuntimeEnginePlanForSymbol(config: ReturnType<typeof getConfig>) {
@@ -1297,6 +1476,7 @@ async function generateUnifiedSignalsForContext(params: {
               : "micro_scalp_continuation_v1";
         signals.push({
           ...signal,
+          strategyId: ENGINE1_LOCKED_STRATEGY_ID,
           score: quality.signalScore,
           confidence: Math.max(scored.confidence, 0.55),
           setupGrade: quality.tier,
@@ -1312,7 +1492,9 @@ async function generateUnifiedSignalsForContext(params: {
                   : "engine4_micro_scalp_continuation_cadence",
             engineFamily,
             setupVariant,
-            strategyId,
+            strategyId: ENGINE1_LOCKED_STRATEGY_ID,
+            engineId: ENGINE1_LOCKED_ENGINE_ID,
+            expectedHoldType: "intraday",
             feedActionability: marketContext.marketType === "crypto"
               ? "live_actionable"
               : config.SIGNAL_ENABLE_FOREX
@@ -1326,7 +1508,7 @@ async function generateUnifiedSignalsForContext(params: {
               ...quality.reasons,
               `regime=${regime.regime}`,
               `symbol=${marketContext.symbol}`,
-              `strategy=${strategyId}`
+              `strategy=${ENGINE1_LOCKED_STRATEGY_ID}`
             ]
           }
         });
@@ -1450,11 +1632,12 @@ async function sendSignalModeTelegramMessages(params: {
     console.log(
       JSON.stringify(
         {
-          event: "telegram_send_failure",
-          reason: "missing_telegram_credentials",
+          event: "telegram_send_skipped_console_payload",
+          reason: "missing_telegram_credentials_logging_payload_only",
           messageCount: messages.length,
           tokenPresent: Boolean(botToken),
-          chatIdPresent: Boolean(chatId)
+          chatIdPresent: Boolean(chatId),
+          messages
         },
         null,
         2
@@ -1753,18 +1936,34 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const cycleStartedAtMs = Date.now();
   const cycleStartedAtIso = new Date(cycleStartedAtMs).toISOString();
   const cycleId = `signal-cycle-${cycleStartedAtMs}`;
-  const config = getConfig();
+  const config = applyRuntimeControlConfig(getConfig());
   const debugVisibilityEnabled = config.WORKER_DEBUG_VISIBILITY;
   const effectiveTelegramCap = Math.min(config.SIGNAL_MAX_TELEGRAM_PER_CYCLE, config.SIGNAL_MAX_SELECTED_PER_CYCLE);
-  const redis = new Redis(config.REDIS_URL);
+  const redis = new Redis(config.REDIS_URL, {
+    lazyConnect: true,
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false
+  });
+  redis.on("error", () => {
+    // Redis is optional in single-process fallback mode.
+  });
   let prismaClient: (typeof import("@hashi/db"))["prisma"] | null = null;
-  const configuredMode = toRuntimeMode(config.EXECUTION_MODE);
+  const configuredMode = toRuntimeMode(config);
   let systemControl: SystemControlState = {
     isRunning: true,
     activeMode: configuredMode,
     killSwitchActive: false,
     allowedSymbols: normalizeAllowedSymbols(buildRuntimeSymbols(config).map((entry) => entry.symbol))
   };
+  const fileBackedControl = readRuntimeSystemControl();
+  if (fileBackedControl) {
+    systemControl = {
+      isRunning: fileBackedControl.isRunning,
+      activeMode: fileBackedControl.activeMode,
+      killSwitchActive: fileBackedControl.killSwitchActive ?? false,
+      allowedSymbols: fileBackedControl.allowedSymbols
+    };
+  }
   let runtimeMode: RuntimeMode = systemControl.activeMode;
   let symbolsScanned = 0;
   let candidateCount = 0;
@@ -1778,6 +1977,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     analysis_feed_unavailable: 0,
     below_min_tier: 0,
     below_min_score: 0,
+    active_position_exists: 0,
     active_symbol_gate: 0,
     cooldown: 0,
     rr_threshold: 0,
@@ -1893,31 +2093,56 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     );
   };
 
-  const skipInfra = config.SKIP_INFRA_CHECKS;
+  let skipInfra = config.SKIP_INFRA_CHECKS;
   if (!skipInfra) {
-    const { prisma } = await import("@hashi/db");
-    prismaClient = prisma;
-    await prismaClient.$queryRaw`SELECT 1`;
-    await redis.ping();
+    try {
+      await redis.connect();
+      const { prisma } = await import("@hashi/db");
+      prismaClient = prisma;
+      await prismaClient.$queryRaw`SELECT 1`;
+      await redis.ping();
 
-    const persistedControl = await prismaClient.systemControl.upsert({
-      where: { id: "system" },
-      update: {},
-      create: {
-        id: "system",
-        isRunning: false,
-        activeMode: "signal",
-        killSwitchActive: false,
-        allowedSymbols: buildRuntimeSymbols(config).map((entry) => entry.symbol)
-      }
-    });
-    systemControl = {
-      isRunning: persistedControl.isRunning,
-      activeMode: (persistedControl.activeMode as RuntimeMode) ?? configuredMode,
-      killSwitchActive: persistedControl.killSwitchActive,
-      allowedSymbols: normalizeAllowedSymbols(persistedControl.allowedSymbols)
-    };
-    runtimeMode = systemControl.activeMode;
+      const persistedControl = await prismaClient.systemControl.upsert({
+        where: { id: "system" },
+        update: {},
+        create: {
+          id: "system",
+          isRunning: false,
+          activeMode: "signal",
+          killSwitchActive: false,
+          allowedSymbols: buildRuntimeSymbols(config).map((entry) => entry.symbol)
+        }
+      });
+      systemControl = {
+        isRunning: persistedControl.isRunning,
+        activeMode: (persistedControl.activeMode as RuntimeMode) ?? configuredMode,
+        killSwitchActive: persistedControl.killSwitchActive,
+        allowedSymbols: normalizeAllowedSymbols(persistedControl.allowedSymbols)
+      };
+      runtimeMode = systemControl.activeMode;
+    } catch (error) {
+      skipInfra = true;
+      prismaClient = null;
+      runtimeMode = fileBackedControl?.activeMode ?? configuredMode;
+      systemControl = {
+        ...systemControl,
+        isRunning: fileBackedControl?.isRunning ?? true,
+        activeMode: fileBackedControl?.activeMode ?? configuredMode,
+        allowedSymbols: fileBackedControl?.allowedSymbols.length ? fileBackedControl.allowedSymbols : systemControl.allowedSymbols
+      };
+      console.log(
+        JSON.stringify(
+          {
+            event: "infra_fallback_single_process",
+            reason: error instanceof Error ? error.message : "infra_unavailable",
+            dbEnabled: false,
+            redisEnabled: false
+          },
+          null,
+          2
+        )
+      );
+    }
   }
 
   console.log(
@@ -1953,67 +2178,39 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   );
 
   if (!prismaClient) {
-    cycleOutcome = "skipped";
-    skipReason = "system_control_unavailable";
-    emitCycleExitPath("preload", skipReason);
-    console.log(
-      JSON.stringify(
-        {
-          event: "cycle_skipped",
-          cycleNumber,
-          reason: skipReason,
-          message: "Prisma unavailable; control plane cannot be enforced"
-        },
-        null,
-        2
-      )
-    );
-    const durationMs = Date.now() - cycleStartedAtMs;
-    return {
-      cycleId,
-      cycleStartedAt: cycleStartedAtIso,
-      mode: runtimeMode,
-      isRunning: systemControl.isRunning,
-      killSwitchActive: systemControl.killSwitchActive,
-      allowedSymbolsCount: systemControl.allowedSymbols.length,
-      symbolsScanned,
-      candidateCount,
-      skippedCount,
-      persistedSignalCount,
-      dispatchedTelegramCount,
-      closedSignalsThisCycle,
-      outcome: cycleOutcome,
-      skipReason,
-      durationMs
-    };
+    console.log("[worker] running without persistence (single-process fallback)");
   }
-
-  await prismaClient.runtimeEvent.create({
-    data: {
-      type: "cycle_started",
-      mode: runtimeMode,
-      message: "Worker cycle started",
-      payload: {
-        cycleId,
-        cycleNumber
+  const performanceTracker = getPerformanceTracker(runtimeMode, config.SIGNAL_CRYPTO_PAPER_EQUITY);
+  if (prismaClient) {
+    await prismaClient.runtimeEvent.create({
+      data: {
+        type: "cycle_started",
+        mode: runtimeMode,
+        message: "Worker cycle started",
+        payload: {
+          cycleId,
+          cycleNumber
+        }
       }
-    }
-  });
+    });
+  }
 
   if (!systemControl.isRunning) {
     cycleOutcome = "skipped";
     skipReason = "system_stopped";
     emitCycleExitPath("preload", skipReason);
-    await prismaClient.runtimeEvent.create({
-      data: {
-        type: "cycle_skipped",
-        mode: runtimeMode,
-        message: "System control isRunning=false; cycle skipped",
-        payload: {
-          controlId: "system"
+    if (prismaClient) {
+      await prismaClient.runtimeEvent.create({
+        data: {
+          type: "cycle_skipped",
+          mode: runtimeMode,
+          message: "System control isRunning=false; cycle skipped",
+          payload: {
+            controlId: "system"
+          }
         }
-      }
-    });
+      });
+    }
     console.log(
       JSON.stringify(
         { event: "worker_cycle_skipped", cycleNumber, reason: skipReason, activeMode: runtimeMode, isRunning: false },
@@ -2033,26 +2230,28 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     cycleOutcome = "skipped";
     skipReason = "kill_switch_active";
     emitCycleExitPath("preload", skipReason);
-    await prismaClient.runtimeEvent.create({
-      data: {
-        type: "cycle_skipped",
-        mode: runtimeMode,
-        message: "System control kill switch is active; cycle blocked",
-        payload: {
-          controlId: "system"
+    if (prismaClient) {
+      await prismaClient.runtimeEvent.create({
+        data: {
+          type: "cycle_skipped",
+          mode: runtimeMode,
+          message: "System control kill switch is active; cycle blocked",
+          payload: {
+            controlId: "system"
+          }
         }
-      }
-    });
-    await prismaClient.incident.create({
-      data: {
-        severity: "critical",
-        source: "control_plane",
-        message: "Kill switch active; worker trading logic blocked",
-        payload: {
-          controlId: "system"
+      });
+      await prismaClient.incident.create({
+        data: {
+          severity: "critical",
+          source: "control_plane",
+          message: "Kill switch active; worker trading logic blocked",
+          payload: {
+            controlId: "system"
+          }
         }
-      }
-    });
+      });
+    }
     console.log(
       JSON.stringify(
         { event: "worker_cycle_skipped", cycleNumber, reason: skipReason, activeMode: runtimeMode, killSwitchActive: true },
@@ -2112,16 +2311,18 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     cycleOutcome = "skipped";
     skipReason = "no_allowed_symbols";
     emitCycleExitPath("preload", skipReason);
-    await prismaClient.runtimeEvent.create({
-      data: {
-        type: "cycle_skipped",
-        mode: runtimeMode,
-        message: "No configured symbols match allowedSymbols",
-        payload: {
-          allowedSymbols: Array.from(allowedSymbolSet)
+    if (prismaClient) {
+      await prismaClient.runtimeEvent.create({
+        data: {
+          type: "cycle_skipped",
+          mode: runtimeMode,
+          message: "No configured symbols match allowedSymbols",
+          payload: {
+            allowedSymbols: Array.from(allowedSymbolSet)
+          }
         }
-      }
-    });
+      });
+    }
     console.log(
       JSON.stringify(
         { event: "worker_cycle_skipped", cycleNumber, reason: skipReason, activeMode: runtimeMode, allowedSymbolsCount: allowedSymbolSet.size },
@@ -2777,8 +2978,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const paperExecutedSignalSymbols = new Set<string>();
   const selectedReasonBySymbol = new Map<string, string>();
   let diversificationNotes: string[] = [];
-  const effectiveRequireAPlusOnly = config.SIGNAL_REQUIRE_A_PLUS_ONLY || config.SIGNAL_MIN_TIER === "A+";
-  const minTierScore = minScoreForTier(config.SIGNAL_MIN_TIER);
+  const effectiveMinTier: SignalTier = runtimeMode === "signal" || runtimeMode === "personal"
+    ? "A"
+    : config.SIGNAL_MIN_TIER;
+  const effectiveRequireAPlusOnly = config.SIGNAL_REQUIRE_A_PLUS_ONLY || effectiveMinTier === "A+";
+  const minTierScore = minScoreForTier(effectiveMinTier);
   const effectiveMinScore = Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
   if (!independentMultiEngineMode && prismaClient && runtimeMode === "signal" && cycleCandidates.length > 0) {
     const candidateSymbols = Array.from(new Set(cycleCandidates.map((entry) => entry.signal.symbol)));
@@ -2844,21 +3048,21 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         skippedCount += 1;
         rejectionCounts.active_symbol_gate += 1;
         const summary = symbolSummaries.get(symbol);
-        if (summary) summary.skipReason = "active_symbol_gate";
+        if (summary) summary.skipReason = "active_position_exists";
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         candidatesRejectedCount += 1;
-        logCandidateFilterResult(candidate, "rejected", "symbol_locked_open_trade");
-        emitEngineFinalDecision(candidate, "blocked", "active_symbol_gate");
+        logCandidateFilterResult(candidate, "rejected", "active_position_exists");
+        emitEngineFinalDecision(candidate, "blocked", "active_position_exists");
         continue;
       }
       if (recentSymbolSet.has(symbol)) {
         skippedCount += 1;
         rejectionCounts.active_symbol_gate += 1;
         const summary = symbolSummaries.get(symbol);
-        if (summary) summary.skipReason = "active_symbol_gate";
+        if (summary) summary.skipReason = "active_position_exists";
         skippedByReason.signal_skipped_active_symbol.add(symbol);
         candidatesRejectedCount += 1;
-        logCandidateFilterResult(candidate, "rejected", "symbol_locked_open_trade");
+        logCandidateFilterResult(candidate, "rejected", "active_position_exists");
         continue;
       }
       if (cooldownSymbolSet.has(symbol)) {
@@ -2871,17 +3075,11 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         logCandidateFilterResult(candidate, "rejected", "cooldown_active");
         continue;
       }
-      const candidateEngineId = strategyEngineId(config, candidate.signal.strategyId);
-      const tierBypassForAggressiveScalp = (
-        runtimeMode === "signal"
-        && candidateEngineId === "engine4"
-        && candidate.signal.score >= config.ENGINE4_MIN_SCORE
-      );
       if (!passesMinTier({
         candidateTier: candidate.signal.setupGrade,
-        minTier: config.SIGNAL_MIN_TIER,
+        minTier: effectiveMinTier,
         requireAPlusOnly: effectiveRequireAPlusOnly
-      }) && !tierBypassForAggressiveScalp) {
+      })) {
         skippedCount += 1;
         rejectionCounts.below_min_tier += 1;
         const summary = symbolSummaries.get(symbol);
@@ -2951,7 +3149,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         payload: {
           activeStatuses: ["OPEN", "TP1_HIT"],
           dedupeWindowSeconds: 60,
-          minTier: config.SIGNAL_MIN_TIER,
+          minTier: effectiveMinTier,
           minScore: effectiveMinScore,
           requireAPlusOnly: effectiveRequireAPlusOnly
         }
@@ -3393,7 +3591,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
   const cycleNow = new Date();
 
-  if (prismaClient && runtimeMode === "signal" && finalSelectedCandidates.length > 0) {
+  if (prismaClient && finalSelectedCandidates.length > 0) {
     const [openTrades, openOutcomes] = await Promise.all([
       prismaClient.signalTrade.findMany({
         where: activeSignalTradeWhereClause(),
@@ -3417,7 +3615,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             candidate,
             config,
             emitted: false,
-            blockedReason: "active_symbol_gate",
+            blockedReason: "active_position_exists",
             symbolLockPassed: false,
             independentMode: independentMultiEngineMode,
             nowIso: cycleNow.toISOString()
@@ -3426,9 +3624,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         skippedCount += 1;
         rejectionCounts.active_symbol_gate += 1;
         const summary = symbolSummaries.get(candidate.signal.symbol);
-        if (summary) summary.skipReason = "active_symbol_gate";
+        if (summary) summary.skipReason = "active_position_exists";
         candidatesRejectedCount += 1;
-        logCandidateFilterResult(candidate, "rejected", "symbol_locked_open_trade");
+        logCandidateFilterResult(candidate, "rejected", "active_position_exists");
         continue;
       }
       dedupedCandidates.push(candidate);
@@ -3439,9 +3637,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       await prismaClient.runtimeEvent.createMany({
         data: blockedSignalDetails.map((blocked) => ({
           type: "signal_skipped_active_symbol",
-          mode: "signal",
+          mode: runtimeMode,
           symbol: blocked.symbol,
-          message: "Skipped candidate because symbol already has active trade",
+          message: "Skipped candidate because symbol already has active trade (active_position_exists)",
           payload: blocked.detail
         }))
       });
@@ -3558,7 +3756,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       }))
     });
 
-    if (runtimeMode === "signal") {
+    if (runtimeMode !== "signal") {
       const [currentOpenTrades, currentClosedTrades] = await Promise.all([
         prismaClient.signalTrade.findMany({
           where: activeSignalTradeWhereClause(),
@@ -3622,7 +3820,12 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       for (const event of persistedSignalEvents) {
         const signalCandidate = finalSelectedCandidates.find((entry) => entry.signal.symbol === event.symbol);
         const marketTypeForEvent = signalCandidate?.signal.marketType ?? "crypto";
-        const sizingProfile = resolvePaperSizingProfile(config, marketTypeForEvent);
+        const sizingProfile = resolvePaperSizingProfileForMode(
+          config,
+          marketTypeForEvent,
+          runtimeMode,
+          signalCandidate?.signal.score ?? 0
+        );
         const duplicateOpenOnSymbol = mutableOpenPositions.some((position) => (
           position.symbol.toUpperCase() === event.symbol.toUpperCase()
           && (position.status === "open" || position.status === "partially_closed")
@@ -3664,6 +3867,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             computedRiskAmount: 0
           };
         } else {
+          const currentOpenRisk = mutableOpenPositions.reduce((sum, p) => sum + Math.max(p.riskAmountAtEntry, 0), 0);
+          const personalMaxOpenRiskAmount = account.equity * 0.015;
           decision = computePaperExecutionDecision({
             account,
             candidate: {
@@ -3676,7 +3881,10 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             capitalAllocationPct: sizingProfile.capitalAllocationPct,
             effectiveLeverageTarget: sizingProfile.leverage,
             activeSymbolBlocked: duplicateOpenOnSymbol,
-            maxCapitalBasis: account.freeMargin
+            maxCapitalBasis: account.freeMargin,
+            allowedOpenRiskAmount: runtimeMode === "personal"
+              ? Math.max(personalMaxOpenRiskAmount - currentOpenRisk, 0)
+              : undefined
           });
           if (decision.accepted && marketTypeForEvent === "forex") {
             const lotSize = sizingProfile.forexLotSize ?? 100_000;
@@ -3693,7 +3901,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         await prismaClient.runtimeEvent.create({
           data: {
             type: "signal_paper_execution_decision",
-            mode: "signal",
+            mode: runtimeMode,
             symbol: event.symbol,
             message: decision.accepted ? "paper_order_accepted" : `paper_order_rejected:${decision.rejectionReason}`,
             payload: toInputJson({
@@ -3726,12 +3934,56 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         console.log(JSON.stringify({
           event: "PAPER_EXECUTION_RESULT",
           cycleNumber,
+          mode: runtimeMode,
           symbol: event.symbol,
-          engineId: signalCandidate ? strategyEngineId(config, signalCandidate.signal.strategyId) : null,
-          strategyId: signalCandidate?.signal.strategyId ?? null,
-          accepted: decision.accepted,
+          engineId: signalCandidate ? ENGINE1_LOCKED_ENGINE_ID : null,
+          strategyId: signalCandidate?.signal.strategyId ?? ENGINE1_LOCKED_STRATEGY_ID,
+          qualityTier: signalCandidate?.signal.setupGrade ?? null,
+          entry: event.entry,
+          stop: dynamicExits.stopPrice,
+          tp1: dynamicExits.tp1Price,
+          tp2: dynamicExits.tp2Price,
+          positionSize: decision.computedQty,
+          notional: decision.computedNotional,
+          riskPct: sizingProfile.riskPct,
+          leverage: sizingProfile.leverage,
+          decisionOutcome: decision.accepted ? "accepted" : "rejected",
           rejectionReason: decision.rejectionReason ?? null
         }, null, 2));
+        console.log(
+          JSON.stringify(
+            {
+              event: "TRADE_DECISION",
+              timestamp: cycleNow.toISOString(),
+              symbol: event.symbol,
+              engineId: ENGINE1_LOCKED_ENGINE_ID,
+              CAPITAL_MODE: runtimeMode,
+              direction: event.side,
+              qualityTier: signalCandidate?.signal.setupGrade ?? null,
+              entryPrice: event.entry,
+              stopLoss: dynamicExits.stopPrice,
+              tp1: dynamicExits.tp1Price,
+              tp2: dynamicExits.tp2Price,
+              riskPct: sizingProfile.riskPct,
+              positionSize: decision.computedQty,
+              notional: decision.computedNotional,
+              leverage: sizingProfile.leverage,
+              expectedRR: toExpectedR(event.entry, dynamicExits.stopPrice, dynamicExits.tp2Price, event.side),
+              setupType: inferSetupType(
+                typeof signalCandidate?.signal.metadata?.setupVariant === "string"
+                  ? signalCandidate.signal.metadata.setupVariant
+                  : undefined,
+                signalCandidate?.signal.strategyId ?? ENGINE1_LOCKED_STRATEGY_ID
+              ),
+              confidence: signalCandidate?.signal.confidence ?? null,
+              accepted: decision.accepted,
+              decisionOutcome: decision.accepted ? "accepted" : "rejected",
+              rejectionReason: decision.rejectionReason ?? null
+            },
+            null,
+            2
+          )
+        );
 
         if (!decision.accepted) {
           const board = symbolScanBoard.get(event.symbol);
@@ -3788,7 +4040,23 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           }
         });
         paperExecutedSignalSymbols.add(event.symbol.toUpperCase());
+        initialRiskByTradeId.set(persistedTrade.id, decision.computedRiskAmount);
         paperExecutedCount += 1;
+        console.log(
+          JSON.stringify(
+            {
+              event: "TRADE_LIFECYCLE",
+              timestamp: cycleNow.toISOString(),
+              tradeEvent: "trade_opened",
+              symbol: event.symbol,
+              engineId: ENGINE1_LOCKED_ENGINE_ID,
+              CAPITAL_MODE: runtimeMode,
+              tradeId: persistedTrade.id
+            },
+            null,
+            2
+          )
+        );
         const board = symbolScanBoard.get(event.symbol);
         if (board) {
           board.paperExecuted = true;
@@ -3813,7 +4081,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             decisions: [],
             selectedSignals: [dispatchSignal],
             cycleId,
-            minTier: config.SIGNAL_MIN_TIER,
+            minTier: effectiveMinTier,
             maxSignals: 1
           }).messages[0];
           if (entryMessage) {
@@ -3855,7 +4123,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
   }
 
-  if (prismaClient && runtimeMode === "signal") {
+  if (prismaClient && runtimeMode !== "signal") {
     const openSignalTrades = await prismaClient.signalTrade.findMany({
       where: activeSignalTradeWhereClause()
     });
@@ -3864,7 +4132,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       ? await prismaClient.runtimeEvent.findMany({
           where: {
             type: "signal_paper_execution_decision",
-            mode: "signal"
+            mode: runtimeMode
           },
           orderBy: { createdAt: "desc" },
           take: 500
@@ -4115,6 +4383,16 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         continue;
       }
 
+      const lifecycleEventName = nextValues.status === "tp1_hit"
+        ? "tp1_hit"
+        : nextValues.status === "tp2_hit"
+          ? "tp2_hit"
+          : nextValues.status === "stop_hit"
+            ? "stop_loss_hit"
+            : nextValues.status === "closed"
+              ? "time_based_exit"
+              : null;
+
       await prismaClient.signalTrade.update({
         where: { id: trade.id },
         data: updates
@@ -4141,6 +4419,44 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           }
         }
       });
+
+      const initialRisk = initialRiskByTradeId.get(trade.id) ?? Math.max(trade.riskAmount ?? 0, 0.0000001);
+      const pnlDelta = (nextValues.realizedPnl ?? 0) - (originalValues.realizedPnl ?? 0);
+      performanceTracker.equity += pnlDelta;
+      if (performanceTracker.equity > performanceTracker.peakEquity) {
+        performanceTracker.peakEquity = performanceTracker.equity;
+      }
+      performanceTracker.drawdownPct = performanceTracker.peakEquity > 0
+        ? Math.max(((performanceTracker.peakEquity - performanceTracker.equity) / performanceTracker.peakEquity) * 100, 0)
+        : 0;
+      if (lifecycleResolved) {
+        const tradeR = initialRisk > 0 ? (nextValues.realizedPnl ?? 0) / initialRisk : 0;
+        performanceTracker.totalTrades += 1;
+        performanceTracker.sumR += tradeR;
+        if ((nextValues.realizedPnl ?? 0) > 0) performanceTracker.wins += 1;
+        if ((nextValues.realizedPnl ?? 0) < 0) performanceTracker.losses += 1;
+        initialRiskByTradeId.delete(trade.id);
+      }
+      if (lifecycleEventName) {
+        console.log(
+          JSON.stringify(
+            {
+              event: "TRADE_LIFECYCLE",
+              timestamp: cycleNow.toISOString(),
+              tradeEvent: lifecycleEventName,
+              symbol: trade.symbol,
+              engineId: ENGINE1_LOCKED_ENGINE_ID,
+              CAPITAL_MODE: runtimeMode,
+              tradeId: trade.id,
+              status: nextValues.status,
+              outcome: nextValues.outcome,
+              realizedPnl: nextValues.realizedPnl ?? 0
+            },
+            null,
+            2
+          )
+        );
+      }
     }
   }
 
@@ -4325,9 +4641,37 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
   }
 
-  const emittedCandidates = runtimeMode === "signal"
-    ? finalSelectedCandidates.filter((entry) => paperExecutedSignalSymbols.has(entry.signal.symbol.toUpperCase()))
-    : finalSelectedCandidates;
+  const emittedCandidates = finalSelectedCandidates;
+  for (const candidate of emittedCandidates) {
+    const setupVariant = typeof candidate.signal.metadata?.setupVariant === "string"
+      ? candidate.signal.metadata.setupVariant
+      : candidate.signal.strategyId;
+    console.log(
+      JSON.stringify(
+        {
+          event: "TRADE_DECISION",
+          timestamp: cycleNow.toISOString(),
+          symbol: candidate.signal.symbol,
+          engineId: ENGINE1_LOCKED_ENGINE_ID,
+          CAPITAL_MODE: runtimeMode,
+          direction: candidate.signal.side,
+          entryPrice: candidate.signal.entryPrice,
+          stopLoss: candidate.signal.stopPrice,
+          tp1: candidate.signal.tp1,
+          tp2: candidate.signal.tp2,
+          riskPct: runtimeMode === "personal" ? 0.005 : runtimeMode === "prop" ? 0.0025 : 0,
+          positionSize: 0,
+          expectedRR: tp2RewardToRisk(candidate.signal),
+          setupType: inferSetupType(setupVariant, candidate.signal.strategyId),
+          confidence: candidate.signal.confidence ?? null,
+          accepted: true,
+          rejectionReason: null
+        },
+        null,
+        2
+      )
+    );
+  }
   for (const candidate of finalSelectedCandidates) {
     const board = symbolScanBoard.get(candidate.signal.symbol);
     if (!board) continue;
@@ -4402,7 +4746,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         decisions: allocation.decisions,
         selectedSignals: emittedCandidates.map((entry) => entry.signal),
         cycleId,
-        minTier: config.SIGNAL_MIN_TIER,
+        minTier: effectiveMinTier,
         maxSignals: effectiveTelegramCap
       })
     : null;
@@ -5459,7 +5803,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         },
         diversificationNotes,
         thresholdPolicy: {
-          minTier: config.SIGNAL_MIN_TIER,
+          minTier: effectiveMinTier,
           minScore: config.SIGNAL_MIN_SCORE,
           requireAPlusOnly: effectiveRequireAPlusOnly,
           effectiveMinScore
@@ -5558,6 +5902,26 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   }
 
   const durationMs = Date.now() - cycleStartedAtMs;
+  if (cycleNumber % PERFORMANCE_SUMMARY_INTERVAL_CYCLES === 0) {
+    const winrate = performanceTracker.totalTrades > 0
+      ? (performanceTracker.wins / performanceTracker.totalTrades) * 100
+      : 0;
+    const avgR = performanceTracker.totalTrades > 0
+      ? performanceTracker.sumR / performanceTracker.totalTrades
+      : 0;
+    console.log("=== PERFORMANCE SUMMARY ===");
+    console.log(`Trades: ${performanceTracker.totalTrades}`);
+    console.log(`Winrate: ${winrate.toFixed(2)}%`);
+    console.log(`Avg R: ${avgR.toFixed(3)}`);
+    console.log(`Equity: ${performanceTracker.equity.toFixed(2)}`);
+    console.log(`Drawdown: ${performanceTracker.drawdownPct.toFixed(2)}%`);
+    console.log(`Mode: ${runtimeMode}`);
+    console.log(`Wins: ${performanceTracker.wins}`);
+    console.log(`Losses: ${performanceTracker.losses}`);
+    console.log(`Open Trades: ${currentOpenPositionsCount}`);
+    console.log(`Basket Symbols: ${runtimeSymbols.length}`);
+    console.log(`Signals Sent This Cycle: ${dispatchedTelegramCount}`);
+  }
   console.log(
     JSON.stringify(
       {
@@ -5687,7 +6051,19 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 }
 
 async function startWorkerLoop() {
-  const config = getConfig();
+  const config = applyRuntimeControlConfig(getConfig());
+  const phaseLock = config.ENGINE_PHASE_LOCK === "engine1_only" ? "engine1_only" : "engine1_only";
+  console.log(JSON.stringify({
+    event: "ENGINE_PHASE_LOCK",
+    configured: config.ENGINE_PHASE_LOCK,
+    effective: phaseLock,
+    strategyId: ENGINE1_LOCKED_STRATEGY_ID,
+    engineId: ENGINE1_LOCKED_ENGINE_ID
+  }, null, 2));
+  if (config.ENGINE_MODE === "replay") {
+    await runContinuousReplayBacktest(config);
+    return;
+  }
   try {
     if (!config.SKIP_INFRA_CHECKS) {
       const { prisma } = await import("@hashi/db");
@@ -5805,6 +6181,119 @@ async function startWorkerLoop() {
     const waitMs = Math.max(loopIntervalMs - elapsedMs, 0);
     await sleep(waitMs);
   }
+}
+
+async function runContinuousReplayBacktest(config: ReturnType<typeof getConfig>) {
+  const strategyId = ENGINE1_LOCKED_STRATEGY_ID;
+  const strategyEntry = getStrategyById(strategyId);
+  if (!strategyEntry) {
+    throw new Error(`strategy_not_registered:${strategyId}`);
+  }
+
+  const replayMode = toRuntimeMode(config);
+  const riskPercent = replayMode === "personal"
+    ? 0.005
+    : replayMode === "prop"
+      ? 0.0025
+      : 0.005;
+  const initialBalance = config.SIGNAL_CRYPTO_PAPER_EQUITY;
+  const candles = await loadCandlesFromCsv({
+    filePath: resolveWorkspaceFilePath(config.REPLAY_DATASET_PATH),
+    source: "binance_spot"
+  });
+  console.log(
+    JSON.stringify(
+      {
+        event: "replay_backtest_start",
+        ENGINE_MODE: config.ENGINE_MODE,
+        strategyId,
+        symbol: "ETHUSDT",
+        timeframe: "15m",
+        candles: candles.length,
+        dataset: config.REPLAY_DATASET_PATH
+      },
+      null,
+      2
+    )
+  );
+
+  const engine = new BacktestEngine(strategyEntry.create());
+  const run = await engine.run(candles, {
+    name: "worker_replay_engine1_continuous",
+    symbol: "ETHUSDT",
+    timeframe: "15m",
+    mode: replayMode,
+    initialBalance,
+    riskPercent,
+    allowCompounding: true,
+    warmupCandles: 300,
+    minScore: config.SIGNAL_MIN_SCORE,
+    oneTradeAtTime: true
+  });
+
+  for (const trade of run.result.trades) {
+    console.log(
+      JSON.stringify(
+        {
+          event: "TRADE_LIFECYCLE",
+          timestamp: new Date(trade.entryTime).toISOString(),
+          tradeEvent: "trade_opened",
+          symbol: trade.symbol,
+          engineId: ENGINE1_LOCKED_ENGINE_ID,
+          CAPITAL_MODE: replayMode,
+          tradeId: trade.id,
+          entry: trade.entry,
+          stop: trade.stop,
+          tp1: trade.tp1,
+          tp2: trade.tp2
+        },
+        null,
+        2
+      )
+    );
+    const lifecycleType = trade.exitReason === "tp2"
+      ? "tp2_hit"
+      : trade.exitReason === "stop"
+        ? trade.outcomeType === "partial_then_stop"
+          ? "tp1_hit_then_stop"
+          : "stop_loss_hit"
+        : "time_based_exit";
+    console.log(
+      JSON.stringify(
+        {
+          event: "TRADE_LIFECYCLE",
+          timestamp: new Date(trade.exitTime).toISOString(),
+          tradeEvent: lifecycleType,
+          symbol: trade.symbol,
+          engineId: ENGINE1_LOCKED_ENGINE_ID,
+          CAPITAL_MODE: replayMode,
+          tradeId: trade.id,
+          rMultiple: trade.rMultiple,
+          pnl: trade.pnl
+        },
+        null,
+        2
+      )
+    );
+  }
+
+  const totalTrades = run.result.summary.totalTrades;
+  const winratePct = run.result.summary.winRate * 100;
+  const totalR = run.result.trades.reduce((sum, trade) => sum + trade.rMultiple, 0);
+  const avgR = totalTrades > 0 ? totalR / totalTrades : 0;
+  const maxDrawdownPct = run.result.summary.maxDrawdown * 100;
+  const finalEquity = run.result.equityCurve.at(-1)?.equity ?? initialBalance;
+
+  console.log("=== FINAL BACKTEST RESULT ===");
+  console.log(`Total Trades: ${totalTrades}`);
+  console.log(`Winrate: ${winratePct.toFixed(2)}%`);
+  console.log(`Avg R: ${avgR.toFixed(4)}`);
+  console.log(`Total R: ${totalR.toFixed(4)}`);
+  console.log(`Max Drawdown: ${maxDrawdownPct.toFixed(2)}%`);
+  console.log(`Final Equity: ${finalEquity.toFixed(2)}`);
+  console.log(`Mode: ${replayMode}`);
+  console.log(`Profitable: ${finalEquity > initialBalance ? "YES" : "NO"}`);
+  console.log(`ENGINE1_ACCEPTED_BASELINE: ${ENGINE1_ACCEPTED_BASELINE ? "true" : "false"}`);
 }
 
 startWorkerLoop().catch((error) => {

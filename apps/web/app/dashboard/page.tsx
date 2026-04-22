@@ -82,6 +82,19 @@ type SystemControlPayload = {
   updatedAt: string;
 };
 
+type RuntimeConfigPayload = {
+  mode: "signal" | "personal" | "prop";
+  modes: Record<"signal" | "personal" | "prop", {
+    symbols: string[];
+    riskPerTradePct: number;
+    maxOpenRiskPct: number;
+    baseLeverage: number;
+    maxLeverage: number;
+  }>;
+  enginePhaseLock: "engine1_only";
+  updatedAt: string;
+};
+
 const EMPTY_TIER_METRICS: SignalTierMetrics = {
   total: 0,
   resolved: 0,
@@ -130,6 +143,15 @@ export default function DashboardPage() {
   const [controlSymbolsInput, setControlSymbolsInput] = useState("");
   const [controlSaving, setControlSaving] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigPayload | null>(null);
+  const [configExpanded, setConfigExpanded] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [symbolsInput, setSymbolsInput] = useState("");
+  const [riskPerTradePct, setRiskPerTradePct] = useState("");
+  const [maxOpenRiskPct, setMaxOpenRiskPct] = useState("");
+  const [baseLeverage, setBaseLeverage] = useState("");
+  const [maxLeverage, setMaxLeverage] = useState("");
 
   useEffect(() => {
     let mounted = true;
@@ -142,9 +164,10 @@ export default function DashboardPage() {
       fetch("/api/incidents").then((res) => (res.ok ? (res.json() as Promise<{ incidents: Array<{ id: string; resolved: boolean }> }>) : null)),
       fetch("/api/signal-performance").then((res) => (res.ok ? (res.json() as Promise<SignalPerformancePayload>) : null)),
       fetch("/api/signal-integrity-check").then((res) => (res.ok ? (res.json() as Promise<DashboardPayload["signalIntegrity"]>) : null)),
-      fetch("/api/system-control").then((res) => (res.ok ? (res.json() as Promise<{ control: SystemControlPayload }>) : null))
+      fetch("/api/system-control").then((res) => (res.ok ? (res.json() as Promise<{ control: SystemControlPayload }>) : null)),
+      fetch("/api/control/config").then((res) => (res.ok ? (res.json() as Promise<{ config: RuntimeConfigPayload }>) : null))
     ])
-      .then(([signalRoom, personalRoom, propRoom, controlRoom, runtimeRes, incidentsRes, performanceRes, integrityRes, controlRes]) => {
+      .then(([signalRoom, personalRoom, propRoom, controlRoom, runtimeRes, incidentsRes, performanceRes, integrityRes, controlRes, configRes]) => {
         if (!mounted) return;
         setData({
           signalRoom,
@@ -158,6 +181,7 @@ export default function DashboardPage() {
         });
         setControl(controlRes?.control ?? null);
         setControlSymbolsInput((controlRes?.control?.allowedSymbols ?? []).join(", "));
+        setRuntimeConfig(configRes?.config ?? null);
         setError(null);
       })
       .catch((err: unknown) => {
@@ -179,6 +203,17 @@ export default function DashboardPage() {
       clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (!runtimeConfig) return;
+    const mode = runtimeConfig.mode;
+    const modeConfig = runtimeConfig.modes[mode];
+    setSymbolsInput(modeConfig.symbols.join(", "));
+    setRiskPerTradePct(modeConfig.riskPerTradePct.toString());
+    setMaxOpenRiskPct(modeConfig.maxOpenRiskPct.toString());
+    setBaseLeverage(modeConfig.baseLeverage.toString());
+    setMaxLeverage(modeConfig.maxLeverage.toString());
+  }, [runtimeConfig?.mode, runtimeConfig]);
 
   const latestSignalAt = useMemo(() => data.signalRoom?.summary.latestSignalTimestamp ?? null, [data.signalRoom]);
 
@@ -209,6 +244,83 @@ export default function DashboardPage() {
     .split(",")
     .map((entry) => entry.trim().toUpperCase())
     .filter(Boolean);
+  const parsedConfigSymbols = symbolsInput.split(",").map((entry) => entry.trim().toUpperCase()).filter(Boolean);
+
+  async function loadControlConfig() {
+    const response = await fetch("/api/control/config", { cache: "no-store" });
+    if (!response.ok) throw new Error("Unable to load runtime config");
+    const payload = (await response.json()) as { config: RuntimeConfigPayload; control?: SystemControlPayload };
+    setRuntimeConfig(payload.config);
+  }
+
+  async function saveModeConfig() {
+    if (!runtimeConfig) return;
+    setConfigSaving(true);
+    setConfigError(null);
+    try {
+      const response = await fetch("/api/control/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: runtimeConfig.mode,
+          symbolsCsv: symbolsInput,
+          riskPerTradePct: Number(riskPerTradePct),
+          maxOpenRiskPct: Number(maxOpenRiskPct),
+          baseLeverage: Number(baseLeverage),
+          maxLeverage: Number(maxLeverage)
+        })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(payload?.message ?? "config_save_failed");
+      }
+      await loadControlConfig();
+    } catch (err: unknown) {
+      setConfigError(err instanceof Error ? err.message : "config_save_failed");
+    } finally {
+      setConfigSaving(false);
+    }
+  }
+
+  async function startBot() {
+    setControlSaving(true);
+    setControlError(null);
+    try {
+      const response = await fetch("/api/control/start", { method: "POST" });
+      if (response.status === 409) {
+        setControlError("Bot is already running.");
+      } else if (!response.ok) {
+        throw new Error("start_failed");
+      }
+      const status = await fetch("/api/control/status", { cache: "no-store" });
+      const payload = (await status.json()) as { control: SystemControlPayload };
+      setControl(payload.control);
+    } catch (err: unknown) {
+      setControlError(err instanceof Error ? err.message : "start_failed");
+    } finally {
+      setControlSaving(false);
+    }
+  }
+
+  async function stopBot() {
+    setControlSaving(true);
+    setControlError(null);
+    try {
+      const response = await fetch("/api/control/stop", { method: "POST" });
+      if (response.status === 409) {
+        setControlError("Bot is already stopped.");
+      } else if (!response.ok) {
+        throw new Error("stop_failed");
+      }
+      const status = await fetch("/api/control/status", { cache: "no-store" });
+      const payload = (await status.json()) as { control: SystemControlPayload };
+      setControl(payload.control);
+    } catch (err: unknown) {
+      setControlError(err instanceof Error ? err.message : "stop_failed");
+    } finally {
+      setControlSaving(false);
+    }
+  }
 
   const signalPerformance = data.signalPerformance;
   const aPlusMetrics = signalPerformance?.perTier["A+"] ?? EMPTY_TIER_METRICS;
@@ -388,6 +500,95 @@ export default function DashboardPage() {
           <Card title="System Control">
             {control ? (
               <div className="space-y-3 text-sm text-slate-200">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-700/70 bg-slate-950/40 p-3">
+                  <div className="space-y-1">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Mode Control Bar</p>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs text-slate-400" htmlFor="mode-select">Mode</label>
+                      <select
+                        id="mode-select"
+                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs"
+                        value={runtimeConfig?.mode ?? control.activeMode}
+                        onChange={(event) => setRuntimeConfig((prev) => prev ? { ...prev, mode: event.target.value as RuntimeConfigPayload["mode"] } : prev)}
+                        disabled={controlSaving || configSaving}
+                      >
+                        <option value="signal">Signal</option>
+                        <option value="personal">Personal</option>
+                        <option value="prop">Prop</option>
+                      </select>
+                      <span className="rounded border border-slate-700 px-2 py-1 text-xs">
+                        Active: {control.activeMode}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`rounded px-2 py-1 text-xs font-semibold ${control.isRunning ? "bg-emerald-800/40 text-emerald-200" : "bg-slate-700/60 text-slate-200"}`}>
+                      {control.isRunning ? "RUNNING" : "STOPPED"}
+                    </span>
+                    <button
+                      className="rounded border border-emerald-600/70 bg-emerald-700/20 px-3 py-1 text-xs text-emerald-200 hover:bg-emerald-700/35 disabled:opacity-50"
+                      onClick={startBot}
+                      disabled={controlSaving || control.isRunning}
+                    >
+                      START BOT
+                    </button>
+                    <button
+                      className="rounded border border-rose-600/70 bg-rose-700/20 px-3 py-1 text-xs text-rose-200 hover:bg-rose-700/35 disabled:opacity-50"
+                      onClick={stopBot}
+                      disabled={controlSaving || !control.isRunning}
+                    >
+                      STOP BOT
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded border border-slate-700/70 bg-slate-950/40 p-3">
+                  <button
+                    className="w-full text-left text-xs font-semibold uppercase tracking-wide text-slate-300"
+                    onClick={() => setConfigExpanded((prev) => !prev)}
+                    type="button"
+                  >
+                    Mode Configuration {configExpanded ? "▲" : "▼"}
+                  </button>
+                  {configExpanded && runtimeConfig && (
+                    <div className="mt-3 space-y-2 text-xs">
+                      <label className="block text-slate-400">Symbols (comma-separated)</label>
+                      <input
+                        className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1"
+                        value={symbolsInput}
+                        onChange={(event) => setSymbolsInput(event.target.value)}
+                      />
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div>
+                          <label className="block text-slate-400">Risk per trade (%)</label>
+                          <input className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1" value={riskPerTradePct} onChange={(event) => setRiskPerTradePct(event.target.value)} />
+                        </div>
+                        <div>
+                          <label className="block text-slate-400">Max open risk (%)</label>
+                          <input className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1" value={maxOpenRiskPct} onChange={(event) => setMaxOpenRiskPct(event.target.value)} />
+                        </div>
+                        <div>
+                          <label className="block text-slate-400">Base leverage</label>
+                          <input className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1" value={baseLeverage} onChange={(event) => setBaseLeverage(event.target.value)} />
+                        </div>
+                        <div>
+                          <label className="block text-slate-400">Max leverage</label>
+                          <input className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1" value={maxLeverage} onChange={(event) => setMaxLeverage(event.target.value)} />
+                        </div>
+                      </div>
+                      <button
+                        className="rounded border border-slate-700 px-3 py-1 hover:bg-slate-800 disabled:opacity-50"
+                        onClick={saveModeConfig}
+                        disabled={configSaving || parsedConfigSymbols.length === 0 || Number(maxLeverage) < Number(baseLeverage)}
+                      >
+                        Save mode configuration
+                      </button>
+                      {configError && <p className="rounded border border-rose-700/50 bg-rose-900/20 p-2 text-xs text-rose-200">{configError}</p>}
+                      <p className="text-slate-400">Engine lock: {runtimeConfig.enginePhaseLock}</p>
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     className="rounded border border-slate-700 px-3 py-1 text-xs hover:bg-slate-800 disabled:opacity-50"
