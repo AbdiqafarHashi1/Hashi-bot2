@@ -25,16 +25,44 @@ export class CryptoLiveKlineAdapter implements MarketTypeLiveAnalysisAdapter {
       this.primary.healthCheck().catch(() => false),
       this.backup.healthCheck().catch(() => false)
     ]);
+    if (symbols.length === 0) {
+      return {
+        marketType: "crypto",
+        adapterPresent: true,
+        transportConnected: false,
+        reason: "no_crypto_symbols_configured",
+        symbolsReady: [],
+        symbolsNotReady: symbols
+      };
+    }
+
+    const symbolChecks = await Promise.all(symbols.map(async (symbol) => {
+      try {
+        const candles = await this.primary.getCandles(symbol, "15m", 4);
+        return { symbol, ready: candles.length > 0 };
+      } catch {
+        try {
+          const candles = await this.backup.getCandles(symbol, "15m", 4);
+          return { symbol, ready: candles.length > 0 };
+        } catch {
+          return { symbol, ready: false };
+        }
+      }
+    }));
+    const symbolsReady = symbolChecks.filter((entry) => entry.ready).map((entry) => entry.symbol);
+    const symbolsNotReady = symbolChecks.filter((entry) => !entry.ready).map((entry) => entry.symbol);
 
     return {
       marketType: "crypto",
       adapterPresent: true,
-      transportConnected: primaryConnected || backupConnected,
-      reason: primaryConnected || backupConnected
-        ? "kline transport reachable"
-        : "primary and backup crypto providers failed health checks",
-      symbolsReady: primaryConnected || backupConnected ? symbols : [],
-      symbolsNotReady: primaryConnected || backupConnected ? [] : symbols
+      transportConnected: symbolsReady.length > 0,
+      reason: symbolsReady.length > 0
+        ? "kline transport reachable_and_initial_candles_received"
+        : (primaryConnected || backupConnected)
+          ? "transport_reachable_but_no_initial_candles"
+          : "healthcheck_failed_and_no_initial_candles",
+      symbolsReady,
+      symbolsNotReady
     };
   }
 
@@ -128,7 +156,8 @@ export class CryptoLiveKlineAdapter implements MarketTypeLiveAnalysisAdapter {
       marketType: "crypto",
       provider,
       result: "ok",
-      reason: "provider_payload_valid"
+      reason: "provider_payload_valid",
+      sample15mCandle: candles15m.at(-1) ?? null
     }, null, 2));
 
     return {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readSystemControlFile, writeSystemControlFile } from "../../../lib/system-control-store";
 
 type ActiveMode = "signal" | "personal" | "prop";
 
@@ -41,19 +42,14 @@ async function ensureControlRow(prisma: Awaited<ReturnType<typeof resolvePrisma>
 
 export async function GET() {
   const prisma = await resolvePrisma();
-  if (!prisma) {
-    return NextResponse.json({ message: "System control unavailable: prisma client is not initialized." }, { status: 503 });
-  }
-
+  if (!prisma) return NextResponse.json({ control: await readSystemControlFile() });
   const control = await ensureControlRow(prisma);
+  if (!control) return NextResponse.json({ control: await readSystemControlFile() });
   return NextResponse.json({ control });
 }
 
 export async function POST(request: Request) {
   const prisma = await resolvePrisma();
-  if (!prisma) {
-    return NextResponse.json({ message: "System control unavailable: prisma client is not initialized." }, { status: 503 });
-  }
 
   const payload = (await request.json().catch(() => ({}))) as {
     isRunning?: unknown;
@@ -98,9 +94,15 @@ export async function POST(request: Request) {
     updateData.allowedSymbols = normalized;
   }
 
+  if (!prisma) {
+    const control = await writeSystemControlFile(updateData);
+    return NextResponse.json({ control });
+  }
+
   const existing = await ensureControlRow(prisma);
   if (!existing) {
-    return NextResponse.json({ message: "System control unavailable: prisma client is not initialized." }, { status: 503 });
+    const control = await writeSystemControlFile(updateData);
+    return NextResponse.json({ control });
   }
   const control = await prisma.systemControl.update({
     where: { id: existing.id },
@@ -117,6 +119,15 @@ export async function POST(request: Request) {
         updatedAt: control.updatedAt
       }
     }
+  });
+
+  await writeSystemControlFile({
+    id: "system",
+    isRunning: control.isRunning,
+    activeMode: control.activeMode as ActiveMode,
+    killSwitchActive: control.killSwitchActive,
+    allowedSymbols: control.allowedSymbols,
+    updatedAt: control.updatedAt.toISOString()
   });
 
   return NextResponse.json({ control });

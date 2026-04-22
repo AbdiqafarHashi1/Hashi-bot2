@@ -6,6 +6,9 @@ const providerSchema = z.enum(["binance", "bybit"]);
 const timeframeSchema = z.enum(["5m", "15m", "1h", "4h"] satisfies [Timeframe, ...Timeframe[]]);
 const breakoutOperatingModeSchema = z.enum(["stable", "growth", "bounded_aggression"]);
 const executionModeSchema = z.enum(["signal_only", "live_personal", "live_prop"]);
+const capitalModeSchema = z.enum(["signal", "personal", "prop"]);
+const engineModeSchema = z.enum(["live", "replay"]);
+const enginePhaseLockSchema = z.enum(["engine1_only", "legacy"]);
 const marketTypeSchema = z.enum(["crypto", "forex"]);
 const signalTierSchema = z.enum(["A+", "A", "B"]);
 const signalTp1ProtectModeSchema = z.enum(["break_even", "offset_r"]);
@@ -50,12 +53,12 @@ const optionalPositiveNumberSchema = z.preprocess(
 );
 
 const envSchema = z.object({
-  DATABASE_URL: z.string().min(1),
-  REDIS_URL: z.string().min(1),
+  DATABASE_URL: z.string().min(1).default("postgresql://postgres:postgres@localhost:5432/hashi_bot2"),
+  REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
   NEXT_PUBLIC_APP_NAME: z.string().default("hashi-bot2"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DEFAULT_SYMBOL: z.string().default("ETHUSDT"),
-  DEFAULT_SYMBOLS: csvSymbolsSchema.default("ETHUSDT,BTCUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT"),
+  DEFAULT_SYMBOLS: csvSymbolsSchema.default(""),
   DEFAULT_CRYPTO_SYMBOLS: csvSymbolsSchema,
   DEFAULT_FOREX_SYMBOLS: csvSymbolsSchema,
   MARKET_TYPE: marketTypeSchema.default("crypto"),
@@ -110,6 +113,10 @@ const envSchema = z.object({
   DEFAULT_DATASET_PATH: z.string().default("data/ETHUSDT_15m.csv"),
   EQUITY_START: z.coerce.number().positive().default(10_000),
   EXECUTION_MODE: executionModeSchema.default("signal_only"),
+  ENGINE_MODE: engineModeSchema.default("live"),
+  ENGINE_PHASE_LOCK: enginePhaseLockSchema.default("engine1_only"),
+  REPLAY_DATASET_PATH: z.string().default("data/ETHUSDT_15m.csv"),
+  CAPITAL_MODE: capitalModeSchema.default("signal"),
   MULTI_ENGINE_EXECUTION_MODE: multiEngineExecutionModeSchema.default("independent"),
   ACTIVE_PRODUCTION_STRATEGY: z.enum(["compression_breakout_balanced", "compression_breakout_strict"]).default("compression_breakout_balanced"),
   SIGNAL_ENABLE_ENGINE2: booleanFlagSchema.default(true),
