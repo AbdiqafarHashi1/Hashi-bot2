@@ -478,6 +478,13 @@ export type SignalRoomPayload = {
       minScore: number;
       requireAPlusOnly: boolean;
       effectiveMinScore: number;
+      dailySignalTarget?: number;
+      symbolCooldownMinutes?: number;
+      globalCooldownMinutes?: number;
+      signalsSentToday?: number;
+      remainingSignalAllowance?: number;
+      lastSignalTime?: string | null;
+      nextEligibleSignalTime?: string | null;
     };
     marketModePolicy: {
       cryptoEnabled: boolean;

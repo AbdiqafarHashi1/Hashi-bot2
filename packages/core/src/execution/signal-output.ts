@@ -121,21 +121,24 @@ export function buildSignalModePayload(input: {
     const expectedHoldType = typeof signal.metadata?.expectedHoldType === "string"
       ? signal.metadata.expectedHoldType
       : "intraday";
+    const setupLabel = typeof signal.metadata?.setupVariant === "string"
+      ? signal.metadata.setupVariant
+      : "engine1_breakout_core";
     const rr = rrTp2(signal);
     return [
-      "🔥 TRADE SIGNAL",
+      "🔥 SIGNAL ALERT",
       "",
       `Symbol: ${signal.symbol}`,
-      `Market: ${signal.marketType}`,
       `Direction: ${signal.side}`,
-      `Engine: ${signal.engineId}`,
-      `Strategy: ${signal.strategyId}`,
+      `Tier: ${signal.setupGrade}`,
       `Entry: ${signal.entry.toFixed(6)}`,
-      `Stop: ${signal.stop.toFixed(6)}`,
+      `SL: ${signal.stop.toFixed(6)}`,
       `TP1: ${signal.tp1.toFixed(6)}`,
       `TP2: ${signal.tp2.toFixed(6)}`,
-      `R:R (TP2): ${rr.toFixed(2)}`,
-      `Setup Quality: ${signal.setupGrade}`,
+      `R:R: ${rr.toFixed(2)}`,
+      `Setup: ${setupLabel}`,
+      `Engine: ${signal.engineId}`,
+      `Strategy: ${signal.strategyId}`,
       `Expected Hold: ${expectedHoldType}`,
       `Timestamp: ${signal.timestamp}`,
       "",
@@ -144,7 +147,9 @@ export function buildSignalModePayload(input: {
       `Operator Risk: ${signal.riskRecommendationLabel}`,
       `Manual Risk Range: ${signal.suggestedManualRiskPctRange}`,
       `Manual Leverage Range: ${signal.suggestedManualLeverageRange}`,
-      reasonSection
+      reasonSection,
+      "",
+      "Signal only — manage risk"
     ].join("\n");
   });
 

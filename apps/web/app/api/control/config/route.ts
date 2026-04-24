@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { ensureControlRow, resolvePrisma } from "../_shared";
-import { readRuntimeControlConfig, writeRuntimeControlConfig, type RuntimeControlConfig, type RuntimeMode } from "../../../../lib/runtime-control-config";
+import {
+  readRuntimeControlConfig,
+  writeRuntimeControlConfig,
+  type RuntimeControlConfig,
+  type RuntimeDataSource,
+  type RuntimeMode
+} from "../../../../lib/runtime-control-config";
 import { writeSystemControlFile } from "../../../../lib/system-control-store";
 
 function normalizeSymbols(value: unknown): string[] {
@@ -20,6 +26,9 @@ export async function GET() {
 export async function POST(request: Request) {
   const payload = (await request.json().catch(() => ({}))) as Partial<RuntimeControlConfig> & {
     mode?: RuntimeMode;
+    dataSource?: RuntimeDataSource;
+    replayDatasetPath?: string;
+    signalMode?: Partial<RuntimeControlConfig["signalMode"]>;
     symbolsCsv?: string;
     riskPerTradePct?: number;
     maxOpenRiskPct?: number;
@@ -28,10 +37,17 @@ export async function POST(request: Request) {
   };
   const current = await readRuntimeControlConfig();
   const targetMode: RuntimeMode = payload.mode === "personal" || payload.mode === "prop" ? payload.mode : "signal";
+  const dataSource: RuntimeDataSource = payload.dataSource === "replay" ? "replay" : "live";
   const currentModeConfig = current.modes[targetMode];
   const updated: RuntimeControlConfig = {
     ...current,
     mode: targetMode,
+    dataSource,
+    replayDatasetPath: payload.replayDatasetPath?.trim() || current.replayDatasetPath || "data/datasets/ETHUSDT_15m.csv",
+    signalMode: {
+      ...current.signalMode,
+      ...payload.signalMode
+    },
     modes: {
       ...current.modes,
       [targetMode]: {

@@ -69,13 +69,15 @@ class ForcedFailureProvider implements MarketDataProvider {
 class DatasetSpotProvider implements MarketDataProvider {
   private readonly datasetBySymbol: Record<string, string>;
   private readonly windowOffset: number;
+  private readonly replayCursor?: number;
   private readonly candleCache = new Map<string, Candle[]>();
 
-  constructor(datasetBySymbol: Record<string, string>, windowOffset: number) {
+  constructor(datasetBySymbol: Record<string, string>, windowOffset: number, replayCursor?: number) {
     this.datasetBySymbol = Object.fromEntries(
       Object.entries(datasetBySymbol).map(([symbol, datasetPath]) => [symbol.toUpperCase(), datasetPath])
     );
     this.windowOffset = Math.max(0, Math.floor(windowOffset));
+    this.replayCursor = replayCursor !== undefined ? Math.max(1, Math.floor(replayCursor)) : undefined;
   }
 
   private resolveDatasetPath(symbol: string) {
@@ -119,6 +121,10 @@ class DatasetSpotProvider implements MarketDataProvider {
 
   private windowedCandles(candles: Candle[]) {
     if (candles.length === 0) return candles;
+    if (this.replayCursor !== undefined) {
+      const boundedCursor = Math.max(1, Math.min(this.replayCursor, candles.length));
+      return candles.slice(0, boundedCursor);
+    }
     const end = Math.max(candles.length - this.windowOffset, 1);
     return candles.slice(0, end);
   }
@@ -227,8 +233,18 @@ type PersistedSignalTradeStatus = "open" | "tp1_hit" | "tp2_hit" | "stop_hit" | 
 type PersistedSignalTradeOutcome = "win" | "loss" | "partial_win" | "open";
 type SignalOutcomeStatus = "OPEN" | "TP1_HIT" | "TP2_HIT" | "STOP_HIT" | "EXPIRED" | "PARTIAL_WIN" | "BE_AFTER_TP1";
 type RuntimeMode = "signal" | "personal" | "prop";
+type RuntimeDataSource = "live" | "replay";
 type RuntimeControlConfig = {
   mode: RuntimeMode;
+  dataSource?: RuntimeDataSource;
+  replayDatasetPath?: string;
+  signalMode?: {
+    minimumTier?: "A" | "A+";
+    dailySignalTarget?: number;
+    symbolCooldownMinutes?: number;
+    globalCooldownMinutes?: number;
+    relaxationEnabled?: boolean;
+  };
   modes: Record<RuntimeMode, {
     symbols: string[];
     riskPerTradePct: number;
@@ -257,9 +273,13 @@ type InMemoryPerformanceTracker = {
 const ENGINE1_LOCKED_STRATEGY_ID = "compression_breakout_balanced";
 const ENGINE1_LOCKED_ENGINE_ID = "engine1_breakout";
 const ENGINE1_ACCEPTED_BASELINE = true;
+const DEFAULT_REPLAY_DATASET_PATH = "data/datasets/ETHUSDT_15m.csv";
+const REPLAY_MIN_CURSOR = 300;
+const B_PLUS_MIN_SCORE = 65;
 const SIGNAL_MODE_DEFAULT_CRYPTO_SYMBOLS = ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "MATICUSDT"];
 const PERSONAL_MODE_DEFAULT_CRYPTO_SYMBOLS = ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "LINKUSDT"];
 const PERFORMANCE_SUMMARY_INTERVAL_CYCLES = 10;
+let replayDatasetCursor = REPLAY_MIN_CURSOR;
 const performanceByMode = new Map<RuntimeMode, InMemoryPerformanceTracker>();
 const initialRiskByTradeId = new Map<string, number>();
 type SystemControlState = {
@@ -269,6 +289,7 @@ type SystemControlState = {
   allowedSymbols: string[];
 };
 type SignalTier = "A+" | "A" | "B";
+type SignalMinimumTier = "A+" | "A";
 type SymbolAnalysisReadiness = {
   symbol: string;
   marketType: SymbolMetadata["marketType"];
@@ -446,6 +467,13 @@ type SignalCycleReconciliation = {
       minScore: number;
       requireAPlusOnly: boolean;
       effectiveMinScore: number;
+      dailySignalTarget: number;
+      symbolCooldownMinutes: number;
+      globalCooldownMinutes: number;
+      signalsSentToday: number;
+      remainingSignalAllowance: number;
+      lastSignalTime: string | null;
+      nextEligibleSignalTime: string;
     };
     marketModePolicy: {
       cryptoEnabled: boolean;
@@ -810,7 +838,20 @@ function readRuntimeControlConfig(): RuntimeControlConfig | null {
     const raw = readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as RuntimeControlConfig;
     if (!parsed || !parsed.modes || !parsed.mode) return null;
-    return parsed;
+    return {
+      ...parsed,
+      dataSource: parsed.dataSource === "replay" ? "replay" : "live",
+      replayDatasetPath: typeof parsed.replayDatasetPath === "string" && parsed.replayDatasetPath.trim().length > 0
+        ? parsed.replayDatasetPath.trim()
+        : DEFAULT_REPLAY_DATASET_PATH,
+      signalMode: {
+        minimumTier: parsed.signalMode?.minimumTier === "A+" ? "A+" : "A",
+        dailySignalTarget: Math.max(1, Math.min(5, Number(parsed.signalMode?.dailySignalTarget ?? 2))),
+        symbolCooldownMinutes: Math.max(15, Math.min(240, Number(parsed.signalMode?.symbolCooldownMinutes ?? 90))),
+        globalCooldownMinutes: Math.max(5, Math.min(120, Number(parsed.signalMode?.globalCooldownMinutes ?? 20))),
+        relaxationEnabled: parsed.signalMode?.relaxationEnabled !== false
+      }
+    };
   } catch {
     return null;
   }
@@ -821,7 +862,13 @@ function applyRuntimeControlConfig(config: ReturnType<typeof getConfig>): Return
   if (!runtimeControl) return config;
   const activeMode: RuntimeMode = runtimeControl.mode;
   const modeConfig = runtimeControl.modes[activeMode];
-  const executionMode = activeMode === "personal" ? "live_personal" : activeMode === "prop" ? "live_prop" : "signal_only";
+  const executionMode = runtimeControl.dataSource === "replay"
+    ? "signal_only"
+    : activeMode === "personal"
+      ? "live_personal"
+      : activeMode === "prop"
+        ? "live_prop"
+        : "signal_only";
   return {
     ...config,
     CAPITAL_MODE: activeMode,
@@ -932,9 +979,10 @@ function rankingTieBreakers(params: {
   regime: ReturnType<typeof classifyRegime>;
 }) {
   const rr = tp2RewardToRisk(params.signal);
+  const roomToTp2 = Math.abs(params.signal.tp2 - params.signal.entryPrice);
   const trendAlignmentStrength = params.regime.regime.startsWith("TREND") ? 1 : 0;
   const volatilitySuitability = params.regime.regime === "SHOCK_UNSTABLE" ? 0 : 1;
-  return { rr, trendAlignmentStrength, volatilitySuitability };
+  return { rr, roomToTp2, trendAlignmentStrength, volatilitySuitability };
 }
 
 type DiversificationGroup = "majors" | "large_alts" | "high_beta_alt_or_meme" | "other";
@@ -1936,7 +1984,10 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const cycleStartedAtMs = Date.now();
   const cycleStartedAtIso = new Date(cycleStartedAtMs).toISOString();
   const cycleId = `signal-cycle-${cycleStartedAtMs}`;
+  const runtimeControl = readRuntimeControlConfig();
   const config = applyRuntimeControlConfig(getConfig());
+  const runtimeDataSource: RuntimeDataSource = runtimeControl?.dataSource === "replay" ? "replay" : "live";
+  const replayDatasetPath = runtimeControl?.replayDatasetPath ?? DEFAULT_REPLAY_DATASET_PATH;
   const debugVisibilityEnabled = config.WORKER_DEBUG_VISIBILITY;
   const effectiveTelegramCap = Math.min(config.SIGNAL_MAX_TELEGRAM_PER_CYCLE, config.SIGNAL_MAX_SELECTED_PER_CYCLE);
   const redis = new Redis(config.REDIS_URL, {
@@ -2152,6 +2203,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         cycleNumber,
         cycleStartedAt: cycleStartedAtIso,
         activeMode: runtimeMode,
+        dataSource: runtimeDataSource,
         isRunning: systemControl.isRunning,
         killSwitchActive: systemControl.killSwitchActive,
         allowedSymbolsCount: systemControl.allowedSymbols.length,
@@ -2168,6 +2220,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         cycleNumber,
         cycleStartedAt: cycleStartedAtIso,
         activeMode: runtimeMode,
+        dataSource: runtimeDataSource,
         isRunning: systemControl.isRunning,
         killSwitchActive: systemControl.killSwitchActive,
         allowedSymbolsCount: systemControl.allowedSymbols.length
@@ -2267,14 +2320,26 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     };
   }
 
-  const datasetSymbolPaths = config.SIGNAL_DATASET_SYMBOL_PATHS_JSON;
-  const primary = config.SIGNAL_DATASET_MODE_ENABLED
-    ? new DatasetSpotProvider(datasetSymbolPaths, config.SIGNAL_DATASET_WINDOW_OFFSET)
-    : buildProvider(config.DEFAULT_PRIMARY_PROVIDER);
-  const backup = config.SIGNAL_DATASET_MODE_ENABLED
-    ? new DatasetSpotProvider(datasetSymbolPaths, config.SIGNAL_DATASET_WINDOW_OFFSET)
-    : buildProvider(config.DEFAULT_BACKUP_PROVIDER);
   const configuredSymbols = buildRuntimeSymbols(config);
+  const replaySymbolPaths = Object.fromEntries(
+    configuredSymbols.map((entry) => [entry.symbol.toUpperCase(), replayDatasetPath])
+  );
+  const datasetSymbolPaths = config.SIGNAL_DATASET_SYMBOL_PATHS_JSON;
+  const replayCursorForCycle = replayDatasetCursor;
+  const useReplayData = runtimeDataSource === "replay";
+  const primary = useReplayData
+    ? new DatasetSpotProvider(replaySymbolPaths, 0, replayCursorForCycle)
+    : config.SIGNAL_DATASET_MODE_ENABLED
+      ? new DatasetSpotProvider(datasetSymbolPaths, config.SIGNAL_DATASET_WINDOW_OFFSET)
+      : buildProvider(config.DEFAULT_PRIMARY_PROVIDER);
+  const backup = useReplayData
+    ? new DatasetSpotProvider(replaySymbolPaths, 0, replayCursorForCycle)
+    : config.SIGNAL_DATASET_MODE_ENABLED
+      ? new DatasetSpotProvider(datasetSymbolPaths, config.SIGNAL_DATASET_WINDOW_OFFSET)
+      : buildProvider(config.DEFAULT_BACKUP_PROVIDER);
+  if (useReplayData) {
+    replayDatasetCursor += 1;
+  }
   const configuredSymbolNames = configuredSymbols.map((entry) => entry.symbol.toUpperCase());
   const allowedSymbolSet = new Set(
     (systemControl.allowedSymbols.length > 0 ? systemControl.allowedSymbols : configuredSymbols.map((entry) => entry.symbol))
@@ -2978,16 +3043,29 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const paperExecutedSignalSymbols = new Set<string>();
   const selectedReasonBySymbol = new Map<string, string>();
   let diversificationNotes: string[] = [];
-  const effectiveMinTier: SignalTier = runtimeMode === "signal" || runtimeMode === "personal"
-    ? "A"
-    : config.SIGNAL_MIN_TIER;
+  const signalModeFrequency = {
+    minimumTier: runtimeControl?.signalMode?.minimumTier === "A+" ? "A+" as SignalMinimumTier : "A" as SignalMinimumTier,
+    dailySignalTarget: Math.max(1, Math.min(5, Number(runtimeControl?.signalMode?.dailySignalTarget ?? 2))),
+    symbolCooldownMinutes: Math.max(15, Math.min(240, Number(runtimeControl?.signalMode?.symbolCooldownMinutes ?? 90))),
+    globalCooldownMinutes: Math.max(5, Math.min(120, Number(runtimeControl?.signalMode?.globalCooldownMinutes ?? 20))),
+    relaxationEnabled: runtimeControl?.signalMode?.relaxationEnabled !== false
+  };
+  const effectiveMinTier: SignalTier = runtimeMode === "signal"
+    ? signalModeFrequency.minimumTier
+    : runtimeMode === "personal"
+      ? "A"
+      : config.SIGNAL_MIN_TIER;
   const effectiveRequireAPlusOnly = config.SIGNAL_REQUIRE_A_PLUS_ONLY || effectiveMinTier === "A+";
   const minTierScore = minScoreForTier(effectiveMinTier);
-  const effectiveMinScore = Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
+  const baseMinScore = Math.max(config.SIGNAL_MIN_SCORE, minTierScore);
+  let effectiveMinScore = baseMinScore;
   if (!independentMultiEngineMode && prismaClient && runtimeMode === "signal" && cycleCandidates.length > 0) {
     const candidateSymbols = Array.from(new Set(cycleCandidates.map((entry) => entry.signal.symbol)));
     const dedupeWindowStart = new Date(Date.now() - 60_000);
-    const cooldownWindowStart = new Date(Date.now() - config.SIGNAL_SYMBOL_COOLDOWN_MINUTES * 60_000);
+    const cooldownWindowStart = new Date(Date.now() - signalModeFrequency.symbolCooldownMinutes * 60_000);
+    const now = new Date();
+    const dayStartUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    const globalCooldownWindowStart = new Date(now.getTime() - signalModeFrequency.globalCooldownMinutes * 60_000);
     const [activeOutcomes, openSignalTrades] = await Promise.all([
       prismaClient.signalOutcome.findMany({
       where: {
@@ -2997,27 +3075,45 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       select: { symbol: true }
     }),
       prismaClient.signalTrade.findMany({
-        where: activeSignalTradeWhereClause()
+        where: activeSignalTradeWhereClause(),
+        select: { symbol: true, side: true }
       })
     ]);
-    const recentOutcomes = await prismaClient.signalOutcome.findMany({
-      where: {
-        symbol: { in: candidateSymbols },
-        createdAt: { gte: dedupeWindowStart }
-      },
-      select: { symbol: true }
-    });
-    const cooldownStops = await prismaClient.signalOutcome.findMany({
-      where: {
-        symbol: { in: candidateSymbols },
-        status: "STOP_HIT",
-        resolvedAt: { gte: cooldownWindowStart }
-      },
-      select: { symbol: true }
-    });
+    const [recentOutcomes, cooldownStops, signalsSentToday, lastSignalEvent] = await Promise.all([
+      prismaClient.signalOutcome.findMany({
+        where: {
+          symbol: { in: candidateSymbols },
+          createdAt: { gte: dedupeWindowStart }
+        },
+        select: { symbol: true }
+      }),
+      prismaClient.signalOutcome.findMany({
+        where: {
+          symbol: { in: candidateSymbols },
+          status: "STOP_HIT",
+          resolvedAt: { gte: cooldownWindowStart }
+        },
+        select: { symbol: true }
+      }),
+      prismaClient.signalEvent.count({
+        where: { generatedAt: { gte: dayStartUtc }, telegramDispatchStatus: "sent" }
+      }),
+      prismaClient.signalEvent.findFirst({
+        where: { telegramDispatchStatus: "sent" },
+        orderBy: { generatedAt: "desc" },
+        select: { generatedAt: true }
+      })
+    ]);
+    const midSessionReached = now.getUTCHours() >= 12;
+    const belowDailyTargetByMidSession = midSessionReached && signalsSentToday < signalModeFrequency.dailySignalTarget;
+    if (signalModeFrequency.relaxationEnabled && belowDailyTargetByMidSession) {
+      effectiveMinScore = Math.max(B_PLUS_MIN_SCORE, baseMinScore - 3);
+    }
+    const dailyAllowanceHardCap = signalModeFrequency.dailySignalTarget + 1;
     const activeSymbolSet = new Set(activeOutcomes.map((row) => row.symbol));
     const recentSymbolSet = new Set(recentOutcomes.map((row) => row.symbol));
     const cooldownSymbolSet = new Set(cooldownStops.map((row) => row.symbol));
+    const activeDirectionSet = new Set(openSignalTrades.map((trade) => `${trade.symbol}:${trade.side.toUpperCase()}`));
     const skippedByReason: Record<string, Set<string>> = {
       signal_skipped_active_symbol: new Set<string>(),
       signal_skipped_rr_filter: new Set<string>(),
@@ -3065,6 +3161,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         logCandidateFilterResult(candidate, "rejected", "active_position_exists");
         continue;
       }
+      const sameDirectionKey = `${symbol}:${candidate.signal.side.toUpperCase()}`;
+      if (activeDirectionSet.has(sameDirectionKey)) {
+        skippedCount += 1;
+        rejectionCounts.active_symbol_gate += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "duplicate_same_direction_active";
+        skippedByReason.signal_skipped_active_symbol.add(symbol);
+        candidatesRejectedCount += 1;
+        logCandidateFilterResult(candidate, "rejected", "duplicate_same_direction_active");
+        continue;
+      }
       if (cooldownSymbolSet.has(symbol)) {
         skippedCount += 1;
         rejectionCounts.cooldown += 1;
@@ -3073,6 +3180,16 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         skippedByReason.signal_skipped_symbol_cooldown.add(symbol);
         candidatesRejectedCount += 1;
         logCandidateFilterResult(candidate, "rejected", "cooldown_active");
+        continue;
+      }
+      if (lastSignalEvent && lastSignalEvent.generatedAt >= globalCooldownWindowStart) {
+        skippedCount += 1;
+        rejectionCounts.cooldown += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "global_cooldown";
+        skippedByReason.signal_skipped_symbol_cooldown.add(symbol);
+        candidatesRejectedCount += 1;
+        logCandidateFilterResult(candidate, "rejected", "global_cooldown_active");
         continue;
       }
       if (!passesMinTier({
@@ -3109,6 +3226,21 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       }
 
       const rrTp2 = tp2RewardToRisk(candidate.signal);
+      if (
+        !Number.isFinite(candidate.signal.entryPrice)
+        || !Number.isFinite(candidate.signal.stopPrice)
+        || !Number.isFinite(candidate.signal.tp1)
+        || !Number.isFinite(candidate.signal.tp2)
+        || rrTp2 <= 0
+      ) {
+        skippedCount += 1;
+        rejectionCounts.blocked_policy_gate += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "invalid_signal_fields";
+        candidatesRejectedCount += 1;
+        logCandidateFilterResult(candidate, "rejected", "invalid_signal_fields");
+        continue;
+      }
       if (rrTp2 < config.SIGNAL_MIN_TP2_R) {
         skippedCount += 1;
         rejectionCounts.rr_threshold += 1;
@@ -3117,6 +3249,15 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         skippedByReason.signal_skipped_rr_filter.add(symbol);
         candidatesRejectedCount += 1;
         logCandidateFilterResult(candidate, "rejected", "min_tp2_r_failed");
+        continue;
+      }
+      if (signalsSentToday >= dailyAllowanceHardCap && candidate.signal.setupGrade !== "A+") {
+        skippedCount += 1;
+        rejectionCounts.blocked_policy_gate += 1;
+        const summary = symbolSummaries.get(symbol);
+        if (summary) summary.skipReason = "daily_allowance_reached";
+        candidatesRejectedCount += 1;
+        logCandidateFilterResult(candidate, "rejected", "daily_allowance_reached_non_a_plus");
         continue;
       }
 
@@ -3178,7 +3319,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         symbol,
         message: "Skipped signal during symbol cooldown window after STOP_HIT",
         payload: {
-          cooldownMinutes: config.SIGNAL_SYMBOL_COOLDOWN_MINUTES
+          cooldownMinutes: signalModeFrequency.symbolCooldownMinutes,
+          globalCooldownMinutes: signalModeFrequency.globalCooldownMinutes
         }
       }))
     ];
@@ -3190,13 +3332,22 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
 
     if (eligibleCandidates.length > 0) {
-      const rankedEligibleCandidates = [...eligibleCandidates].sort((a, b) => {
+      const dedupedBySymbolDirection = new Map<string, RuntimeCandidate>();
+      for (const candidate of eligibleCandidates) {
+        const key = `${candidate.signal.symbol}:${candidate.signal.side}`;
+        const existing = dedupedBySymbolDirection.get(key);
+        if (!existing || candidate.signal.score > existing.signal.score) {
+          dedupedBySymbolDirection.set(key, candidate);
+        }
+      }
+      const rankedEligibleCandidates = [...dedupedBySymbolDirection.values()].sort((a, b) => {
         if (b.signal.score !== a.signal.score) return b.signal.score - a.signal.score;
         const tierDiff = tierPriority(b.signal.setupGrade) - tierPriority(a.signal.setupGrade);
         if (tierDiff !== 0) return tierDiff;
         const aTie = rankingTieBreakers({ signal: a.signal, regime: a.regime });
         const bTie = rankingTieBreakers({ signal: b.signal, regime: b.regime });
         if (bTie.rr !== aTie.rr) return bTie.rr - aTie.rr;
+        if (bTie.roomToTp2 !== aTie.roomToTp2) return bTie.roomToTp2 - aTie.roomToTp2;
         if (bTie.trendAlignmentStrength !== aTie.trendAlignmentStrength) {
           return bTie.trendAlignmentStrength - aTie.trendAlignmentStrength;
         }
@@ -4722,7 +4873,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   );
 
   const executionModeForAllocation: ReturnType<typeof getConfig>["EXECUTION_MODE"] =
-    runtimeMode === "personal" ? "live_personal" : runtimeMode === "prop" ? "live_prop" : "signal_only";
+    runtimeDataSource === "replay"
+      ? "signal_only"
+      : runtimeMode === "personal"
+        ? "live_personal"
+        : runtimeMode === "prop"
+          ? "live_prop"
+          : "signal_only";
 
   const allocation = allocatePortfolioCapital({
     mode: executionModeForAllocation,
@@ -4751,7 +4908,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       })
     : null;
 
-  const personalDemoDispatchPlan = runtimeMode === "personal" && config.ENABLE_PERSONAL_DEMO_CONNECTOR
+  const personalDemoDispatchPlan = runtimeDataSource === "live" && runtimeMode === "personal" && config.ENABLE_PERSONAL_DEMO_CONNECTOR
     ? buildPersonalDemoDispatchPlan(allocation.decisions, {
         apiKey: config.BINANCE_DEMO_API_KEY,
         apiSecret: config.BINANCE_DEMO_API_SECRET,
@@ -4760,7 +4917,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       })
     : null;
 
-  const propDemoDispatchPlan = runtimeMode === "prop" && config.ENABLE_PROP_DEMO_CONNECTOR
+  const propDemoDispatchPlan = runtimeDataSource === "live" && runtimeMode === "prop" && config.ENABLE_PROP_DEMO_CONNECTOR
     ? buildPropDemoDispatchPlan(
         allocation.decisions,
         {
@@ -4779,7 +4936,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       )
     : null;
 
-  if (prismaClient && runtimeMode === "personal") {
+  if (prismaClient && runtimeDataSource === "live" && runtimeMode === "personal") {
     const connector = "binance_futures_demo";
     const authPresent = Boolean(config.BINANCE_DEMO_API_KEY && config.BINANCE_DEMO_API_SECRET);
     const connectorEnabled = config.ENABLE_PERSONAL_DEMO_CONNECTOR;
@@ -4937,7 +5094,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
   }
 
-  if (prismaClient && runtimeMode === "prop") {
+  if (prismaClient && runtimeDataSource === "live" && runtimeMode === "prop") {
     const connector = "mt5_demo";
     const authPresent = Boolean(config.MT5_DEMO_LOGIN && config.MT5_DEMO_PASSWORD);
     const connectorEnabled = config.ENABLE_PROP_DEMO_CONNECTOR;
@@ -5747,6 +5904,19 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     const slotEquity = paperSnapshot.equity / 5;
     const availableNotionalCapacity = Math.max((slotEquity * config.SIGNAL_PAPER_LEVERAGE * 5) - usedNotional, 0);
     const availableRiskBudget = Math.max((paperSnapshot.equity * config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT) - usedRiskBudget, 0);
+    const now = new Date();
+    const dayStartUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    const [signalsSentToday, lastSignalSent] = await Promise.all([
+      prismaClient.signalEvent.count({ where: { generatedAt: { gte: dayStartUtc }, telegramDispatchStatus: "sent" } }),
+      prismaClient.signalEvent.findFirst({
+        where: { telegramDispatchStatus: "sent" },
+        orderBy: { generatedAt: "desc" },
+        select: { generatedAt: true }
+      })
+    ]);
+    const nextEligibleSignalTimeIso = lastSignalSent
+      ? new Date(lastSignalSent.generatedAt.getTime() + signalModeFrequency.globalCooldownMinutes * 60_000).toISOString()
+      : now.toISOString();
 
     reconciliation = {
       cycleTruth: {
@@ -5806,7 +5976,14 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           minTier: effectiveMinTier,
           minScore: config.SIGNAL_MIN_SCORE,
           requireAPlusOnly: effectiveRequireAPlusOnly,
-          effectiveMinScore
+          effectiveMinScore,
+          dailySignalTarget: signalModeFrequency.dailySignalTarget,
+          symbolCooldownMinutes: signalModeFrequency.symbolCooldownMinutes,
+          globalCooldownMinutes: signalModeFrequency.globalCooldownMinutes,
+          signalsSentToday,
+          remainingSignalAllowance: Math.max(signalModeFrequency.dailySignalTarget - signalsSentToday, 0),
+          lastSignalTime: lastSignalSent?.generatedAt.toISOString() ?? null,
+          nextEligibleSignalTime: nextEligibleSignalTimeIso
         },
         marketModePolicy: {
           cryptoEnabled: config.SIGNAL_ENABLE_CRYPTO,
