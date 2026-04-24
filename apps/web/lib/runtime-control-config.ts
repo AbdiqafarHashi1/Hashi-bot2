@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export type RuntimeMode = "signal" | "personal" | "prop";
+export type RuntimeDataSource = "live" | "replay";
 
 export type RuntimeModeConfig = {
   symbols: string[];
@@ -13,13 +14,33 @@ export type RuntimeModeConfig = {
 
 export type RuntimeControlConfig = {
   mode: RuntimeMode;
+  dataSource: RuntimeDataSource;
+  replayDatasetPath?: string;
+  signalMode: {
+    minimumTier: "A" | "A+";
+    dailySignalTarget: number;
+    symbolCooldownMinutes: number;
+    globalCooldownMinutes: number;
+    relaxationEnabled: boolean;
+  };
   modes: Record<RuntimeMode, RuntimeModeConfig>;
   enginePhaseLock: "engine1_only";
   updatedAt: string;
 };
 
+const DEFAULT_REPLAY_DATASET_PATH = "data/datasets/ETHUSDT_15m.csv";
+
 const DEFAULT_CONFIG: RuntimeControlConfig = {
   mode: "signal",
+  dataSource: "live",
+  replayDatasetPath: DEFAULT_REPLAY_DATASET_PATH,
+  signalMode: {
+    minimumTier: "A",
+    dailySignalTarget: 2,
+    symbolCooldownMinutes: 90,
+    globalCooldownMinutes: 20,
+    relaxationEnabled: true
+  },
   enginePhaseLock: "engine1_only",
   updatedAt: new Date(0).toISOString(),
   modes: {
@@ -73,9 +94,23 @@ function normalizeModeConfig(input: unknown, fallback: RuntimeModeConfig): Runti
 function normalizeConfig(input: unknown): RuntimeControlConfig {
   const payload = (input ?? {}) as Partial<RuntimeControlConfig>;
   const mode = payload.mode === "personal" || payload.mode === "prop" ? payload.mode : "signal";
+  const dataSource = payload.dataSource === "replay" ? "replay" : "live";
+  const replayDatasetPath = typeof payload.replayDatasetPath === "string" && payload.replayDatasetPath.trim().length > 0
+    ? payload.replayDatasetPath.trim()
+    : DEFAULT_REPLAY_DATASET_PATH;
+  const signalModePayload = (payload.signalMode ?? {}) as Partial<RuntimeControlConfig["signalMode"]>;
   const modesPayload = (payload.modes ?? {}) as Partial<Record<RuntimeMode, RuntimeModeConfig>>;
   return {
     mode,
+    dataSource,
+    replayDatasetPath,
+    signalMode: {
+      minimumTier: signalModePayload.minimumTier === "A+" ? "A+" : "A",
+      dailySignalTarget: clamp(Number(signalModePayload.dailySignalTarget ?? 2), 1, 5),
+      symbolCooldownMinutes: clamp(Number(signalModePayload.symbolCooldownMinutes ?? 90), 15, 240),
+      globalCooldownMinutes: clamp(Number(signalModePayload.globalCooldownMinutes ?? 20), 5, 120),
+      relaxationEnabled: signalModePayload.relaxationEnabled !== false
+    },
     enginePhaseLock: "engine1_only",
     updatedAt: typeof payload.updatedAt === "string" ? payload.updatedAt : new Date().toISOString(),
     modes: {

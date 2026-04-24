@@ -92,6 +92,13 @@ type ReconciliationPayload = {
       minScore: number;
       requireAPlusOnly: boolean;
       effectiveMinScore: number;
+      dailySignalTarget?: number;
+      symbolCooldownMinutes?: number;
+      globalCooldownMinutes?: number;
+      signalsSentToday?: number;
+      remainingSignalAllowance?: number;
+      lastSignalTime?: string | null;
+      nextEligibleSignalTime?: string | null;
     };
     marketModePolicy?: {
       cryptoEnabled: boolean;
@@ -1256,7 +1263,14 @@ export async function GET() {
         minTier: config.SIGNAL_MIN_TIER,
         minScore: config.SIGNAL_MIN_SCORE,
         requireAPlusOnly: config.SIGNAL_REQUIRE_A_PLUS_ONLY,
-        effectiveMinScore: Math.max(config.SIGNAL_MIN_SCORE, config.SIGNAL_MIN_TIER === "A+" ? 85 : config.SIGNAL_MIN_TIER === "A" ? 70 : 60)
+        effectiveMinScore: Math.max(config.SIGNAL_MIN_SCORE, config.SIGNAL_MIN_TIER === "A+" ? 85 : config.SIGNAL_MIN_TIER === "A" ? 70 : 60),
+        dailySignalTarget: 2,
+        symbolCooldownMinutes: config.SIGNAL_SYMBOL_COOLDOWN_MINUTES,
+        globalCooldownMinutes: 20,
+        signalsSentToday: 0,
+        remainingSignalAllowance: 2,
+        lastSignalTime: null,
+        nextEligibleSignalTime: null
       },
       marketModePolicy: cycleTruth?.marketModePolicy ?? {
         cryptoEnabled: config.SIGNAL_ENABLE_CRYPTO,

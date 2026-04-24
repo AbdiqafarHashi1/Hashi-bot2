@@ -84,6 +84,15 @@ type SystemControlPayload = {
 
 type RuntimeConfigPayload = {
   mode: "signal" | "personal" | "prop";
+  dataSource: "live" | "replay";
+  replayDatasetPath?: string;
+  signalMode: {
+    minimumTier: "A" | "A+";
+    dailySignalTarget: number;
+    symbolCooldownMinutes: number;
+    globalCooldownMinutes: number;
+    relaxationEnabled: boolean;
+  };
   modes: Record<"signal" | "personal" | "prop", {
     symbols: string[];
     riskPerTradePct: number;
@@ -152,6 +161,11 @@ export default function DashboardPage() {
   const [maxOpenRiskPct, setMaxOpenRiskPct] = useState("");
   const [baseLeverage, setBaseLeverage] = useState("");
   const [maxLeverage, setMaxLeverage] = useState("");
+  const [replayDatasetPath, setReplayDatasetPath] = useState("data/datasets/ETHUSDT_15m.csv");
+  const [signalMinimumTier, setSignalMinimumTier] = useState<"A" | "A+">("A");
+  const [dailySignalTarget, setDailySignalTarget] = useState("2");
+  const [symbolCooldownMinutes, setSymbolCooldownMinutes] = useState("90");
+  const [globalCooldownMinutes, setGlobalCooldownMinutes] = useState("20");
 
   useEffect(() => {
     let mounted = true;
@@ -213,6 +227,11 @@ export default function DashboardPage() {
     setMaxOpenRiskPct(modeConfig.maxOpenRiskPct.toString());
     setBaseLeverage(modeConfig.baseLeverage.toString());
     setMaxLeverage(modeConfig.maxLeverage.toString());
+    setReplayDatasetPath(runtimeConfig.replayDatasetPath ?? "data/datasets/ETHUSDT_15m.csv");
+    setSignalMinimumTier(runtimeConfig.signalMode.minimumTier);
+    setDailySignalTarget(runtimeConfig.signalMode.dailySignalTarget.toString());
+    setSymbolCooldownMinutes(runtimeConfig.signalMode.symbolCooldownMinutes.toString());
+    setGlobalCooldownMinutes(runtimeConfig.signalMode.globalCooldownMinutes.toString());
   }, [runtimeConfig?.mode, runtimeConfig]);
 
   const latestSignalAt = useMemo(() => data.signalRoom?.summary.latestSignalTimestamp ?? null, [data.signalRoom]);
@@ -267,7 +286,16 @@ export default function DashboardPage() {
           riskPerTradePct: Number(riskPerTradePct),
           maxOpenRiskPct: Number(maxOpenRiskPct),
           baseLeverage: Number(baseLeverage),
-          maxLeverage: Number(maxLeverage)
+          maxLeverage: Number(maxLeverage),
+          dataSource: runtimeConfig.dataSource,
+          replayDatasetPath,
+          signalMode: {
+            minimumTier: signalMinimumTier,
+            dailySignalTarget: Number(dailySignalTarget),
+            symbolCooldownMinutes: Number(symbolCooldownMinutes),
+            globalCooldownMinutes: Number(globalCooldownMinutes),
+            relaxationEnabled: true
+          }
         })
       });
       if (!response.ok) {
@@ -323,6 +351,13 @@ export default function DashboardPage() {
   }
 
   const signalPerformance = data.signalPerformance;
+  const signalsSentToday = signalPerformance?.summary.totalSignalsToday ?? 0;
+  const configuredDailyTarget = runtimeConfig?.signalMode.dailySignalTarget ?? 2;
+  const remainingSignalAllowance = Math.max(configuredDailyTarget - signalsSentToday, 0);
+  const lastSignalIso = data.signalRoom?.summary.latestSignalTimestamp ? new Date(data.signalRoom.summary.latestSignalTimestamp).toISOString() : null;
+  const nextEligibleIso = lastSignalIso
+    ? new Date(new Date(lastSignalIso).getTime() + ((runtimeConfig?.signalMode.globalCooldownMinutes ?? 20) * 60_000)).toISOString()
+    : "now";
   const aPlusMetrics = signalPerformance?.perTier["A+"] ?? EMPTY_TIER_METRICS;
   const aMetrics = signalPerformance?.perTier.A ?? EMPTY_TIER_METRICS;
   const bMetrics = signalPerformance?.perTier.B ?? EMPTY_TIER_METRICS;
@@ -519,7 +554,11 @@ export default function DashboardPage() {
                       <span className="rounded border border-slate-700 px-2 py-1 text-xs">
                         Active: {control.activeMode}
                       </span>
+                      <span className="rounded border border-cyan-700 px-2 py-1 text-xs text-cyan-200">
+                        DATA SOURCE: {runtimeConfig?.dataSource ?? "live"}
+                      </span>
                     </div>
+                    <p className="text-xs text-slate-400">MODE: {runtimeConfig?.mode ?? control.activeMode}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`rounded px-2 py-1 text-xs font-semibold ${control.isRunning ? "bg-emerald-800/40 text-emerald-200" : "bg-slate-700/60 text-slate-200"}`}>
@@ -576,6 +615,51 @@ export default function DashboardPage() {
                           <input className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1" value={maxLeverage} onChange={(event) => setMaxLeverage(event.target.value)} />
                         </div>
                       </div>
+                      <div>
+                        <label className="block text-slate-400">Data Source</label>
+                        <select
+                          className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1"
+                          value={runtimeConfig.dataSource}
+                          onChange={(event) => setRuntimeConfig((prev) => prev ? { ...prev, dataSource: event.target.value as RuntimeConfigPayload["dataSource"] } : prev)}
+                        >
+                          <option value="live">Live</option>
+                          <option value="replay">Replay</option>
+                        </select>
+                      </div>
+                      {runtimeConfig.dataSource === "replay" && (
+                        <div>
+                          <label className="block text-slate-400">Dataset Path</label>
+                          <input
+                            className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1"
+                            value={replayDatasetPath}
+                            onChange={(event) => setReplayDatasetPath(event.target.value)}
+                            placeholder="data/datasets/ETHUSDT_15m.csv"
+                          />
+                        </div>
+                      )}
+                      {runtimeConfig.mode === "signal" && (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <div>
+                            <label className="block text-slate-400">Signal minimum tier</label>
+                            <select className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1" value={signalMinimumTier} onChange={(event) => setSignalMinimumTier(event.target.value as "A" | "A+")}>
+                              <option value="A">A</option>
+                              <option value="A+">A+</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-slate-400">Daily signal target (1-5)</label>
+                            <input className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1" value={dailySignalTarget} onChange={(event) => setDailySignalTarget(event.target.value)} />
+                          </div>
+                          <div>
+                            <label className="block text-slate-400">Per-symbol cooldown (min)</label>
+                            <input className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1" value={symbolCooldownMinutes} onChange={(event) => setSymbolCooldownMinutes(event.target.value)} />
+                          </div>
+                          <div>
+                            <label className="block text-slate-400">Global cooldown (min)</label>
+                            <input className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1" value={globalCooldownMinutes} onChange={(event) => setGlobalCooldownMinutes(event.target.value)} />
+                          </div>
+                        </div>
+                      )}
                       <button
                         className="rounded border border-slate-700 px-3 py-1 hover:bg-slate-800 disabled:opacity-50"
                         onClick={saveModeConfig}
@@ -640,9 +724,18 @@ export default function DashboardPage() {
                 <div className="space-y-1 text-xs text-slate-300">
                   <p>isRunning: <span className="font-medium">{String(control.isRunning)}</span></p>
                   <p>activeMode: <span className="font-medium">{control.activeMode}</span></p>
+                  <p>dataSource: <span className="font-medium">{runtimeConfig?.dataSource ?? "live"}</span></p>
                   <p>killSwitchActive: <span className="font-medium">{String(control.killSwitchActive)}</span></p>
                   <p>allowedSymbols: <span className="font-medium">{control.allowedSymbols.join(", ")}</span></p>
                   <p>updatedAt: <span className="font-medium">{new Date(control.updatedAt).toISOString()}</span></p>
+                  <p>signalsSentToday: <span className="font-medium">{signalsSentToday}</span></p>
+                  <p>dailySignalTarget: <span className="font-medium">{configuredDailyTarget}</span></p>
+                  <p>remainingSignalAllowance: <span className="font-medium">{remainingSignalAllowance}</span></p>
+                  <p>lastSignalTime: <span className="font-medium">{lastSignalIso ?? "none"}</span></p>
+                  <p>nextEligibleSignalTime: <span className="font-medium">{nextEligibleIso}</span></p>
+                  <p>blockedByCooldownThisCycle: <span className="font-medium">{String(data.signalRoom?.reconciliation?.cycleTruth?.candidatesRejectedBy?.cooldown ?? 0)}</span></p>
+                  <p>blockedByQualityThisCycle: <span className="font-medium">{String((data.signalRoom?.reconciliation?.cycleTruth?.candidatesRejectedBy?.below_min_tier ?? 0) + (data.signalRoom?.reconciliation?.cycleTruth?.candidatesRejectedBy?.below_min_score ?? 0))}</span></p>
+                  <p>latestRejectedReason: <span className="font-medium">{data.signalRoom?.rejectedThisCycle?.[0]?.rejectionReason ?? "none"}</span></p>
                 </div>
                 {controlError && <p className="rounded border border-rose-700/50 bg-rose-900/20 p-2 text-xs text-rose-200">{controlError}</p>}
               </div>
