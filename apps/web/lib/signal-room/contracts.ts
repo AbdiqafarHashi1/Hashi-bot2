@@ -594,6 +594,15 @@ export type SignalRoomPayload = {
     preloadStatus: "context_ready" | "blocked";
     contextStatus: "ready" | "blocked";
     blockedReason: string | null;
+    activeProvider?: string;
+    providerHealth?: string;
+    fallbackStatus?: string;
+    lastCandleTime?: string | null;
+    candleAgeMs?: number | null;
+    lastError?: string | null;
+    reconnectCount?: number;
+    marketStatus?: "open" | "closed";
+    nextMarketOpenAt?: string | null;
     engineResults: Record<string, {
       result: string;
       reason: string | null;

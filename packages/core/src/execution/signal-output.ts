@@ -136,6 +136,8 @@ export function buildSignalModePayload(input: {
       `TP1: ${signal.tp1.toFixed(6)}`,
       `TP2: ${signal.tp2.toFixed(6)}`,
       `R:R: ${rr.toFixed(2)}`,
+      `Provider: ${typeof signal.metadata?.providerUsed === "string" ? signal.metadata.providerUsed : "unknown"}`,
+      `Candle: ${typeof signal.metadata?.candleTimestamp === "string" ? signal.metadata.candleTimestamp : signal.timestamp}`,
       `Setup: ${setupLabel}`,
       `Engine: ${signal.engineId}`,
       `Strategy: ${signal.strategyId}`,

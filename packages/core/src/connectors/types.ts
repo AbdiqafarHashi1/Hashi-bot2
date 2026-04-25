@@ -53,3 +53,17 @@ export type ConnectorReconciliationSnapshot = {
 export type GovernanceAwareInput = {
   governanceLocks?: GovernanceLocks;
 };
+
+export type BrokerAdapterConfig = {
+  adapter: "mt5" | "ctrader" | "alpaca" | "mock";
+  enabled: boolean;
+  credentialsPresent: boolean;
+  environment?: "demo" | "paper" | "live";
+};
+
+export interface ExecutionProvider {
+  providerName: string;
+  healthCheck(): Promise<boolean>;
+  submitOrder(intent: ConnectorOrderIntent): Promise<ConnectorSubmissionResult>;
+  reconcile(): Promise<ConnectorReconciliationSnapshot>;
+}
