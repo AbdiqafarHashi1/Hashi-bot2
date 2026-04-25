@@ -238,5 +238,111 @@ Manual operator reset endpoint:
 ```bash
 curl -X POST http://localhost:3000/api/signal-room/reset \\
   -H 'Content-Type: application/json' \\
-  -d '{\"clearRecentSignals\":false,\"clearRuntimeEvents\":true}'
+  -d '{"clearRecentSignals":false,"clearRuntimeEvents":true}'
+```
+
+## VPS production deployment (single-host, Docker Compose + Caddy)
+
+### 1) Buy an Ubuntu VPS
+
+- Recommended baseline: Ubuntu 22.04 LTS, 2 vCPU, 4 GB RAM, 60+ GB SSD.
+- Open inbound ports on firewall/security group: **80/tcp** and **443/tcp**.
+
+### 2) Install Docker + Compose plugin
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo \
+  \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable\" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker \"$USER\"
+newgrp docker
+```
+
+### 3) Clone repo
+
+```bash
+git clone <YOUR_REPO_URL> hashi-bot2
+cd hashi-bot2
+```
+
+### 4) Create production env
+
+```bash
+cp .env.production.example .env.production
+```
+
+### 5) Fill secrets/settings in `.env.production`
+
+- Required minimum:
+  - `APP_DOMAIN` (or leave blank for localhost/IP fallback)
+  - `DASHBOARD_PASSWORD`
+  - `DATABASE_URL`
+  - `REDIS_URL`
+  - `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` when signal output is enabled
+
+### 6) Start stack
+
+```bash
+HASHI_ENV_FILE=.env.production ./scripts/deploy-prod.sh
+```
+
+### 7) Open dashboard
+
+- Domain mode: `https://<APP_DOMAIN>/dashboard`
+- Local/IP fallback: `http://<server-ip>/dashboard`
+
+### 8) Login
+
+- Visit `/login` and authenticate with `DASHBOARD_PASSWORD`.
+- Protected pages: `/dashboard`, `/runtime`, `/settings`.
+- Protected APIs: `/api/control/*`, `/api/signal-room/*`, `/api/system-control/*`, `/api/settings/*`, `/api/control-room/*`.
+
+### 9) Start Signal Mode first
+
+- Log in, verify controls/load state, then start signal mode from dashboard controls.
+- Keep execution mode locked to `signal_only` for production safety until broker adapters are explicitly deployed.
+
+## Production operations (logs, restart, safe stop)
+
+View logs:
+
+```bash
+HASHI_ENV_FILE=.env.production docker compose logs -f reverse-proxy web worker postgres redis
+```
+
+Restart services:
+
+```bash
+HASHI_ENV_FILE=.env.production docker compose restart web worker
+```
+
+Stop bot safely (worker only):
+
+```bash
+HASHI_ENV_FILE=.env.production docker compose stop worker
+```
+
+Stop full stack:
+
+```bash
+HASHI_ENV_FILE=.env.production docker compose down
+```
+
+Health check:
+
+```bash
+HASHI_ENV_FILE=.env.production ./scripts/check-prod-health.sh
+```
+
+Database backup:
+
+```bash
+HASHI_ENV_FILE=.env.production ./scripts/backup-db.sh
 ```

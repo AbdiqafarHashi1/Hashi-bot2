@@ -2428,6 +2428,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   });
   const forexAdapter = new PublicForexLiveBarAdapter({
     apiKey: config.FOREX_MARKET_DATA_API_KEY,
+    alphaVantageKey: config.FOREX_MARKET_DATA_ALPHA_VANTAGE_KEY,
     includePublicFallback: true,
     maxConsecutiveFailures: config.MARKET_DATA_MAX_CONSECUTIVE_FAILURES,
     staleCandleMultiplier: config.MARKET_DATA_STALE_CANDLE_MULTIPLIER,

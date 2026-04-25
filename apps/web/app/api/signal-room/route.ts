@@ -1224,6 +1224,7 @@ export async function GET() {
     summary,
     reconciliation: {
       cycleId: reconciliation?.cycleId ?? latestReconciliation?.id ?? null,
+      cycleTruth: cycleTruth ?? null,
       currentCycle: currentCycleWithSelection,
       persistedTotals
     },

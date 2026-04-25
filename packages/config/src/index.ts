@@ -15,6 +15,7 @@ const signalTp1ProtectModeSchema = z.enum(["break_even", "offset_r"]);
 const signalRestartPolicySchema = z.enum(["resume_persisted", "reset_signal_mode_state_on_boot"]);
 const execDelayModeSchema = z.enum(["none", "next_candle"]);
 const multiEngineExecutionModeSchema = z.enum(["independent", "legacy"]);
+const killSwitchModeSchema = z.enum(["on", "off"]);
 const booleanFlagSchema = z
   .union([z.literal("1"), z.literal("0"), z.literal("true"), z.literal("false"), z.boolean()])
   .transform((value) => value === "1" || value === "true" || value === true);
@@ -56,6 +57,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1).default("postgresql://postgres:postgres@localhost:5432/hashi_bot2"),
   REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
   NEXT_PUBLIC_APP_NAME: z.string().default("hashi-bot2"),
+  APP_DOMAIN: z.string().optional(),
+  DASHBOARD_PASSWORD: z.string().optional(),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DEFAULT_SYMBOL: z.string().default("ETHUSDT"),
   DEFAULT_SYMBOLS: csvSymbolsSchema.default(""),
@@ -79,6 +82,7 @@ const envSchema = z.object({
   FOREX_MARKET_DATA_PRIMARY: z.string().default("twelvedata_compat"),
   FOREX_MARKET_DATA_FALLBACKS: csvSymbolsSchema.default("yahoo_stooq_public"),
   FOREX_MARKET_DATA_API_KEY: z.string().optional(),
+  FOREX_MARKET_DATA_ALPHA_VANTAGE_KEY: z.string().optional(),
   FOREX_MARKET_DATA_TIMEFRAME: timeframeSchema.default("15m"),
   FOREX_MARKET_DATA_REST_POLL_MS: z.coerce.number().int().positive().default(30000),
   FOREX_MARKET_OPEN_UTC: z.string().default("Sunday 22:00"),
@@ -190,14 +194,45 @@ const envSchema = z.object({
   MT5_DEMO_TERMINAL_ID: z.string().optional(),
   MT5_DEMO_SYMBOL_MAP_JSON: jsonRecordSchema,
   MT5_BRIDGE_BASE_URL: z.string().optional(),
-  MT5_BRIDGE_API_KEY: z.string().optional()
+  MT5_BRIDGE_API_KEY: z.string().optional(),
+  LIVE_SAFETY_ENABLED: booleanFlagSchema.default(true),
+  KILL_SWITCH_MODE: killSwitchModeSchema.default("on")
 });
 
 export type RuntimeConfig = z.infer<typeof envSchema>;
 
+function requiredInProduction(name: string) {
+  return typeof process.env[name] === "string" && process.env[name]!.trim().length > 0;
+}
+
+function validateProductionSafety(config: RuntimeConfig) {
+  if (config.NODE_ENV !== "production") return;
+
+  if (!requiredInProduction("DASHBOARD_PASSWORD")) {
+    throw new Error("Production startup blocked: DASHBOARD_PASSWORD is required.");
+  }
+  if (!requiredInProduction("DATABASE_URL")) {
+    throw new Error("Production startup blocked: DATABASE_URL is required.");
+  }
+  if (!requiredInProduction("REDIS_URL")) {
+    throw new Error("Production startup blocked: REDIS_URL is required.");
+  }
+  if (config.ENABLE_SIGNAL_MODE_OUTPUT && (!requiredInProduction("TELEGRAM_BOT_TOKEN") || !requiredInProduction("TELEGRAM_CHAT_ID"))) {
+    throw new Error("Production startup blocked: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when ENABLE_SIGNAL_MODE_OUTPUT=true.");
+  }
+  if (config.ENGINE_MODE === "live" && (!config.LIVE_SAFETY_ENABLED || config.KILL_SWITCH_MODE !== "on")) {
+    throw new Error("Production startup blocked: unsafe live mode settings (require LIVE_SAFETY_ENABLED=true and KILL_SWITCH_MODE=on).");
+  }
+  if (config.EXECUTION_MODE !== "signal_only") {
+    throw new Error("Production startup blocked: EXECUTION_MODE must remain signal_only until broker adapters are available.");
+  }
+}
+
 export const getConfig = (): RuntimeConfig => {
   loadLocalRuntimeEnv();
-  return envSchema.parse(process.env);
+  const config = envSchema.parse(process.env);
+  validateProductionSafety(config);
+  return config;
 };
 
 

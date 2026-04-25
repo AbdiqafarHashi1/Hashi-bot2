@@ -440,6 +440,9 @@ export type SignalRoomPayload = {
   };
   reconciliation: {
     cycleId: string | null;
+    cycleTruth?: {
+      candidatesRejectedBy?: Record<string, number>;
+    } | null;
     currentCycle: {
       candidatesEvaluatedThisCycle: number;
       signalsPersistedThisCycle: number;
