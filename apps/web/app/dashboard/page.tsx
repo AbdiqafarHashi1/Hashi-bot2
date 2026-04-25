@@ -733,8 +733,8 @@ export default function DashboardPage() {
                   <p>remainingSignalAllowance: <span className="font-medium">{remainingSignalAllowance}</span></p>
                   <p>lastSignalTime: <span className="font-medium">{lastSignalIso ?? "none"}</span></p>
                   <p>nextEligibleSignalTime: <span className="font-medium">{nextEligibleIso}</span></p>
-                  <p>blockedByCooldownThisCycle: <span className="font-medium">{String(data.signalRoom?.reconciliation?.cycleTruth?.candidatesRejectedBy?.cooldown ?? 0)}</span></p>
-                  <p>blockedByQualityThisCycle: <span className="font-medium">{String((data.signalRoom?.reconciliation?.cycleTruth?.candidatesRejectedBy?.below_min_tier ?? 0) + (data.signalRoom?.reconciliation?.cycleTruth?.candidatesRejectedBy?.below_min_score ?? 0))}</span></p>
+                  <p>blockedByCooldownThisCycle: <span className="font-medium">{String(data.signalRoom?.cycleTruth?.candidatesRejectedBy?.cooldown ?? 0)}</span></p>
+                  <p>blockedByQualityThisCycle: <span className="font-medium">{String((data.signalRoom?.cycleTruth?.candidatesRejectedBy?.below_min_tier ?? 0) + (data.signalRoom?.cycleTruth?.candidatesRejectedBy?.below_min_score ?? 0))}</span></p>
                   <p>latestRejectedReason: <span className="font-medium">{data.signalRoom?.rejectedThisCycle?.[0]?.rejectionReason ?? "none"}</span></p>
                 </div>
                 {controlError && <p className="rounded border border-rose-700/50 bg-rose-900/20 p-2 text-xs text-rose-200">{controlError}</p>}

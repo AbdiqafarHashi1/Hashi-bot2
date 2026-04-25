@@ -9,6 +9,7 @@ export class PublicForexLiveBarAdapter implements MarketTypeLiveAnalysisAdapter 
 
   constructor(options: {
     apiKey?: string;
+    alphaVantageKey?: string;
     includePublicFallback?: boolean;
     maxConsecutiveFailures?: number;
     staleCandleMultiplier?: number;
@@ -18,7 +19,7 @@ export class PublicForexLiveBarAdapter implements MarketTypeLiveAnalysisAdapter 
     this.sessionConfig = createForexSessionConfig({ openUtc: options.marketOpenUtc, closeUtc: options.marketCloseUtc });
     this.orchestrator = new MarketDataFeedOrchestrator(
       "forex",
-      createDefaultForexProviders({ apiKey: options.apiKey, includePublicFallback: options.includePublicFallback }),
+      createDefaultForexProviders({ apiKey: options.apiKey, alphaVantageKey: options.alphaVantageKey, includePublicFallback: options.includePublicFallback }),
       options.maxConsecutiveFailures ?? 3,
       options.staleCandleMultiplier ?? 3,
       this.sessionConfig

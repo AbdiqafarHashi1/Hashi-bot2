@@ -41,6 +41,14 @@ export function Sidebar() {
         );
         })}
       </nav>
+      <div className="mt-4 border-t border-slate-800 pt-3">
+        <Link
+          href="/logout"
+          className="block rounded-md px-3 py-2 text-sm text-rose-200 transition-colors hover:bg-rose-900/30 hover:text-rose-100"
+        >
+          Logout
+        </Link>
+      </div>
     </aside>
   );
 }
