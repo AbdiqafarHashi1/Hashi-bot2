@@ -37,3 +37,4 @@ export * from "./live-analysis/forex-mt5-live-adapter";
 export * from "./live-analysis/forex-public-live-adapter";
 export * from "./execution/paper-account";
 export * from "./arbitration/strategy-brain";
+

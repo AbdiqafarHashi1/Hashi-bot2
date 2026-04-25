@@ -551,6 +551,15 @@ type SymbolScanBoardState = {
   preloadStatus: "context_ready" | "blocked";
   contextStatus: "ready" | "blocked";
   blockedReason: string | null;
+  activeProvider?: string;
+  providerHealth?: string;
+  fallbackStatus?: string;
+  lastCandleTime?: string | null;
+  candleAgeMs?: number | null;
+  lastError?: string | null;
+  reconnectCount?: number;
+  marketStatus?: "open" | "closed";
+  nextMarketOpenAt?: string | null;
   engineResults: Record<string, {
     result: EngineScanResultStatus;
     reason: string | null;
@@ -1551,6 +1560,8 @@ async function generateUnifiedSignalsForContext(params: {
             signalScore: quality.signalScore,
             tier: quality.tier,
             scoring: quality.components,
+            providerUsed: marketContext.source?.used ?? "unknown",
+            candleTimestamp: new Date((marketContext.candles[marketContext.executionTimeframe].at(-1)?.closeTime ?? Date.now())).toISOString(),
             ...recommendation,
             rationale: [
               ...quality.reasons,
@@ -1953,16 +1964,22 @@ function computeAnalysisReadiness(params: {
   const contextValidation = validateContextCandles(marketContext.candles);
   const indicatorsComputable = candleCount["5m"] >= 50 && candleCount["15m"] >= 50 && candleCount["1h"] >= 20 && candleCount["4h"] >= 20;
   const requiredValidation = validateRequiredLiveAnalysisCandles(marketContext.candles, minRequired);
-  const analysisReady = transportReady && contextValidation.ready && indicatorsComputable && requiredValidation.ok;
+  const latestExecutionCandle = marketContext.candles[marketContext.executionTimeframe].at(-1);
+  const candleAgeMs = latestExecutionCandle ? Date.now() - latestExecutionCandle.closeTime : Number.POSITIVE_INFINITY;
+  const staleThresholdMs = timeframeToMinutes[marketContext.executionTimeframe] * 60_000 * 3;
+  const staleBlocked = candleAgeMs > staleThresholdMs;
+  const analysisReady = transportReady && contextValidation.ready && indicatorsComputable && requiredValidation.ok && !staleBlocked;
   const blockedReason = !transportReady
     ? "transport_not_ready"
     : !contextValidation.ready
       ? contextValidation.blockedReason
     : !requiredValidation.ok
       ? requiredValidation.reason
-      : !indicatorsComputable
-        ? "insufficient_indicator_context"
-        : undefined;
+      : staleBlocked
+        ? "feed_stale"
+        : !indicatorsComputable
+          ? "insufficient_indicator_context"
+          : undefined;
 
   return {
     symbol: symbolContext.symbol,
@@ -2405,9 +2422,21 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   symbolsScanned = runtimeSymbols.length;
   const runtime = new BreakoutMultiSymbolRuntime(runtimeSymbols);
 
+  const cryptoAdapter = new CryptoLiveKlineAdapter(primary, backup, {
+    maxConsecutiveFailures: config.MARKET_DATA_MAX_CONSECUTIVE_FAILURES,
+    staleCandleMultiplier: config.MARKET_DATA_STALE_CANDLE_MULTIPLIER
+  });
+  const forexAdapter = new PublicForexLiveBarAdapter({
+    apiKey: config.FOREX_MARKET_DATA_API_KEY,
+    includePublicFallback: true,
+    maxConsecutiveFailures: config.MARKET_DATA_MAX_CONSECUTIVE_FAILURES,
+    staleCandleMultiplier: config.MARKET_DATA_STALE_CANDLE_MULTIPLIER,
+    marketOpenUtc: config.FOREX_MARKET_OPEN_UTC,
+    marketCloseUtc: config.FOREX_MARKET_CLOSE_UTC
+  });
   const marketTypeLoader = new MarketTypeAwareAnalysisLoader({
-    crypto: new CryptoLiveKlineAdapter(primary, backup),
-    forex: new PublicForexLiveBarAdapter()
+    crypto: cryptoAdapter,
+    forex: forexAdapter
   });
 
   const [cryptoReadiness, forexReadiness] = await marketTypeLoader.readinessByMarketType({
@@ -2560,7 +2589,15 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "preload_failed";
       const blockedReason = symbolContext.marketType === "forex"
-        ? (errorMessage.includes("404") ? "forex_feed_404" : `forex_feed_unavailable:${errorMessage}`)
+        ? (errorMessage.includes("forex_market_closed")
+          ? "forex_market_closed"
+          : errorMessage.includes("forex_provider_not_configured")
+            ? "forex_provider_not_configured"
+            : errorMessage.includes("forex_feed_stale")
+              ? "forex_feed_stale"
+              : errorMessage.includes("forex_no_recent_candles")
+                ? "forex_no_recent_candles"
+                : "forex_provider_unavailable")
         : errorMessage;
       if (blockedReason.includes("provider_fetch_failed")) {
         providerFailures += 1;
@@ -2595,6 +2632,43 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       });
     }
   }
+
+  for (const status of cryptoAdapter.listFeedStatuses()) {
+    const board = symbolScanBoard.get(status.symbol);
+    if (!board) continue;
+    board.activeProvider = status.activeProvider;
+    board.providerHealth = status.providerHealth.consecutiveFailures === 0 ? "healthy" : "degraded";
+    board.fallbackStatus = status.fallbackProviderUsed ? `fallback:${status.fallbackProviderUsed}` : "primary";
+    board.lastCandleTime = status.lastCandleTime ? new Date(status.lastCandleTime).toISOString() : null;
+    board.candleAgeMs = status.candleAgeMs;
+    board.lastError = status.providerHealth.lastError;
+    board.reconnectCount = status.providerHealth.reconnectCount;
+    board.marketStatus = status.marketStatus;
+    board.nextMarketOpenAt = status.nextMarketOpenAt ?? null;
+    if (status.blockedReason && !board.blockedReason) {
+      board.blockedReason = status.blockedReason;
+      board.rejectedReason = board.rejectedReason ?? status.blockedReason;
+    }
+  }
+
+  for (const status of forexAdapter.listFeedStatuses()) {
+    const board = symbolScanBoard.get(status.symbol);
+    if (!board) continue;
+    board.activeProvider = status.activeProvider;
+    board.providerHealth = status.providerHealth.consecutiveFailures === 0 ? "healthy" : "degraded";
+    board.fallbackStatus = status.fallbackProviderUsed ? `fallback:${status.fallbackProviderUsed}` : "primary";
+    board.lastCandleTime = status.lastCandleTime ? new Date(status.lastCandleTime).toISOString() : null;
+    board.candleAgeMs = status.candleAgeMs;
+    board.lastError = status.providerHealth.lastError;
+    board.reconnectCount = status.providerHealth.reconnectCount;
+    board.marketStatus = status.marketStatus;
+    board.nextMarketOpenAt = status.nextMarketOpenAt ?? null;
+    if (status.blockedReason && !board.blockedReason) {
+      board.blockedReason = status.blockedReason;
+      board.rejectedReason = board.rejectedReason ?? status.blockedReason;
+    }
+  }
+
 
   const analysisReadySymbols = symbolReadiness.filter((entry) => entry.analysisReady).map((entry) => entry.symbol);
   for (const readiness of symbolReadiness) {

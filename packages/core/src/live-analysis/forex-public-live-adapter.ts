@@ -1,58 +1,46 @@
-import type { Candle, Symbol, Timeframe } from "../domains";
+import type { Symbol, Timeframe } from "../domains";
 import { normalizeLiveAnalysisCandles, type LiveAnalysisMarketData, type LiveAnalysisReadiness, type MarketTypeLiveAnalysisAdapter } from "./contracts";
-
-type YahooChartResponse = {
-  chart?: {
-    result?: Array<{
-      timestamp?: number[];
-      indicators?: {
-        quote?: Array<{
-          open?: Array<number | null>;
-          high?: Array<number | null>;
-          low?: Array<number | null>;
-          close?: Array<number | null>;
-          volume?: Array<number | null>;
-        }>;
-      };
-    }>;
-  };
-};
-
-const timeframeToYahooInterval: Record<Timeframe, string> = {
-  "5m": "5m",
-  "15m": "15m",
-  "1h": "60m",
-  "4h": "1h"
-};
-
-const timeframeToYahooRange: Record<Timeframe, string> = {
-  "5m": "7d",
-  "15m": "60d",
-  "1h": "730d",
-  "4h": "730d"
-};
-
-const forexSymbolMap: Record<string, string> = {
-  EURUSD: "EURUSD=X",
-  GBPUSD: "GBPUSD=X",
-  USDJPY: "USDJPY=X",
-  AUDUSD: "AUDUSD=X",
-  NZDUSD: "NZDUSD=X",
-  USDCAD: "USDCAD=X",
-  USDCHF: "USDCHF=X",
-  EURJPY: "EURJPY=X",
-  GBPJPY: "GBPJPY=X",
-  XAUUSD: "XAUUSD=X"
-};
-
-function toYahooSymbol(symbol: Symbol): string {
-  return forexSymbolMap[symbol] ?? `${symbol}=X`;
-}
+import { createDefaultForexProviders, createForexSessionConfig, MarketDataFeedOrchestrator, resolveForexSessionState, type SymbolFeedStatus } from "./market-data-provider-layer";
 
 export class PublicForexLiveBarAdapter implements MarketTypeLiveAnalysisAdapter {
   readonly marketType = "forex" as const;
+  private readonly orchestrator: MarketDataFeedOrchestrator;
+  private readonly sessionConfig: ReturnType<typeof createForexSessionConfig>;
+
+  constructor(options: {
+    apiKey?: string;
+    includePublicFallback?: boolean;
+    maxConsecutiveFailures?: number;
+    staleCandleMultiplier?: number;
+    marketOpenUtc?: string;
+    marketCloseUtc?: string;
+  } = {}) {
+    this.sessionConfig = createForexSessionConfig({ openUtc: options.marketOpenUtc, closeUtc: options.marketCloseUtc });
+    this.orchestrator = new MarketDataFeedOrchestrator(
+      "forex",
+      createDefaultForexProviders({ apiKey: options.apiKey, includePublicFallback: options.includePublicFallback }),
+      options.maxConsecutiveFailures ?? 3,
+      options.staleCandleMultiplier ?? 3,
+      this.sessionConfig
+    );
+  }
+
+  listFeedStatuses(): SymbolFeedStatus[] {
+    return this.orchestrator.listStatuses();
+  }
 
   async readiness(symbols: Symbol[]): Promise<LiveAnalysisReadiness> {
+    const session = resolveForexSessionState(this.sessionConfig);
+    if (!session.open) {
+      return {
+        marketType: "forex",
+        adapterPresent: true,
+        transportConnected: false,
+        reason: "forex_market_closed",
+        symbolsReady: [],
+        symbolsNotReady: symbols
+      };
+    }
     if (symbols.length === 0) {
       return {
         marketType: "forex",
@@ -64,27 +52,31 @@ export class PublicForexLiveBarAdapter implements MarketTypeLiveAnalysisAdapter 
       };
     }
 
-    const sample = symbols[0];
-    try {
-      await this.getBars(sample, "15m", 16);
-      return {
-        marketType: "forex",
-        adapterPresent: true,
-        transportConnected: true,
-        reason: "public_forex_feed_reachable",
-        symbolsReady: symbols,
-        symbolsNotReady: []
-      };
-    } catch (error) {
-      return {
-        marketType: "forex",
-        adapterPresent: true,
-        transportConnected: false,
-        reason: error instanceof Error ? error.message : "public_forex_feed_unreachable",
-        symbolsReady: [],
-        symbolsNotReady: symbols
-      };
-    }
+    const checks = await Promise.all(symbols.map(async (symbol) => {
+      try {
+        const result = await this.orchestrator.getSnapshot(symbol, "15m", 4);
+        return { symbol, ok: result.candles.length > 0 };
+      } catch {
+        return { symbol, ok: false };
+      }
+    }));
+
+    const symbolsReady = checks.filter((entry) => entry.ok).map((entry) => entry.symbol);
+    const symbolsNotReady = checks.filter((entry) => !entry.ok).map((entry) => entry.symbol);
+    const reason = this.orchestrator.listStatuses().length === 0
+      ? "forex_provider_not_configured"
+      : symbolsReady.length > 0
+        ? "forex_feed_reachable"
+        : "forex_provider_unavailable";
+
+    return {
+      marketType: "forex",
+      adapterPresent: true,
+      transportConnected: symbolsReady.length > 0,
+      reason,
+      symbolsReady,
+      symbolsNotReady
+    };
   }
 
   async load(input: {
@@ -94,77 +86,30 @@ export class PublicForexLiveBarAdapter implements MarketTypeLiveAnalysisAdapter 
     htf2: Timeframe;
     candleLimit: number;
   }): Promise<LiveAnalysisMarketData> {
-    const [bars5m, bars15m, bars1h, bars4h] = await Promise.all([
-      this.getBars(input.symbol, "5m", input.candleLimit),
-      this.getBars(input.symbol, "15m", input.candleLimit),
-      this.getBars(input.symbol, "1h", input.candleLimit),
-      this.getBars(input.symbol, "4h", input.candleLimit)
+    const [bars5m, bars15m, bars1h, bars4h, latest] = await Promise.all([
+      this.orchestrator.getSnapshot(input.symbol, "5m", input.candleLimit),
+      this.orchestrator.getSnapshot(input.symbol, "15m", input.candleLimit),
+      this.orchestrator.getSnapshot(input.symbol, "1h", input.candleLimit),
+      this.orchestrator.getSnapshot(input.symbol, "4h", input.candleLimit),
+      this.orchestrator.getSnapshot(input.symbol, "15m", 1)
     ]);
-    const latest = bars15m.at(-1) ?? bars5m.at(-1) ?? bars1h.at(-1) ?? bars4h.at(-1);
-    if (!latest) throw new Error(`No forex bars returned for ${input.symbol}`);
 
     return {
       symbol: input.symbol,
       marketType: "forex",
-      latestPrice: latest.close,
+      latestPrice: latest.latestPrice,
       source: {
         primary: "mt5_bridge",
         backup: "mt5_bridge",
         used: "mt5_bridge",
-        fallbackUsed: false
+        fallbackUsed: bars15m.fallbackUsed
       },
       candles: normalizeLiveAnalysisCandles({
-        "5m": bars5m,
-        "15m": bars15m,
-        "1h": bars1h,
-        "4h": bars4h
+        "5m": bars5m.candles,
+        "15m": bars15m.candles,
+        "1h": bars1h.candles,
+        "4h": bars4h.candles
       })
     };
-  }
-
-  private async getBars(symbol: Symbol, timeframe: Timeframe, limit: number): Promise<Candle[]> {
-    const yahooSymbol = toYahooSymbol(symbol);
-    const interval = timeframeToYahooInterval[timeframe];
-    const range = timeframeToYahooRange[timeframe];
-    const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=${interval}&range=${range}`);
-    if (!response.ok) {
-      throw new Error(`Public forex bars request failed for ${symbol}/${timeframe}: ${response.status}`);
-    }
-
-    const body = (await response.json()) as YahooChartResponse;
-    const result = body.chart?.result?.[0];
-    const timestamps = result?.timestamp ?? [];
-    const quote = result?.indicators?.quote?.[0];
-    const opens = quote?.open ?? [];
-    const highs = quote?.high ?? [];
-    const lows = quote?.low ?? [];
-    const closes = quote?.close ?? [];
-    const volumes = quote?.volume ?? [];
-
-    const bars: Candle[] = [];
-    for (let index = 0; index < timestamps.length; index += 1) {
-      const ts = timestamps[index];
-      const open = Number(opens[index]);
-      const high = Number(highs[index]);
-      const low = Number(lows[index]);
-      const close = Number(closes[index]);
-      if (![open, high, low, close].every((value) => Number.isFinite(value) && value > 0)) continue;
-      const openTime = ts * 1000;
-      bars.push({
-        openTime,
-        closeTime: openTime + 1,
-        open,
-        high,
-        low,
-        close,
-        volume: Number.isFinite(Number(volumes[index])) ? Number(volumes[index]) : 0,
-        source: "mt5_bridge"
-      });
-    }
-
-    if (bars.length === 0) {
-      throw new Error(`No valid forex bars returned for ${symbol}/${timeframe}`);
-    }
-    return bars.slice(-Math.max(limit, 1));
   }
 }
