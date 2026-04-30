@@ -14,9 +14,12 @@
     "validate:signal-output": "tsx scripts/validate-signal-mode-output.ts",
     "validate:phase-b6": "HASHI_ENV_FILE=.env.signal tsx scripts/validate-phase-b6-local-run-ready.ts",
     "validate:env": "bash scripts/validate-env.sh .env.production",
-    "validate:signal-prod": "pnpm validate:env && tsx scripts/validate-signal-prod.ts",
+    "validate:signal-prod": "bash scripts/validate-signal-prod.sh",
     "validate:prop-prod": "pnpm validate:env && tsx scripts/validate-demo-connectors.ts",
-    "validate:telegram": "curl -s -X POST http://localhost:3000/api/telegram/test || true"
+    "validate:telegram": "curl -s -X POST http://localhost:3000/api/telegram/test || true",
+    "validate:ui-contract": "tsx scripts/validate-ui-contract.ts",
+    "validate:paper-execution": "tsx scripts/validate-paper-execution.ts",
+    "validate:responsive-ui": "tsx scripts/validate-responsive-ui.ts"
   },
   "devDependencies": {
     "typescript": "^5.7.3",
