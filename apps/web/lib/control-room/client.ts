@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ControlRoomStatePayload } from "./contracts";
+import { mapApiError } from "./error";
 
 export function useControlRoomState() {
   const [data, setData] = useState<ControlRoomStatePayload | null>(null);
@@ -10,9 +11,12 @@ export function useControlRoomState() {
 
   useEffect(() => {
     let mounted = true;
-    fetch("/api/control-room/state")
-      .then((res) => {
-        if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    const load = () => fetch("/api/control-room/state", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) {
+          const payload = (await res.json().catch(() => null)) as { message?: string; code?: string; traceId?: string } | null;
+          throw new Error(mapApiError(res.status, payload));
+        }
         return res.json() as Promise<ControlRoomStatePayload>;
       })
       .then((json) => {
@@ -30,8 +34,11 @@ export function useControlRoomState() {
         setLoading(false);
       });
 
+    void load();
+    const timer = setInterval(() => void load(), 7000);
     return () => {
       mounted = false;
+      clearInterval(timer);
     };
   }, []);
 
