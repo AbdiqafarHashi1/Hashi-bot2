@@ -351,6 +351,7 @@ type EntryDispatchCandidate = {
   signalTradeId: string;
   symbol: string;
   message: string;
+  tier: SignalTier;
 };
 type CycleOutcome = "completed" | "skipped" | "error";
 type WorkerCycleSummary = {
@@ -854,7 +855,7 @@ function readRuntimeControlConfig(): RuntimeControlConfig | null {
         ? parsed.replayDatasetPath.trim()
         : DEFAULT_REPLAY_DATASET_PATH,
       signalMode: {
-        minimumTier: parsed.signalMode?.minimumTier === "A+" ? "A+" : "A",
+        minimumTier: "A+",
         dailySignalTarget: Math.max(1, Math.min(5, Number(parsed.signalMode?.dailySignalTarget ?? 2))),
         symbolCooldownMinutes: Math.max(15, Math.min(240, Number(parsed.signalMode?.symbolCooldownMinutes ?? 90))),
         globalCooldownMinutes: Math.max(5, Math.min(120, Number(parsed.signalMode?.globalCooldownMinutes ?? 20))),
@@ -882,7 +883,7 @@ function applyRuntimeControlConfig(config: ReturnType<typeof getConfig>): Return
     ...config,
     CAPITAL_MODE: activeMode,
     EXECUTION_MODE: executionMode,
-    ENGINE_PHASE_LOCK: "engine1_only",
+    ENGINE_PHASE_LOCK: config.ENGINE_PHASE_LOCK,
     DEFAULT_SYMBOLS: modeConfig?.symbols ?? config.DEFAULT_SYMBOLS,
     SIGNAL_PAPER_RISK_PCT: Math.max((modeConfig?.riskPerTradePct ?? config.SIGNAL_PAPER_RISK_PCT) / 100, 0.0005),
     SIGNAL_PAPER_MAX_OPEN_RISK_PCT: Math.max((modeConfig?.maxOpenRiskPct ?? (config.SIGNAL_PAPER_MAX_OPEN_RISK_PCT * 100)) / 100, 0.001),
@@ -981,6 +982,14 @@ function tierPriority(tier: SignalTier) {
   if (tier === "A+") return 3;
   if (tier === "A") return 2;
   return 1;
+}
+
+function assertAPlusSignal(signal: { symbol: string; setupGrade: SignalTier }, phase: string) {
+  if (signal.setupGrade !== "A+") {
+    console.log(JSON.stringify({ event: "REJECT_NON_A_PLUS", phase, symbol: signal.symbol, tier: signal.setupGrade }, null, 2));
+    return false;
+  }
+  return true;
 }
 
 function rankingTieBreakers(params: {
@@ -3101,6 +3110,15 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }, null, 2));
   };
   const independentMultiEngineMode = config.MULTI_ENGINE_EXECUTION_MODE === "independent";
+  const tierDistribution = cycleCandidates.reduce<Record<string, number>>((acc, candidate) => {
+    const tier = candidate.signal.setupGrade ?? "unknown";
+    acc[tier] = (acc[tier] ?? 0) + 1;
+    return acc;
+  }, {});
+  const engine1Candidates = cycleCandidates.filter((candidate) => candidate.signal.strategyId.includes("compression_breakout")).length;
+  const engine2Candidates = cycleCandidates.filter((candidate) => candidate.signal.strategyId.includes("trend") || candidate.signal.strategyId.includes("continuation")).length;
+  console.log(JSON.stringify({ event: "CANDIDATE_TIER_DISTRIBUTION", cycleNumber, tierDistribution }, null, 2));
+  console.log(JSON.stringify({ event: "ENGINE_PARALLEL_CANDIDATES", cycleNumber, engine1Candidates, engine2Candidates }, null, 2));
 
   const latestPriceBySymbol = new Map<string, number>();
   for (const candidate of cycleCandidates) {
@@ -3119,7 +3137,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   const selectedReasonBySymbol = new Map<string, string>();
   let diversificationNotes: string[] = [];
   const signalModeFrequency = {
-    minimumTier: runtimeControl?.signalMode?.minimumTier === "A+" ? "A+" as SignalMinimumTier : "A" as SignalMinimumTier,
+    minimumTier: "A+" as SignalMinimumTier,
     dailySignalTarget: Math.max(1, Math.min(5, Number(runtimeControl?.signalMode?.dailySignalTarget ?? 2))),
     symbolCooldownMinutes: Math.max(15, Math.min(240, Number(runtimeControl?.signalMode?.symbolCooldownMinutes ?? 90))),
     globalCooldownMinutes: Math.max(5, Math.min(120, Number(runtimeControl?.signalMode?.globalCooldownMinutes ?? 20))),
@@ -3181,7 +3199,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     ]);
     const midSessionReached = now.getUTCHours() >= 12;
     const belowDailyTargetByMidSession = midSessionReached && signalsSentToday < signalModeFrequency.dailySignalTarget;
-    if (signalModeFrequency.relaxationEnabled && belowDailyTargetByMidSession) {
+    if (signalModeFrequency.relaxationEnabled && belowDailyTargetByMidSession && !effectiveRequireAPlusOnly) {
       effectiveMinScore = Math.max(B_PLUS_MIN_SCORE, baseMinScore - 3);
     }
     const dailyAllowanceHardCap = signalModeFrequency.dailySignalTarget + 1;
@@ -3817,7 +3835,16 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
   const cycleNow = new Date();
 
+  finalSelectedCandidates = finalSelectedCandidates.filter((candidate) => {
+    if (runtimeMode === "signal" && candidate.signal.setupGrade !== "A+") {
+      console.log(JSON.stringify({ event: "REJECT_NON_A_PLUS", phase: "selection", symbol: candidate.signal.symbol, tier: candidate.signal.setupGrade }, null, 2));
+      rejectionCounts.below_min_tier += 1;
+      return false;
+    }
+    return true;
+  });
   if (prismaClient && finalSelectedCandidates.length > 0) {
+    finalSelectedCandidates = finalSelectedCandidates.filter((entry) => assertAPlusSignal(entry.signal, "pre_persist_selected_signal"));
     const [openTrades, openOutcomes] = await Promise.all([
       prismaClient.signalTrade.findMany({
         where: activeSignalTradeWhereClause(),
@@ -3873,6 +3900,18 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     finalSelectedCandidates = dedupedCandidates;
   }
   candidatesSelectedCount = finalSelectedCandidates.length;
+  const perSymbolSelectedCounts = finalSelectedCandidates.reduce<Record<string, number>>((acc, candidate) => {
+    acc[candidate.signal.symbol] = (acc[candidate.signal.symbol] ?? 0) + 1;
+    return acc;
+  }, {});
+  console.log(JSON.stringify({
+    event: "ARBITRATION_PROOF",
+    cycleNumber,
+    engine1Candidates,
+    engine2Candidates,
+    perSymbolSelectedCounts,
+    oneOrNonePerSymbol: Object.values(perSymbolSelectedCounts).every((count) => count <= 1)
+  }, null, 2));
 
   if (runtimeMode !== "signal" && finalSelectedCandidates.length > 0) {
     for (const candidate of finalSelectedCandidates) {
@@ -3963,7 +4002,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     });
 
     await prismaClient.signalOutcome.createMany({
-      data: finalSelectedCandidates.map((entry) => ({
+      data: finalSelectedCandidates.filter((entry) => assertAPlusSignal(entry.signal, "create_signal_outcome")).map((entry) => ({
         symbol: entry.signal.symbol,
         side: entry.signal.side,
         entry: entry.signal.entryPrice,
@@ -4239,6 +4278,10 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           continue;
         }
 
+        const dispatchSignal = signalCandidate?.signal;
+        if (!dispatchSignal || !assertAPlusSignal(dispatchSignal, "create_signal_trade")) {
+          continue;
+        }
         const persistedTrade = await prismaClient.signalTrade.upsert({
           where: { signalEventId: event.id },
           update: {},
@@ -4300,7 +4343,6 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           }, null, 2));
         }
 
-        const dispatchSignal = signalCandidate?.signal;
         if (dispatchSignal) {
           const entryMessage = buildSignalModePayload({
             rankedSetups: [],
@@ -4310,12 +4352,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             minTier: effectiveMinTier,
             maxSignals: 1
           }).messages[0];
-          if (entryMessage) {
+          if (entryMessage && assertAPlusSignal(dispatchSignal, "telegram_entry_dispatch")) {
             entryDispatchCandidates.push({
               signalEventId: event.id,
               signalTradeId: persistedTrade.id,
               symbol: event.symbol,
-              message: entryMessage
+              message: entryMessage,
+              tier: dispatchSignal.setupGrade
             });
           }
         }
@@ -4686,7 +4729,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
   }
 
-  const resolvedSignalOutcomeMessages: string[] = [];
+  const resolvedSignalOutcomeMessages: Array<{ symbol: string; message: string }> = [];
   if (prismaClient && runtimeMode === "signal") {
     const openOutcomes = await prismaClient.signalOutcome.findMany({
       where: {
@@ -4851,8 +4894,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           }
         });
         const rValue = finalResolvedR ?? 0;
-        resolvedSignalOutcomeMessages.push(
-          [
+        resolvedSignalOutcomeMessages.push({
+          symbol: outcome.symbol,
+          message: [
             `RESULT [${outcome.tier}]`,
             "",
             `${outcome.symbol} ${outcome.side}`,
@@ -4862,7 +4906,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             `R result: ${rValue.toFixed(2)}`,
             `time to outcome: ${ageSeconds}s`
           ].join("\n")
-        );
+        });
       }
     }
   }
@@ -5512,12 +5556,17 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
   const entryDispatchPlan = entryDispatchCandidates.filter((entry) => Boolean(entry.message));
   if (runtimeMode === "signal" && entryDispatchPlan.length > 0) {
+    const nonAPlusSelected = entryDispatchPlan.filter((entry) => entry.tier !== "A+");
+    if (nonAPlusSelected.length > 0) {
+      console.log(JSON.stringify({ event: "REJECT_NON_A_PLUS", phase: "dispatch", count: nonAPlusSelected.length, symbols: nonAPlusSelected.map((e) => e.symbol) }, null, 2));
+    }
+    const guardedEntryDispatchPlan = entryDispatchPlan.filter((entry) => entry.tier === "A+");
     if (debugVisibilityEnabled) {
       console.log(JSON.stringify({
         event: "TELEGRAM_DISPATCH_BEGIN",
         cycleNumber,
-        messageCount: entryDispatchPlan.length,
-        selectedCount: entryDispatchPlan.length
+        messageCount: guardedEntryDispatchPlan.length,
+        selectedCount: guardedEntryDispatchPlan.length
       }, null, 2));
     }
     if (prismaClient) {
@@ -5526,7 +5575,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           type: "dispatch_attempt",
           mode: "signal",
           message: "Dispatching Telegram signal messages",
-          payload: { messageCount: entryDispatchPlan.length }
+          payload: { messageCount: guardedEntryDispatchPlan.length }
         }
       });
     }
@@ -5539,10 +5588,10 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             mode: "signal_only",
             generatedAt: cycleNow.toISOString(),
             cycleId,
-            signalCount: entryDispatchPlan.length,
-            signals: entryDispatchPlan.map((entry) => ({ symbol: entry.symbol, signalEventId: entry.signalEventId }))
+            signalCount: guardedEntryDispatchPlan.length,
+            signals: guardedEntryDispatchPlan.map((entry) => ({ symbol: entry.symbol, signalEventId: entry.signalEventId }))
           },
-          telegramMessages: entryDispatchPlan.map((entry) => entry.message)
+          telegramMessages: guardedEntryDispatchPlan.map((entry) => entry.message)
         },
         null,
         2
@@ -5550,7 +5599,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     );
 
     const dispatchResults = await sendSignalModeTelegramMessages({
-      messages: entryDispatchPlan.map((entry) => entry.message),
+      messages: guardedEntryDispatchPlan.map((entry) => entry.message),
       botToken: config.TELEGRAM_BOT_TOKEN,
       chatId: config.TELEGRAM_CHAT_ID,
       parseMode: config.TELEGRAM_PARSE_MODE
@@ -5567,7 +5616,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     }
 
     if (prismaClient) {
-      const selectedSignalDispatches = entryDispatchPlan.map((entry, index) => {
+      const selectedSignalDispatches = guardedEntryDispatchPlan.map((entry, index) => {
         const result = dispatchResults[index];
         return {
           symbol: entry.symbol,
@@ -5647,9 +5696,9 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             status: result.status,
             message: result.status === "sent" ? "telegram_message_sent" : "telegram_message_failed",
             payload: {
-              signalEventId: entryDispatchPlan[index]?.signalEventId ?? null,
-              signalTradeId: entryDispatchPlan[index]?.signalTradeId ?? null,
-              symbol: entryDispatchPlan[index]?.symbol ?? null,
+              signalEventId: guardedEntryDispatchPlan[index]?.signalEventId ?? null,
+              signalTradeId: guardedEntryDispatchPlan[index]?.signalTradeId ?? null,
+              symbol: guardedEntryDispatchPlan[index]?.symbol ?? null,
               messageNumber: result.messageNumber,
               reason: result.reason ?? null,
               parseMode: result.parseMode
@@ -5719,23 +5768,42 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
   }
 
   if (runtimeMode === "signal" && resolvedSignalOutcomeMessages.length > 0) {
+    const entryReferenceBySymbol = new Map<string, string>();
+    if (prismaClient) {
+      const sentEntries = await prismaClient.signalEvent.findMany({
+        where: { telegramDispatchStatus: "sent" },
+        select: { symbol: true, id: true },
+        orderBy: { generatedAt: "desc" }
+      });
+      for (const row of sentEntries) {
+        if (!entryReferenceBySymbol.has(row.symbol)) entryReferenceBySymbol.set(row.symbol, row.id);
+      }
+    }
+    const allowedResults = resolvedSignalOutcomeMessages.filter((entry) => entryReferenceBySymbol.has(entry.symbol) && entry.message.includes("[A+]"));
+    const blockedResults = resolvedSignalOutcomeMessages.filter((entry) => !entryReferenceBySymbol.has(entry.symbol));
+    for (const blocked of blockedResults) {
+      console.log(JSON.stringify({ event: "RESULT_BLOCKED_NO_ENTRY", symbol: blocked.symbol }, null, 2));
+    }
     if (prismaClient) {
       await prismaClient.runtimeEvent.create({
         data: {
           type: "dispatch_attempt",
           mode: "signal",
           message: "Dispatching signal outcome result messages",
-          payload: { messageCount: resolvedSignalOutcomeMessages.length }
+          payload: { messageCount: allowedResults.length, blockedNoEntryCount: blockedResults.length }
         }
       });
     }
 
     const resultDispatches = await sendSignalModeTelegramMessages({
-      messages: resolvedSignalOutcomeMessages,
+      messages: allowedResults.map((entry) => `${entry.message}\nentry_ref=${entryReferenceBySymbol.get(entry.symbol)}`),
       botToken: config.TELEGRAM_BOT_TOKEN,
       chatId: config.TELEGRAM_CHAT_ID,
       parseMode: config.TELEGRAM_PARSE_MODE
     });
+    for (const result of resultDispatches) {
+      console.log(JSON.stringify({ event: result.status === "sent" ? "RESULT_SENT" : "ENTRY_FAILED", reason: result.reason ?? null }, null, 2));
+    }
     dispatchedTelegramCount += resultDispatches.filter((result) => result.status === "sent").length;
 
     if (prismaClient && resultDispatches.length > 0) {
@@ -6304,7 +6372,7 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
 async function startWorkerLoop() {
   const config = applyRuntimeControlConfig(getConfig());
-  const phaseLock = config.ENGINE_PHASE_LOCK === "engine1_only" ? "engine1_only" : "engine1_only";
+  const phaseLock = config.ENGINE_PHASE_LOCK;
   console.log(JSON.stringify({
     event: "ENGINE_PHASE_LOCK",
     configured: config.ENGINE_PHASE_LOCK,

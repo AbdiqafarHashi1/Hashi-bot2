@@ -8,7 +8,7 @@ const breakoutOperatingModeSchema = z.enum(["stable", "growth", "bounded_aggress
 const executionModeSchema = z.enum(["signal_only", "live_personal", "live_prop"]);
 const capitalModeSchema = z.enum(["signal", "personal", "prop"]);
 const engineModeSchema = z.enum(["live", "replay"]);
-const enginePhaseLockSchema = z.enum(["engine1_only", "legacy"]);
+const enginePhaseLockSchema = z.enum(["engine1_only", "legacy", "multi_a_plus"]);
 const marketTypeSchema = z.enum(["crypto", "forex"]);
 const signalTierSchema = z.enum(["A+", "A", "B"]);
 const signalTp1ProtectModeSchema = z.enum(["break_even", "offset_r"]);
@@ -65,11 +65,11 @@ const envSchema = z.object({
   DEFAULT_CRYPTO_SYMBOLS: csvSymbolsSchema,
   DEFAULT_FOREX_SYMBOLS: csvSymbolsSchema,
   MARKET_TYPE: marketTypeSchema.default("crypto"),
-  SIGNAL_MIN_TIER: signalTierSchema.default("B"),
+  SIGNAL_MIN_TIER: signalTierSchema.default("A+"),
   SIGNAL_MIN_SCORE: z.coerce.number().min(0).max(100).default(62),
-  SIGNAL_REQUIRE_A_PLUS_ONLY: booleanFlagSchema.default(false),
+  SIGNAL_REQUIRE_A_PLUS_ONLY: booleanFlagSchema.default(true),
   SIGNAL_ENABLE_CRYPTO: booleanFlagSchema.default(true),
-  SIGNAL_ENABLE_FOREX: booleanFlagSchema.default(false),
+  SIGNAL_ENABLE_FOREX: booleanFlagSchema.default(true),
 
   MARKET_DATA_PRIMARY: z.string().default("binance_futures_ws"),
   MARKET_DATA_FALLBACKS: csvSymbolsSchema.default("binance_futures_rest,binance_spot_rest"),

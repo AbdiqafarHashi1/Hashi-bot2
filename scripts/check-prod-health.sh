@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILE="${HASHI_ENV_FILE:-.env.production}"
+ENV_FILE=".env.production"
 COMPOSE_ENV_ARGS=()
 if [[ -f "$ENV_FILE" ]]; then
   export HASHI_ENV_FILE="$ENV_FILE"
   COMPOSE_ENV_ARGS=(--env-file "$ENV_FILE")
 fi
 
-BASE_URL="${BASE_URL:-http://localhost}"
+source "$ENV_FILE"
+BASE_URL="${BASE_URL:-https://${APP_DOMAIN}}"
 
 echo "[health] docker compose ps"
 docker compose "${COMPOSE_ENV_ARGS[@]}" ps
@@ -32,3 +33,7 @@ docker compose "${COMPOSE_ENV_ARGS[@]}" exec -T postgres pg_isready -U postgres 
 
 echo "[health] worker container status"
 docker compose "${COMPOSE_ENV_ARGS[@]}" ps worker
+echo "[health] prisma tables"
+docker compose "${COMPOSE_ENV_ARGS[@]}" exec -T postgres psql -U postgres -d hashi_bot2 -c \"\\dt\" | sed 's/^/[health] /'
+echo "[health] signal-mode endpoint"
+curl -fsS "$BASE_URL/api/signal-room" >/dev/null || true
