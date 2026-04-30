@@ -1,5 +1,4 @@
-import type { Candle, MarketType, Symbol, Timeframe } from "../../../packages/core/src/domains";
-import { createForexSessionConfig, MarketDataFeedOrchestrator, type MarketDataProvider } from "../../../packages/core/src/live-analysis/market-data-provider-layer";
+import { createForexSessionConfig, MarketDataFeedOrchestrator, type Candle, type MarketType, type Symbol, type Timeframe, type MarketDataProvider } from "@hashi/core";
 
 class MockProvider implements MarketDataProvider {
   constructor(
@@ -32,13 +31,31 @@ async function run() {
 
   // deterministic market-open/closed simulation by monkey-patching Date for two checks
   const RealDate = Date;
-  (globalThis as any).Date = class extends RealDate { constructor(...args: any[]) { super(...(args.length ? args : ["2026-04-20T12:00:00Z"])); } static now() { return new RealDate("2026-04-20T12:00:00Z").getTime(); } } as any;
+  (globalThis as any).Date = class extends RealDate {
+    constructor(...args: ConstructorParameters<typeof Date>) {
+      if (args.length > 0) {
+        super(args[0] as any);
+      } else {
+        super("2026-04-20T12:00:00Z");
+      }
+    }
+    static now() { return new RealDate("2026-04-20T12:00:00Z").getTime(); }
+  } as any;
   await forexOpenHealthy.getSnapshot("EURUSD", "15m", 3).catch(() => null);
   await forexOpenUnavailable.getSnapshot("EURUSD", "15m", 3).catch(() => null);
   await forexStale.getSnapshot("EURUSD", "15m", 3).catch(() => null);
   await cryptoHealthy.getSnapshot("BTCUSDT", "15m", 3).catch(() => null);
 
-  (globalThis as any).Date = class extends RealDate { constructor(...args: any[]) { super(...(args.length ? args : ["2026-04-25T12:00:00Z"])); } static now() { return new RealDate("2026-04-25T12:00:00Z").getTime(); } } as any;
+  (globalThis as any).Date = class extends RealDate {
+    constructor(...args: ConstructorParameters<typeof Date>) {
+      if (args.length > 0) {
+        super(args[0] as any);
+      } else {
+        super("2026-04-25T12:00:00Z");
+      }
+    }
+    static now() { return new RealDate("2026-04-25T12:00:00Z").getTime(); }
+  } as any;
   await forexClosed.getSnapshot("EURUSD", "15m", 3).catch(() => null);
   (globalThis as any).Date = RealDate as any;
 
