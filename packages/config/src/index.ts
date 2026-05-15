@@ -14,7 +14,7 @@ const signalTierSchema = z.enum(["A+", "A", "B"]);
 const signalTp1ProtectModeSchema = z.enum(["break_even", "offset_r"]);
 const signalRestartPolicySchema = z.enum(["resume_persisted", "reset_signal_mode_state_on_boot"]);
 const execDelayModeSchema = z.enum(["none", "next_candle"]);
-const multiEngineExecutionModeSchema = z.enum(["independent", "legacy"]);
+const multiEngineExecutionModeSchema = z.enum(["independent"]);
 const killSwitchModeSchema = z.enum(["on", "off"]);
 const booleanFlagSchema = z
   .union([z.literal("1"), z.literal("0"), z.literal("true"), z.literal("false"), z.boolean()])
@@ -77,6 +77,14 @@ const envSchema = z.object({
   MARKET_DATA_REST_POLL_MS: z.coerce.number().int().positive().default(12000),
   MARKET_DATA_MAX_CONSECUTIVE_FAILURES: z.coerce.number().int().positive().default(3),
   MARKET_DATA_STALE_CANDLE_MULTIPLIER: z.coerce.number().int().positive().default(3),
+  MARKET_DATA_STALE_MS: z.coerce.number().int().positive().default(120000),
+  SCANNER_HEARTBEAT_STALE_MS: z.coerce.number().int().positive().default(180000),
+  TRACKER_HEARTBEAT_STALE_MS: z.coerce.number().int().positive().default(180000),
+  TELEGRAM_HEALTH_STALE_MS: z.coerce.number().int().positive().default(300000),
+  TELEGRAM_MAX_CONSECUTIVE_FAILURES: z.coerce.number().int().min(1).default(3),
+  RUNTIME_ERROR_RATE_MAX: z.coerce.number().min(0).max(1).default(0.2),
+  INCIDENT_DEDUPE_WINDOW_MS: z.coerce.number().int().positive().default(120000),
+  INCIDENT_ESCALATION_WINDOW_MS: z.coerce.number().int().positive().default(600000),
   SIGNAL_FOREX_READINESS_ONLY: booleanFlagSchema.default(true),
 
   FOREX_MARKET_DATA_PRIMARY: z.string().default("twelvedata_compat"),
@@ -173,6 +181,8 @@ const envSchema = z.object({
   GOVERNANCE_MAX_CONSECUTIVE_LOSS_LOCK_ACTIVE: booleanFlagSchema.default(false),
   ENABLE_SIGNAL_MODE_OUTPUT: booleanFlagSchema.default(false),
   WORKER_LOOP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(15),
+  SCANNER_LOOP_INTERVAL_MS: z.coerce.number().int().positive().default(15000),
+  TRACKER_LOOP_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   WORKER_DEBUG_VISIBILITY: booleanFlagSchema.default(false),
   ENABLE_PERSONAL_DEMO_CONNECTOR: booleanFlagSchema.default(true),
   ENABLE_PROP_DEMO_CONNECTOR: booleanFlagSchema.default(true),
@@ -182,7 +192,28 @@ const envSchema = z.object({
   PERSONAL_THROUGHPUT_EXPANSION: booleanFlagSchema.default(false),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
+  TELEGRAM_SIGNAL_CHAT_ID: z.string().optional(),
+  TELEGRAM_OPERATOR_CHAT_ID: z.string().optional(),
+  TELEGRAM_RUNTIME_ALERTS_ENABLED: booleanFlagSchema.default(true),
+  TELEGRAM_SIGNAL_UPDATES_ENABLED: booleanFlagSchema.default(true),
+  TELEGRAM_DAILY_SUMMARY_ENABLED: booleanFlagSchema.default(false),
+  TELEGRAM_WEEKLY_SUMMARY_ENABLED: booleanFlagSchema.default(false),
+  TELEGRAM_RETRY_LIMIT: z.coerce.number().int().min(0).default(2),
+  TELEGRAM_RETRY_BACKOFF_MS: z.coerce.number().int().positive().default(1200),
   TELEGRAM_PARSE_MODE: z.enum(["Markdown", "MarkdownV2", "HTML"]).default("Markdown"),
+  ENABLE_CRYPTO_BREAKOUT: booleanFlagSchema.default(true),
+  ENABLE_CRYPTO_PULLBACK: booleanFlagSchema.default(true),
+  ENABLE_FOREX_BREAKOUT: booleanFlagSchema.default(true),
+  ENABLE_FOREX_CONTINUATION: booleanFlagSchema.default(true),
+  STRATEGY_SCORE_MIN: z.coerce.number().min(0).max(100).default(55),
+  REGIME_TREND_MIN: z.coerce.number().min(0).max(1).default(0.45),
+  ATR_VOLATILITY_MIN: z.coerce.number().min(0).default(0.001),
+  PAPER_MODE_ENABLED: booleanFlagSchema.default(true),
+  MAX_ACTIVE_SIGNALS: z.coerce.number().int().positive().default(10),
+  SIGNAL_COOLDOWN_MS: z.coerce.number().int().min(0).default(1200000),
+  STRATEGY_GLOBAL_ENABLE: booleanFlagSchema.default(true),
+  TELEGRAM_SIGNAL_ENABLE: booleanFlagSchema.default(true),
+  SCANNER_RUNTIME_ENABLE: booleanFlagSchema.default(true),
   BINANCE_DEMO_API_KEY: z.string().optional(),
   BINANCE_DEMO_API_SECRET: z.string().optional(),
   BINANCE_DEMO_BASE_URL: z.string().default("https://testnet.binancefuture.com"),

@@ -2,8 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { DASHBOARD_SESSION_COOKIE } from "./lib/auth/constants";
 import { verifyDashboardSessionTokenEdge } from "./lib/auth/session-edge";
 
-const protectedPagePrefixes = ["/dashboard", "/runtime", "/settings"];
-const protectedApiPrefixes = ["/api/control", "/api/signal-room", "/api/system-control", "/api/settings", "/api/control-room"];
+const protectedPagePrefixes = ["/dashboard", "/runtime", "/settings", "/operator-terminal", "/signals/truth"];
+const protectedApiPrefixes = ["/api/control", "/api/signal-room", "/api/system-control", "/api/settings", "/api/control-room", "/api/operator-terminal", "/api/runtime-control", "/api/runtime-lifecycle", "/api/runtime-health", "/api/signal-truth"];
 
 function isProtectedPage(pathname: string) {
   return protectedPagePrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
@@ -42,5 +42,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/runtime/:path*", "/settings/:path*", "/api/control/:path*", "/api/signal-room/:path*", "/api/system-control/:path*", "/api/settings/:path*", "/api/control-room/:path*"]
+  matcher: ["/dashboard/:path*", "/runtime/:path*", "/settings/:path*", "/operator-terminal/:path*", "/signals/truth/:path*", "/api/control/:path*", "/api/signal-room/:path*", "/api/system-control/:path*", "/api/settings/:path*", "/api/control-room/:path*", "/api/operator-terminal/:path*", "/api/runtime-control/:path*", "/api/runtime-lifecycle/:path*", "/api/runtime-health/:path*", "/api/signal-truth/:path*"]
 };

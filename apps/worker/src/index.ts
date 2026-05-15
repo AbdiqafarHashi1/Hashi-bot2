@@ -46,7 +46,12 @@ import {
   runStrategyBrain,
   type StrategyBrainCandidate,
   type BrainEngineId
+  , STRATEGY_ENGINES
+  , type StrategyEvalInput
 } from "@hashi/core";
+import { LiveMarketPriceAdapter } from "./price-adapters";
+import { formatLifecycleUpdate, formatRuntimeAlert, formatSignalEntry } from "./telegram-formatters";
+import { emitRuntimeEvent } from "./runtime-event-bus";
 
 class ForcedFailureProvider implements MarketDataProvider {
   getCandles(): Promise<never> {
@@ -1690,8 +1695,10 @@ async function sendSignalModeTelegramMessages(params: {
   botToken?: string;
   chatId?: string;
   parseMode: TelegramParseMode;
+  retryLimit?: number;
+  retryBackoffMs?: number;
 }): Promise<TelegramDispatchResult[]> {
-  const { messages, botToken, chatId, parseMode } = params;
+  const { messages, botToken, chatId, parseMode, retryLimit = 0, retryBackoffMs = 1000 } = params;
   if (messages.length === 0) return [];
 
   const results: TelegramDispatchResult[] = [];
@@ -1737,12 +1744,18 @@ async function sendSignalModeTelegramMessages(params: {
     );
 
     try {
-      const result = await sendTelegramMessage({
-        endpoint,
-        chatId,
-        text,
-        parseMode
-      });
+      let result: any;
+      let attempt = 0;
+      while (attempt <= retryLimit) {
+        try {
+          result = await sendTelegramMessage({ endpoint, chatId, text, parseMode });
+          break;
+        } catch (err) {
+          if (attempt >= retryLimit) throw err;
+          await sleep(retryBackoffMs * (attempt + 1));
+          attempt += 1;
+        }
+      }
 
       console.log(
         JSON.stringify(
@@ -2272,6 +2285,34 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         }
       }
     });
+    await prismaClient.signalTruthHealth.upsert({
+      where: { id: "signal_truth_health" },
+      update: {
+        scannerStatus: "online",
+        scannerHeartbeatAt: new Date(),
+        lastScannerHeartbeatAt: new Date(),
+        scannerCyclesCompleted: { increment: 1 },
+        symbolsScannedCount: { increment: symbolsScanned },
+        selectedSignalsCount: { increment: candidatesSelectedCount },
+        rejectedDecisionsCount: { increment: Math.max(candidateCount - candidatesSelectedCount, 0) },
+        suppressedDecisionsCount: { increment: Math.max(runtimeSymbols.length - symbolsScanned, 0) },
+        telegramSentCount: { increment: dispatchedTelegramCount }
+      },
+      create: {
+        id: "signal_truth_health",
+        scannerStatus: "online",
+        trackerStatus: "offline",
+        telegramStatus: "unknown",
+        scannerHeartbeatAt: new Date(),
+        lastScannerHeartbeatAt: new Date(),
+        scannerCyclesCompleted: 1,
+        symbolsScannedCount: symbolsScanned,
+        selectedSignalsCount: candidatesSelectedCount,
+        rejectedDecisionsCount: Math.max(candidateCount - candidatesSelectedCount, 0),
+        suppressedDecisionsCount: Math.max(runtimeSymbols.length - symbolsScanned, 0),
+        telegramSentCount: dispatchedTelegramCount
+      }
+    });
   }
 
   if (!systemControl.isRunning) {
@@ -2372,6 +2413,30 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       .map((symbol) => symbol.toUpperCase())
   );
   const runtimeSymbols = configuredSymbols.filter((entry) => allowedSymbolSet.has(entry.symbol.toUpperCase()));
+  const strategyFamilyCandidates: Array<{
+    candidateId: string;
+    symbol: string;
+    marketType: "crypto" | "forex";
+    strategyId: string;
+    strategyFamily: string;
+    direction: "long" | "short" | "none";
+    score: number;
+    scoreBreakdown: Record<string, number>;
+    rank: number;
+    selected: boolean;
+    rejectionReason: string | null;
+    suppressionReason: string | null;
+    detectedRegime: string;
+    timeframe: string;
+    rr: number;
+    volatilityMetric: number;
+    confluenceMetric: number;
+    evaluationLatencyMs: number;
+    entry: number;
+    stopLoss: number;
+    tp1: number;
+    tp2: number;
+  }> = [];
   const symbolsSkippedBeforeEvaluation = configuredSymbolNames.filter((symbol) => !runtimeSymbols.some((entry) => entry.symbol.toUpperCase() === symbol));
   for (const entry of configuredSymbols) {
     const isRuntimeSymbol = runtimeSymbols.some((symbolMeta) => symbolMeta.symbol === entry.symbol);
@@ -2429,6 +2494,84 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
     };
   }
   symbolsScanned = runtimeSymbols.length;
+  if (config.STRATEGY_GLOBAL_ENABLE && prismaClient) {
+    for (const symbolMeta of runtimeSymbols) {
+      const candles = await primary.getCandles(symbolMeta.symbol, config.MARKET_DATA_TIMEFRAME, 120);
+      const input: StrategyEvalInput = {
+        symbol: symbolMeta.symbol,
+        timeframe: config.MARKET_DATA_TIMEFRAME,
+        marketType: symbolMeta.marketType,
+        candles: candles.map((entry) => ({ open: entry.open, high: entry.high, low: entry.low, close: entry.close, timestamp: entry.openTime.toISOString() })),
+        now: new Date().toISOString()
+      };
+      const enabledEngines = STRATEGY_ENGINES.filter((engine) =>
+        config[`ENABLE_${engine.strategyId.includes("forex") ? "FOREX" : "CRYPTO"}_${engine.strategyId.includes("breakout") ? "BREAKOUT" : engine.strategyId.includes("continuation") ? "CONTINUATION" : "PULLBACK"}` as keyof typeof config] !== false
+        && (engine.strategyId.includes("forex") ? symbolMeta.marketType === "forex" : symbolMeta.marketType === "crypto")
+      );
+      const evaluated = enabledEngines.map((engine) => {
+        const started = Date.now();
+        const candidate = engine.evaluate(input);
+        const latency = Date.now() - started;
+        return { engine, candidate, latency };
+      }).sort((a, b) => b.candidate.score - a.candidate.score || a.engine.strategyId.localeCompare(b.engine.strategyId));
+      const activeCount = await prismaClient.signalTruthPosition.count({ where: { status: { notIn: ["resolved", "expired", "stopped", "manually_closed"] } } });
+      for (let i = 0; i < evaluated.length; i += 1) {
+        const row = evaluated[i];
+        const suppressionReason =
+          activeCount >= config.MAX_ACTIVE_SIGNALS ? "max_active_signals" :
+          !config.PAPER_MODE_ENABLED ? "paper_mode_disabled" :
+          row.candidate.score < config.STRATEGY_SCORE_MIN ? "score_below_threshold" :
+          row.candidate.rejectionReason ? "strategy_rejected" : null;
+        const selected = i === 0 && suppressionReason === null;
+        const candidateId = row.candidate.candidateId;
+        strategyFamilyCandidates.push({ candidateId, symbol: symbolMeta.symbol, marketType: symbolMeta.marketType, strategyId: row.engine.strategyId, strategyFamily: row.engine.strategyFamily, direction: row.candidate.direction, score: row.candidate.score, scoreBreakdown: row.candidate.scoreBreakdown, rank: i + 1, selected, rejectionReason: selected ? null : (row.candidate.rejectionReason ?? "score_below_threshold"), suppressionReason, detectedRegime: row.candidate.detectedRegime, timeframe: input.timeframe, rr: 2, volatilityMetric: Object.values(row.candidate.scoreBreakdown).reduce((a,b)=>a+b,0)/100, confluenceMetric: row.candidate.scoreBreakdown.confluence ?? 0, evaluationLatencyMs: row.latency, entry: row.candidate.entry, stopLoss: row.candidate.stopLoss, tp1: row.candidate.takeProfits[0]?.price ?? row.candidate.entry, tp2: row.candidate.takeProfits[1]?.price ?? row.candidate.entry });
+        await prismaClient.runtimeEvent.create({
+          data: {
+            type: "candidate_created",
+            mode: runtimeMode,
+            symbol: symbolContext.symbol,
+            message: "Strategy candidate persisted",
+            payload: toInputJson({ cycleId, candidateId, strategyId: candidate.strategyId, score: candidate.score, partition: `${symbolContext.marketType}:${runtimeMode}` })
+          }
+        });
+        await prismaClient.strategyCandidateTruth.upsert({
+          where: { candidateId },
+          update: { cycleId, rank: i + 1, selected, rejectedReason: selected ? null : (row.candidate.rejectionReason ?? "score_below_threshold"), suppressionReason, score: row.candidate.score, scoreBreakdown: row.candidate.scoreBreakdown, rr: 2, volatilityMetric: Object.values(row.candidate.scoreBreakdown).reduce((a,b)=>a+b,0)/100, confluenceMetric: row.candidate.scoreBreakdown.confluence ?? 0, evaluationLatencyMs: row.latency },
+          create: { candidateId, cycleId, strategyId: row.engine.strategyId, strategyFamily: row.engine.strategyFamily, symbol: symbolMeta.symbol, timeframe: input.timeframe, marketType: symbolMeta.marketType, regime: row.candidate.detectedRegime, direction: row.candidate.direction, score: row.candidate.score, scoreBreakdown: row.candidate.scoreBreakdown, rank: i + 1, selected, rejectedReason: selected ? null : (row.candidate.rejectionReason ?? "score_below_threshold"), suppressionReason, rr: 2, volatilityMetric: Object.values(row.candidate.scoreBreakdown).reduce((a,b)=>a+b,0)/100, confluenceMetric: row.candidate.scoreBreakdown.confluence ?? 0, evaluationLatencyMs: row.latency }
+        });
+        await prismaClient.strategyTelemetry.upsert({
+          where: { strategyId: row.engine.strategyId },
+          update: {
+            strategyFamily: row.engine.strategyFamily,
+            evaluationCount: { increment: 1 },
+            selectedCount: { increment: selected ? 1 : 0 },
+            rejectedCount: { increment: selected ? 0 : 1 },
+            averageScore: row.candidate.score,
+            averageEvalLatencyMs: row.latency,
+            lastSelectedAt: selected ? new Date() : undefined,
+            lastEvaluatedAt: new Date()
+          },
+          create: { strategyId: row.engine.strategyId, strategyFamily: row.engine.strategyFamily, evaluationCount: 1, selectedCount: selected ? 1 : 0, rejectedCount: selected ? 0 : 1, averageScore: row.candidate.score, averageEvalLatencyMs: row.latency, rejectionDistribution: { [row.candidate.rejectionReason ?? "score_below_threshold"]: 1 }, lastSelectedAt: selected ? new Date() : undefined, lastEvaluatedAt: new Date() }
+        });
+      }
+    }
+  }
+  if (prismaClient && strategyFamilyCandidates.length > 0) {
+    await prismaClient.runtimeEvent.create({
+      data: {
+        type: "strategy_candidate_pipeline",
+        mode: runtimeMode,
+        message: "Strategy family candidate pipeline evaluated",
+        payload: toInputJson({
+          cycleId,
+          total: strategyFamilyCandidates.length,
+          selected: strategyFamilyCandidates.filter((entry) => entry.selected).length,
+          suppressed: strategyFamilyCandidates.filter((entry) => entry.suppressionReason !== null).length,
+          topCandidates: [...strategyFamilyCandidates].sort((a, b) => b.score - a.score).slice(0, 5)
+        })
+      }
+    });
+  }
   const runtime = new BreakoutMultiSymbolRuntime(runtimeSymbols);
 
   const cryptoAdapter = new CryptoLiveKlineAdapter(primary, backup, {
@@ -4731,6 +4874,13 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
   const resolvedSignalOutcomeMessages: Array<{ symbol: string; message: string }> = [];
   if (prismaClient && runtimeMode === "signal") {
+    const truthCycleId = cycleId;
+    await prismaClient.signalTruthCycle.upsert({
+      where: { cycleId: truthCycleId },
+      update: { completedAt: new Date(), symbolsScanned, selectedCount: candidatesSelectedCount, rejectedCount: Math.max(candidateCount - candidatesSelectedCount, 0), suppressedCount: Math.max(runtimeSymbols.length - symbolsScanned, 0), dispatchedCount: dispatchedTelegramCount, activeTrackedSignals: currentOpenPositionsCount, runtimeMs: Date.now() - cycleStartedAtMs },
+      create: { cycleId: truthCycleId, startedAt: new Date(cycleStartedAtMs), completedAt: new Date(), dataSource: "live", mode: runtimeMode, executionMode: "signal_only", symbolsPlanned: runtimeSymbols.length, symbolsScanned, selectedCount: candidatesSelectedCount, rejectedCount: Math.max(candidateCount - candidatesSelectedCount, 0), suppressedCount: Math.max(runtimeSymbols.length - symbolsScanned, 0), dispatchedCount: dispatchedTelegramCount, activeTrackedSignals: currentOpenPositionsCount, resolvedCount: closedSignalsThisCycle, errorCount: 0, runtimeMs: Date.now() - cycleStartedAtMs }
+    });
+
     const openOutcomes = await prismaClient.signalOutcome.findMany({
       where: {
         status: {
@@ -5598,11 +5748,18 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       )
     );
 
-    const dispatchResults = await sendSignalModeTelegramMessages({
+    const { prisma: controlPrisma } = await import("@hashi/db");
+    const runtimeControlState = await controlPrisma.runtimeControlState.findUnique({ where: { id: "runtime_control" } });
+    const telegramPaused = runtimeControlState?.telegramPaused || runtimeControlState?.runtimeFrozen || runtimeControlState?.emergencySafeMode || !config.TELEGRAM_SIGNAL_ENABLE;
+    const dispatchResults = telegramPaused
+      ? guardedEntryDispatchPlan.map((_, index) => ({ messageNumber: index + 1, status: "failed" as const, reason: "telegram_paused_by_runtime_control", parseMode: config.TELEGRAM_PARSE_MODE }))
+      : await sendSignalModeTelegramMessages({
       messages: guardedEntryDispatchPlan.map((entry) => entry.message),
       botToken: config.TELEGRAM_BOT_TOKEN,
-      chatId: config.TELEGRAM_CHAT_ID,
-      parseMode: config.TELEGRAM_PARSE_MODE
+      chatId: config.TELEGRAM_SIGNAL_CHAT_ID ?? config.TELEGRAM_CHAT_ID,
+      parseMode: config.TELEGRAM_PARSE_MODE,
+      retryLimit: config.TELEGRAM_RETRY_LIMIT,
+      retryBackoffMs: config.TELEGRAM_RETRY_BACKOFF_MS
     });
     dispatchedTelegramCount += dispatchResults.filter((result) => result.status === "sent").length;
     if (debugVisibilityEnabled) {
@@ -5631,6 +5788,8 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
         const status = dispatch.status === "sent" || dispatch.status === "failed"
           ? dispatch.status
           : "not_attempted_no_message_payload";
+        const lifecycleEventType = status === "sent" ? "telegram_entry_sent" : status === "failed" ? "telegram_entry_failed" : "telegram_entry_queued";
+        const dispatchIdempotencyKey = `${cycleId}:${dispatch.signalEventId}:${lifecycleEventType}`;
         await prismaClient.signalEvent.update({
           where: { id: dispatch.signalEventId },
           data: {
@@ -5638,6 +5797,88 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
             telegramDispatchReason: dispatch.reason,
             telegramDispatchedAt: status === "sent" ? cycleNow : null
           }
+        });
+        const linkedDecision = await prismaClient.signalTruthDecision.findFirst({
+          where: { cycleId, symbol: dispatch.symbol },
+          orderBy: { timestamp: "desc" }
+        });
+        await prismaClient.signalTruthLifecycleEvent.upsert({
+          where: { eventId: dispatchIdempotencyKey },
+          update: { timestamp: new Date(), payload: toInputJson({ status, reason: dispatch.reason ?? null }) },
+          create: {
+            eventId: dispatchIdempotencyKey,
+            signalId: dispatch.signalEventId,
+            decisionId: linkedDecision?.decisionId ?? `${cycleId}:${dispatch.symbol}:telegram`,
+            cycleId,
+            eventType: lifecycleEventType,
+            timestamp: new Date(),
+            payload: toInputJson({ status, reason: dispatch.reason ?? null }),
+            idempotencyKey: dispatchIdempotencyKey
+          }
+        });
+        await prismaClient.timelineProjection.upsert({
+          where: { signalId: dispatch.signalEventId },
+          update: {
+            candidateId: selectedStrategyCandidate?.candidateId,
+            cycleId,
+            latestEventType: lifecycleEventType,
+            latestEventAt: new Date(),
+            status,
+            timeline: toInputJson({ status, reason: dispatch.reason ?? null })
+          },
+          create: {
+            signalId: dispatch.signalEventId,
+            candidateId: selectedStrategyCandidate?.candidateId,
+            cycleId,
+            latestEventType: lifecycleEventType,
+            latestEventAt: new Date(),
+            status,
+            timeline: toInputJson([{ type: lifecycleEventType, at: new Date().toISOString(), reason: dispatch.reason ?? null }])
+          }
+        });
+        const selectedStrategyCandidate = strategyFamilyCandidates
+          .filter((entry) => entry.symbol === dispatch.symbol && entry.selected)
+          .sort((a, b) => b.score - a.score)[0];
+        const dispatchTruthId = `${cycleId}:${dispatch.signalEventId}:dispatch`;
+        await prismaClient.telegramDispatchTruth.upsert({
+          where: { dispatchId: dispatchTruthId },
+          update: {
+            status,
+            retryCount: status === "failed" ? { increment: 1 } : undefined,
+            attemptCount: { increment: 1 },
+            failureReason: dispatch.reason ?? null,
+            dispatchedAt: status === "sent" ? new Date() : undefined
+          },
+          create: {
+            dispatchId: dispatchTruthId,
+            cycleId,
+            candidateId: selectedStrategyCandidate?.candidateId ?? `${cycleId}:${dispatch.symbol}:unknown_candidate`,
+            signalEventId: dispatch.signalEventId,
+            lifecycleEventId: dispatchIdempotencyKey,
+            chatId: config.TELEGRAM_SIGNAL_CHAT_ID ?? config.TELEGRAM_CHAT_ID ?? null,
+            status,
+            attemptCount: 1,
+            retryCount: status === "failed" ? 1 : 0,
+            failureReason: dispatch.reason ?? null,
+            dispatchedAt: status === "sent" ? new Date() : undefined
+          }
+        });
+        if (selectedStrategyCandidate) {
+          await prismaClient.strategyCandidateTruth.update({
+            where: { candidateId: selectedStrategyCandidate.candidateId },
+            data: {
+              lifecycleEventId: dispatchIdempotencyKey,
+              telegramDispatchId: dispatchTruthId
+            }
+          }).catch(() => undefined);
+        }
+        await emitRuntimeEvent(prismaClient as any, {
+          category: "dispatch",
+          type: lifecycleEventType,
+          mode: runtimeMode,
+          symbol: dispatch.symbol,
+          message: "Telegram dispatch lifecycle",
+          payload: { dispatchId: dispatchTruthId, candidateId: selectedStrategyCandidate?.candidateId ?? null, status, reason: dispatch.reason ?? null }
         });
         const summary = symbolSummaries.get(dispatch.symbol);
         if (summary) {
@@ -5654,9 +5895,50 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
           rejectionCounts.no_message_payload += 1;
         }
       }
+      const sentCount = selectedSignalDispatches.filter((entry) => entry.status === "sent").length;
+      const failedCount = selectedSignalDispatches.filter((entry) => entry.status === "failed").length;
+      telegramConsecutiveFailures = failedCount > 0 && sentCount === 0 ? telegramConsecutiveFailures + failedCount : 0;
+      const lastFailure = selectedSignalDispatches.filter((entry) => entry.status === "failed").at(-1);
+      await prismaClient.signalTruthHealth.upsert({
+        where: { id: "signal_truth_health" },
+        update: {
+          telegramSentCount: { increment: sentCount },
+          telegramFailedCount: { increment: failedCount },
+          lastTelegramSentAt: sentCount > 0 ? new Date() : undefined,
+          lastTelegramFailedAt: failedCount > 0 ? new Date() : undefined,
+          lastTelegramError: failedCount > 0 ? (lastFailure?.reason ?? "telegram_send_failed") : undefined,
+          telegramStatus: failedCount === 0 ? "healthy" : sentCount > 0 ? "degraded" : "failing"
+        },
+        create: {
+          id: "signal_truth_health",
+          scannerStatus: "online",
+          trackerStatus: "online",
+          telegramStatus: failedCount === 0 ? "healthy" : sentCount > 0 ? "degraded" : "failing",
+          telegramSentCount: sentCount,
+          telegramFailedCount: failedCount,
+          lastTelegramSentAt: sentCount > 0 ? new Date() : undefined,
+          lastTelegramFailedAt: failedCount > 0 ? new Date() : undefined,
+          lastTelegramError: failedCount > 0 ? (lastFailure?.reason ?? "telegram_send_failed") : undefined
+        }
+      });
       if (selectedSignalDispatches.length > 0) {
         await prismaClient.runtimeEvent.createMany({
-          data: selectedSignalDispatches.map((dispatch) => ({
+          data: selectedSignalDispatches.flatMap((dispatch) => ([
+            {
+              type: "signal_created",
+              mode: runtimeMode,
+              symbol: dispatch.symbol,
+              message: "Lifecycle signal created",
+              payload: toInputJson({ signalEventId: dispatch.signalEventId, signalTradeId: dispatch.signalTradeId, partition: `${runtimeMode}` })
+            },
+            {
+              type: "signal_dispatched",
+              mode: runtimeMode,
+              symbol: dispatch.symbol,
+              message: "Signal dispatch attempted",
+              payload: toInputJson({ signalEventId: dispatch.signalEventId, signalTradeId: dispatch.signalTradeId, status: dispatch.status, reason: dispatch.reason ?? null })
+            },
+            {
             type: "signal_entry_dispatch",
             mode: "signal",
             symbol: dispatch.symbol,
@@ -5988,6 +6270,37 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
       rejectionReason: entry.rejectionReason
     }));
     const rejectedCountThisCycle = auditCandidatesThisCycle.filter((entry) => !entry.selected).length;
+    for (const entry of auditCandidatesThisCycle) {
+      const decisionId = `${cycleId}:${entry.marketType}:${entry.symbol}:${entry.side}:${entry.rank}`;
+      const status = entry.selected ? "selected" : (entry.rejectionReason ? "rejected" : "suppressed");
+      await prismaClient.signalTruthDecision.upsert({
+        where: { decisionId },
+        update: { timestamp: new Date(), status, rejectionReason: entry.rejectionReason ?? null, suppressionReason: !entry.selected && !entry.rejectionReason ? "suppressed_by_selection_pipeline" : null, score: entry.score, tier: entry.tier, mode: runtimeMode, executionMode: "signal_only", dataSource: "live" },
+        create: { decisionId, cycleId, timestamp: new Date(), marketType: entry.marketType, venue: entry.marketType === "crypto" ? "binance" : "forex_public", symbol: entry.symbol, timeframe: config.MARKET_DATA_TIMEFRAME, strategyId: "scanner_pipeline", strategyFamily: "scanner_pipeline", direction: entry.side, tier: entry.tier, score: entry.score, entry: 0, stopLoss: 0, takeProfits: [], riskReward: 0, setupSummary: entry.setupVariant, conditions: [entry.selectedReason ?? "", entry.rejectionReason ?? ""], status, rejectionReason: entry.rejectionReason ?? null, suppressionReason: !entry.selected && !entry.rejectionReason ? "suppressed_by_selection_pipeline" : null, dataSource: "live", mode: runtimeMode, executionMode: "signal_only" }
+      });
+      await prismaClient.signalTruthLifecycleEvent.create({
+        data: {
+          eventId: `${decisionId}:evaluated`,
+          signalId: entry.selected ? `${cycleId}:${entry.symbol}` : decisionId,
+          decisionId,
+          cycleId,
+          eventType: "evaluated",
+          timestamp: new Date(),
+          payload: toInputJson({ symbol: entry.symbol, strategyId: "scanner_pipeline", marketType: entry.marketType, score: entry.score, tier: entry.tier, dataSource: "live", mode: runtimeMode, executionMode: "signal_only" })
+        }
+      });
+      await prismaClient.signalTruthLifecycleEvent.create({
+        data: {
+          eventId: `${decisionId}:${status}`,
+          signalId: entry.selected ? `${cycleId}:${entry.symbol}` : decisionId,
+          decisionId,
+          cycleId,
+          eventType: status,
+          timestamp: new Date(),
+          payload: toInputJson({ rejectionReason: entry.rejectionReason ?? null, suppressionReason: !entry.selected && !entry.rejectionReason ? "suppressed_by_selection_pipeline" : null })
+        }
+      });
+    }
 
     const [
       totalOpenSignals,
@@ -6372,6 +6685,70 @@ async function runWorkerCycle(cycleNumber: number): Promise<WorkerCycleSummary> 
 
 async function startWorkerLoop() {
   const config = applyRuntimeControlConfig(getConfig());
+  const persistRuntimeLifecycle = async (input: {
+    stage: string;
+    status: string;
+    completionPct: number;
+    notes?: string;
+    marketType?: "crypto" | "forex" | "mixed";
+  }) => {
+    const { prisma } = await import("@hashi/db");
+    await prisma.runtimeLifecycleState.upsert({
+      where: { id: "runtime_lifecycle" },
+      update: { ...input, mode: toRuntimeMode(config), lastTransitionAt: new Date() },
+      create: { id: "runtime_lifecycle", ...input, mode: toRuntimeMode(config), lastTransitionAt: new Date() }
+    });
+  };
+  const partitionIds = ["crypto_futures_personal", "crypto_spot_personal", "forex_prop", "forex_personal"] as const;
+  const hydrateRuntimePartitions = async () => {
+    const { prisma } = await import("@hashi/db");
+    for (const id of partitionIds) {
+      const [marketType, executionType, capitalMode] = id.split("_");
+      await prisma.runtimePartitionState.upsert({
+        where: { id },
+        update: {},
+        create: { id, marketType, executionType, capitalMode }
+      });
+    }
+  };
+  const applyOperatorCommands = async () => {
+    const { prisma } = await import("@hashi/db");
+    const queued = await prisma.operatorTerminalCommand.findMany({ where: { status: "queued" }, orderBy: { createdAt: "asc" }, take: 20 });
+    if (queued.length === 0) return;
+    const control = await prisma.runtimeControlState.upsert({ where: { id: "runtime_control" }, update: {}, create: { id: "runtime_control" } });
+    for (const cmd of queued) {
+      const update: Record<string, boolean> = {};
+      let rejectReason: string | null = null;
+      if (cmd.command === "pause_scanner") update.scannerPaused = true;
+      else if (cmd.command === "resume_scanner") update.scannerPaused = false;
+      else if (cmd.command === "pause_tracker") update.trackerPaused = true;
+      else if (cmd.command === "resume_tracker") update.trackerPaused = false;
+      else if (cmd.command === "pause_dispatch") update.telegramPaused = true;
+      else if (cmd.command === "resume_dispatch") update.telegramPaused = false;
+      else if (cmd.command === "emergency_freeze") update.runtimeFrozen = true;
+      else if (cmd.command === "clear_emergency_freeze") update.runtimeFrozen = false;
+      else if (cmd.command === "maintenance_mode_on") update.maintenanceMode = true;
+      else if (cmd.command === "maintenance_mode_off") update.maintenanceMode = false;
+      else if (cmd.command === "crypto_enable") update.cryptoEnabled = true;
+      else if (cmd.command === "crypto_disable") update.cryptoEnabled = false;
+      else if (cmd.command === "forex_enable") update.forexEnabled = true;
+      else if (cmd.command === "forex_disable") update.forexEnabled = false;
+      else if (cmd.command === "prop_enable" || cmd.command === "prop_disable" || cmd.command === "paper_mode_enable" || cmd.command === "paper_mode_disable") {
+        rejectReason = "mode_mutation_not_supported_in_this_runtime";
+      }
+      if (!rejectReason && cmd.command.startsWith("resume_") && control.runtimeFrozen) {
+        rejectReason = "runtime_frozen_requires_clear_emergency_freeze_first";
+      }
+      if (rejectReason) {
+        await prisma.operatorTerminalCommand.update({ where: { id: cmd.id }, data: { status: "rejected", rejectedReason: rejectReason, executedAt: new Date() } });
+        continue;
+      }
+      const next = await prisma.runtimeControlState.update({ where: { id: "runtime_control" }, data: update });
+      await prisma.runtimeControlAudit.create({ data: { controlId: "runtime_control", action: cmd.command, actor: cmd.actor, confirmed: true, beforeState: control, afterState: next } });
+      await prisma.runtimeEvent.create({ data: { type: "command_acknowledged", mode: "signal", message: cmd.command, payload: toInputJson({ commandId: cmd.id, actor: cmd.actor }) } });
+      await prisma.operatorTerminalCommand.update({ where: { id: cmd.id }, data: { status: "executed", executedAt: new Date() } });
+    }
+  };
   const phaseLock = config.ENGINE_PHASE_LOCK;
   console.log(JSON.stringify({
     event: "ENGINE_PHASE_LOCK",
@@ -6381,9 +6758,17 @@ async function startWorkerLoop() {
     engineId: ENGINE1_LOCKED_ENGINE_ID
   }, null, 2));
   if (config.ENGINE_MODE === "replay") {
+    await persistRuntimeLifecycle({ stage: "replay", status: "running", completionPct: 100, notes: "live runtime bypassed in replay mode" });
     await runContinuousReplayBacktest(config);
     return;
   }
+  await persistRuntimeLifecycle({
+    stage: "boot",
+    status: "running",
+    completionPct: 10,
+    notes: "runtime bootstrapping",
+    marketType: config.SIGNAL_ENABLE_CRYPTO && config.SIGNAL_ENABLE_FOREX ? "mixed" : config.SIGNAL_ENABLE_FOREX ? "forex" : "crypto"
+  });
   try {
     if (!config.SKIP_INFRA_CHECKS) {
       const { prisma } = await import("@hashi/db");
@@ -6437,7 +6822,135 @@ async function startWorkerLoop() {
 
   const loopIntervalSeconds = config.WORKER_LOOP_INTERVAL_SECONDS;
   const loopIntervalMs = loopIntervalSeconds * 1000;
+  const scannerLoopIntervalMs = config.SCANNER_LOOP_INTERVAL_MS;
+  const trackerLoopIntervalMs = config.TRACKER_LOOP_INTERVAL_MS;
   let cycleNumber = 0;
+  const lifecycleMilestonesSent = new Set<string>();
+  const priceAdapter = new LiveMarketPriceAdapter();
+  let lastScannerRunAt = 0;
+  let lastTrackerRunAt = 0;
+  let scannerFailureCount = 0;
+  let trackerFailureCount = 0;
+  let telegramConsecutiveFailures = 0;
+  let scannerLoopRuns = 0;
+  let trackerLoopRuns = 0;
+  let scannerLoopTotalMs = 0;
+  let trackerLoopTotalMs = 0;
+  let scannerLoopMaxMs = 0;
+  let trackerLoopMaxMs = 0;
+
+  const emitIncident = async (source: string, message: string, severity: "low" | "medium" | "high" | "critical", payload: Record<string, unknown>) => {
+    const { prisma } = await import("@hashi/db");
+    const since = new Date(Date.now() - config.INCIDENT_DEDUPE_WINDOW_MS);
+    const existing = await prisma.incident.findFirst({ where: { source, message, createdAt: { gte: since }, resolved: false }, orderBy: { createdAt: "desc" } });
+    if (existing) {
+      await prisma.runtimeEvent.create({ data: { type: "incident_deduped", mode: "signal", message: `${source}:${message}`, payload: toInputJson({ source, message, dedupeWindowMs: config.INCIDENT_DEDUPE_WINDOW_MS }) } });
+      return;
+    }
+    const created = await prisma.incident.create({ data: { source, message, severity, payload: toInputJson(payload) } });
+    await prisma.runtimeEvent.create({ data: { type: "runtime_incident", mode: "signal", message: `${source}:${message}`, payload: toInputJson({ incidentId: created.id, severity, source, payload }) } });
+    if (config.TELEGRAM_RUNTIME_ALERTS_ENABLED) {
+      const alertText = formatRuntimeAlert({ severity: severity === "critical" ? "critical" : severity === "high" ? "warning" : "info", title: `${source}:${message}`, detail: JSON.stringify(payload), at: new Date().toISOString() });
+      await sendSignalModeTelegramMessages({ messages: [alertText], botToken: config.TELEGRAM_BOT_TOKEN, chatId: config.TELEGRAM_OPERATOR_CHAT_ID ?? config.TELEGRAM_CHAT_ID, parseMode: "Markdown", retryLimit: config.TELEGRAM_RETRY_LIMIT, retryBackoffMs: config.TELEGRAM_RETRY_BACKOFF_MS });
+    }
+  };
+
+  const rebuildLifecycleMilestones = async () => {
+    const { prisma } = await import("@hashi/db");
+    const events = await prisma.signalTruthLifecycleEvent.findMany({ where: { idempotencyKey: { not: null } }, select: { idempotencyKey: true } });
+    for (const event of events) if (event.idempotencyKey) lifecycleMilestonesSent.add(event.idempotencyKey);
+  };
+
+  const runTrackerCycle = async () => {
+    const { prisma } = await import("@hashi/db");
+    const unresolved = await prisma.signalTruthPosition.findMany({ where: { status: { notIn: ["resolved", "expired", "stopped", "manually_closed"] } } });
+    for (const position of unresolved) {
+      let fetchedPrice = position.currentPrice;
+      let priceTimestamp = new Date().toISOString();
+      try {
+        const latest = await priceAdapter.getLatestPrice(position.symbol, position.marketType as "crypto" | "forex", position.venue);
+        fetchedPrice = latest.price;
+        priceTimestamp = latest.timestamp;
+      } catch (error) {
+        trackerFailureCount += 1;
+        await emitIncident("market_data", "price_fetch_failed", "high", { signalId: position.signalId, reason: error instanceof Error ? error.message : "unknown" });
+        continue;
+      }
+      const tpLevels = ((position.takeProfits as unknown as Array<{ label: string; price: number }>) ?? []);
+      const price = fetchedPrice;
+      const isExpired = position.expiresAt ? new Date() >= position.expiresAt : false;
+      const nextStatusFromMilestone = (type: string): string => {
+        if (type === "entry_triggered") return "active";
+        if (type === "tp1_hit") return "tp1_hit";
+        if (type === "tp2_hit") return "tp2_hit";
+        if (type === "tp3_hit") return "resolved";
+        if (type === "stop_hit") return "resolved";
+        if (type === "expired") return "resolved";
+        return position.status;
+      };
+      const milestoneChecks = [
+        { type: "entry_triggered", level: position.entry, hit: position.direction === "long" ? price >= position.entry : price <= position.entry },
+        { type: "tp1_hit", level: tpLevels.find((x) => x.label === "TP1")?.price, hit: false },
+        { type: "tp2_hit", level: tpLevels.find((x) => x.label === "TP2")?.price, hit: false },
+        { type: "tp3_hit", level: tpLevels.find((x) => x.label === "TP3")?.price, hit: false },
+        { type: "stop_hit", level: position.stopLoss, hit: position.direction === "long" ? price <= position.stopLoss : price >= position.stopLoss },
+        { type: "expired", level: undefined, hit: isExpired }
+      ].map((m) => ({ ...m, hit: m.type.startsWith("tp") ? !!m.level && (position.direction === "long" ? price >= m.level : price <= m.level) : m.hit }));
+
+      await prisma.signalTruthPosition.update({
+        where: { signalId: position.signalId },
+        data: {
+          currentPrice: price,
+          highestPrice: Math.max(position.highestPrice, price),
+          lowestPrice: Math.min(position.lowestPrice, price)
+        }
+      });
+
+      for (const milestone of milestoneChecks) {
+        const key = `${position.signalId}:${milestone.type}:${milestone.level ?? "na"}`;
+        if (!milestone.hit || lifecycleMilestonesSent.has(key)) continue;
+        lifecycleMilestonesSent.add(key);
+        await prisma.signalTruthLifecycleEvent.create({ data: { eventId: `${key}:${Date.now()}`, signalId: position.signalId, decisionId: position.decisionId, cycleId: "tracker", eventType: milestone.type, timestamp: new Date(), price, idempotencyKey: key } });
+        const achievedR = position.direction === "long" ? (price - position.entry) / Math.max(position.entry - position.stopLoss, 1e-9) : (position.entry - price) / Math.max(position.stopLoss - position.entry, 1e-9);
+        const elapsedMin = Math.max(Math.floor((Date.now() - new Date(position.openedAt).getTime()) / 60000), 0);
+        await prisma.signalTruthPosition.update({ where: { signalId: position.signalId }, data: { status: nextStatusFromMilestone(milestone.type), achievedR, finalR: ["tp3_hit", "stop_hit", "expired"].includes(milestone.type) ? achievedR : undefined, resolvedAt: ["tp3_hit", "stop_hit", "expired"].includes(milestone.type) ? new Date() : undefined, resolutionReason: ["tp3_hit", "stop_hit", "expired"].includes(milestone.type) ? milestone.type : undefined } });
+        if (config.TELEGRAM_SIGNAL_UPDATES_ENABLED) {
+          await sendTelegramMessage({ endpoint: `https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}/sendMessage`, chatId: config.TELEGRAM_SIGNAL_CHAT_ID ?? config.TELEGRAM_CHAT_ID ?? "", text: formatLifecycleUpdate({ eventType: milestone.type, signalId: position.signalId, symbol: position.symbol, direction: position.direction, entry: position.entry, price, level: milestone.level, r: achievedR, elapsedMin, status: nextStatusFromMilestone(milestone.type) }), parseMode: "Markdown" });
+        }
+      }
+    }
+    const mem = process.memoryUsage();
+    await prisma.signalTruthHealth.upsert({
+      where: { id: "signal_truth_health" },
+      update: { trackerHeartbeatAt: new Date(), trackerStatus: "online", lastTrackerHeartbeatAt: new Date(), lastPriceFetchAt: new Date(), trackerPositionsChecked: { increment: unresolved.length }, trackerAvgLoopMs: trackerLoopRuns > 0 ? trackerLoopTotalMs / trackerLoopRuns : 0, trackerMaxLoopMs: trackerLoopMaxMs, lastLoopAt: new Date(), memoryRssMb: Math.round((mem.rss / 1024 / 1024) * 100) / 100 },
+      create: { id: "signal_truth_health", trackerHeartbeatAt: new Date(), scannerStatus: "online", trackerStatus: "online", telegramStatus: "disabled", lastPriceFetchAt: new Date(), lastTrackerHeartbeatAt: new Date(), trackerPositionsChecked: unresolved.length, trackerAvgLoopMs: trackerLoopRuns > 0 ? trackerLoopTotalMs / trackerLoopRuns : 0, trackerMaxLoopMs: trackerLoopMaxMs, lastLoopAt: new Date(), memoryRssMb: Math.round((mem.rss / 1024 / 1024) * 100) / 100 }
+    });
+  };
+
+  const evaluateRuntimeHealth = async () => {
+    const { prisma } = await import("@hashi/db");
+    const health = await prisma.signalTruthHealth.findFirst({ orderBy: { updatedAt: "desc" } });
+    if (!health) return;
+    const now = Date.now();
+    const scannerStale = !health.lastScannerHeartbeatAt || now - health.lastScannerHeartbeatAt.getTime() > config.SCANNER_HEARTBEAT_STALE_MS;
+    const trackerStale = !health.lastTrackerHeartbeatAt || now - health.lastTrackerHeartbeatAt.getTime() > config.TRACKER_HEARTBEAT_STALE_MS;
+    const telegramStale = !health.lastTelegramSentAt || now - health.lastTelegramSentAt.getTime() > config.TELEGRAM_HEALTH_STALE_MS;
+    const marketStale = !health.lastPriceFetchAt || now - health.lastPriceFetchAt.getTime() > config.MARKET_DATA_STALE_MS;
+    const runtimeErrorRate = (health.scannerErrorCount + health.trackerErrorCount) / Math.max(health.scannerCyclesCompleted, 1);
+    const telegramFailing = telegramConsecutiveFailures >= config.TELEGRAM_MAX_CONSECUTIVE_FAILURES;
+    const state = scannerStale || trackerStale ? "stalled" : runtimeErrorRate > config.RUNTIME_ERROR_RATE_MAX || telegramFailing ? "failing" : telegramStale || marketStale ? "degraded" : "healthy";
+    await prisma.signalTruthHealth.update({ where: { id: health.id }, data: { scannerStatus: scannerStale ? "degraded" : "online", trackerStatus: trackerStale ? "degraded" : "online", staleFeedDetected: marketStale, telegramStatus: state } });
+    if (scannerStale) { await emitIncident("scanner", "scanner_heartbeat_stale", "high", { thresholdMs: config.SCANNER_HEARTBEAT_STALE_MS });
+      await prisma.runtimeEvent.create({ data: { type: "scanner_stalled", mode: "signal", message: "Scanner heartbeat stale", payload: toInputJson({ thresholdMs: config.SCANNER_HEARTBEAT_STALE_MS }) } }); if (config.TELEGRAM_RUNTIME_ALERTS_ENABLED) await sendSignalModeTelegramMessages({ messages: [formatRuntimeAlert({ severity: "warning", title: "Scanner stale", detail: "Scanner heartbeat exceeded threshold", at: new Date().toISOString() })], botToken: config.TELEGRAM_BOT_TOKEN, chatId: config.TELEGRAM_OPERATOR_CHAT_ID ?? config.TELEGRAM_CHAT_ID, parseMode: "Markdown", retryLimit: config.TELEGRAM_RETRY_LIMIT, retryBackoffMs: config.TELEGRAM_RETRY_BACKOFF_MS }); }
+    if (trackerStale) await emitIncident("tracker", "tracker_heartbeat_stale", "high", { thresholdMs: config.TRACKER_HEARTBEAT_STALE_MS });
+    if (trackerStale) { await prisma.runtimeEvent.create({ data: { type: "tracker_stalled", mode: "signal", message: "Tracker heartbeat stale", payload: toInputJson({ thresholdMs: config.TRACKER_HEARTBEAT_STALE_MS }) } }); }
+    if (telegramFailing) await emitIncident("telegram", "telegram_failure_threshold_breached", "critical", { failures: telegramConsecutiveFailures, threshold: config.TELEGRAM_MAX_CONSECUTIVE_FAILURES });
+    if (runtimeErrorRate > config.RUNTIME_ERROR_RATE_MAX) await emitIncident("worker", "runtime_error_rate_breached", "critical", { runtimeErrorRate, threshold: config.RUNTIME_ERROR_RATE_MAX });
+  };
+
+  await rebuildLifecycleMilestones();
+  await hydrateRuntimePartitions();
+  await persistRuntimeLifecycle({ stage: "scanner_tracker_online", status: "running", completionPct: 55, notes: "scanner/tracker loops armed" });
 
   console.log(
     JSON.stringify(
@@ -6451,12 +6964,54 @@ async function startWorkerLoop() {
   );
 
   while (true) {
-    cycleNumber += 1;
     const cycleStartedAt = Date.now();
     try {
-      await runWorkerCycle(cycleNumber);
+      const { prisma } = await import("@hashi/db");
+      await applyOperatorCommands();
+      const runtimeControlState = await prisma.runtimeControlState.findUnique({ where: { id: "runtime_control" } });
+      const frozen = runtimeControlState?.runtimeFrozen || runtimeControlState?.emergencySafeMode;
+      if (cycleStartedAt - lastScannerRunAt >= scannerLoopIntervalMs) {
+        if (frozen || runtimeControlState?.scannerPaused) {
+          await prisma.runtimeEvent.create({ data: { type: "scanner_paused", mode: "signal", message: "Scanner paused/frozen by runtime control", payload: toInputJson({ frozen, scannerPaused: runtimeControlState?.scannerPaused ?? false }) } });
+        } else {
+        cycleNumber += 1;
+        const scannerStarted = Date.now();
+        await runWorkerCycle(cycleNumber);
+        const scannerDuration = Date.now() - scannerStarted;
+        scannerLoopRuns += 1;
+        scannerLoopTotalMs += scannerDuration;
+        scannerLoopMaxMs = Math.max(scannerLoopMaxMs, scannerDuration);
+        if (scannerDuration > scannerLoopIntervalMs) scannerFailureCount += 1;
+        lastScannerRunAt = cycleStartedAt;
+        scannerFailureCount = 0;
+        }
+      }
+      if (cycleStartedAt - lastTrackerRunAt >= trackerLoopIntervalMs) {
+        if (frozen || runtimeControlState?.trackerPaused) {
+          await prisma.runtimeEvent.create({ data: { type: "tracker_paused", mode: "signal", message: "Tracker paused/frozen by runtime control", payload: toInputJson({ frozen, trackerPaused: runtimeControlState?.trackerPaused ?? false }) } });
+        } else {
+        const trackerStarted = Date.now();
+        await runTrackerCycle();
+        const trackerDuration = Date.now() - trackerStarted;
+        trackerLoopRuns += 1;
+        trackerLoopTotalMs += trackerDuration;
+        trackerLoopMaxMs = Math.max(trackerLoopMaxMs, trackerDuration);
+        if (trackerDuration > trackerLoopIntervalMs) trackerFailureCount += 1;
+        lastTrackerRunAt = cycleStartedAt;
+        trackerFailureCount = 0;
+        }
+      }
+      await evaluateRuntimeHealth();
+      await persistRuntimeLifecycle({
+        stage: frozen ? "control_frozen" : "active",
+        status: frozen ? "paused" : "running",
+        completionPct: frozen ? 70 : 100,
+        notes: frozen ? "runtime frozen by control plane" : "unified live runtime complete"
+      });
     } catch (error) {
       console.error("[worker] cycle failed", error);
+      scannerFailureCount += 1;
+      trackerFailureCount += 1;
       try {
         const { prisma } = await import("@hashi/db");
         await prisma.runtimeEvent.create({
@@ -6470,16 +7025,11 @@ async function startWorkerLoop() {
             }
           }
         });
-        await prisma.incident.create({
-          data: {
-            severity: "critical",
-            source: "worker",
-            message: "Worker cycle failed",
-            payload: {
-              cycleNumber,
-              reason: error instanceof Error ? error.message : "unknown_error"
-            }
-          }
+        await emitIncident("worker", "worker_cycle_failed", "critical", { cycleNumber, reason: error instanceof Error ? error.message : "unknown_error" });
+        await prisma.signalTruthHealth.upsert({
+          where: { id: "signal_truth_health" },
+          update: { scannerErrorCount: { increment: 1 }, trackerErrorCount: { increment: 1 }, lastScannerError: error instanceof Error ? error.message : "unknown_error", lastTrackerError: error instanceof Error ? error.message : "unknown_error" },
+          create: { id: "signal_truth_health", scannerStatus: "offline", trackerStatus: "offline", telegramStatus: "unknown", scannerErrorCount: 1, trackerErrorCount: 1, lastScannerError: error instanceof Error ? error.message : "unknown_error", lastTrackerError: error instanceof Error ? error.message : "unknown_error" }
         });
       } catch {
         // no-op: observability persistence unavailable in this environment
