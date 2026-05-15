@@ -306,3 +306,300 @@ model StrategyConfig {
 
   backtestRuns BacktestRun[]
 }
+
+model SignalTruthDecision {
+  id                String   @id @default(cuid())
+  decisionId        String   @unique
+  cycleId           String
+  timestamp         DateTime
+  marketType        String
+  venue             String
+  symbol            String
+  timeframe         String
+  strategyId        String
+  strategyFamily    String
+  direction         String
+  tier              String
+  score             Float
+  entry             Float
+  stopLoss          Float
+  takeProfits       Json
+  riskReward        Float
+  setupSummary      String
+  conditions        Json
+  invalidationReason String?
+  status            String
+  rejectionReason   String?
+  suppressionReason String?
+  dataSource        String
+  mode              String
+  executionMode     String
+  createdAt         DateTime @default(now())
+}
+
+model SignalTruthPosition {
+  id               String   @id @default(cuid())
+  signalId         String   @unique
+  decisionId       String
+  symbol           String
+  marketType       String
+  venue            String
+  direction        String
+  entry            Float
+  stopLoss         Float
+  takeProfits      Json
+  openedAt         DateTime
+  currentPrice     Float
+  highestPrice     Float
+  lowestPrice      Float
+  status           String
+  achievedR        Float?
+  finalR           Float?
+  resolvedAt       DateTime?
+  resolutionReason String?
+  idempotencyState Json?
+  accountId        String?
+  brokerOrderId    String?
+  fillPrice        Float?
+  slippage         Float?
+  expiresAt        DateTime?
+  updatedAt        DateTime @updatedAt
+  createdAt        DateTime @default(now())
+}
+
+model SignalTruthLifecycleEvent {
+  id             String   @id @default(cuid())
+  eventId        String   @unique
+  signalId       String
+  decisionId     String
+  cycleId        String
+  eventType      String
+  timestamp      DateTime
+  price          Float?
+  payload        Json?
+  error          String?
+  idempotencyKey String?
+  createdAt      DateTime @default(now())
+}
+
+model SignalTruthCycle {
+  id                  String   @id @default(cuid())
+  cycleId             String   @unique
+  startedAt           DateTime
+  completedAt         DateTime?
+  dataSource          String
+  mode                String
+  executionMode       String
+  symbolsPlanned      Int
+  symbolsScanned      Int
+  selectedCount       Int
+  rejectedCount       Int
+  suppressedCount     Int
+  dispatchedCount     Int
+  activeTrackedSignals Int
+  resolvedCount       Int
+  errorCount          Int
+  latestError         String?
+  runtimeMs           Int?
+  createdAt           DateTime @default(now())
+}
+
+model SignalTruthHealth {
+  id                   String   @id @default(cuid())
+  workerHeartbeatAt    DateTime?
+  scannerHeartbeatAt   DateTime?
+  trackerHeartbeatAt   DateTime?
+  scannerStatus        String   @default("offline")
+  trackerStatus        String   @default("offline")
+  telegramStatus       String   @default("unknown")
+  staleFeedDetected    Boolean  @default(false)
+  lastPriceFetchAt     DateTime?
+  staleFeedCount       Int      @default(0)
+  trackerErrorCount    Int      @default(0)
+  scannerErrorCount    Int      @default(0)
+  latestTelegramFailure String?
+  latestIncident       String?
+  scannerCyclesCompleted Int @default(0)
+  symbolsScannedCount Int @default(0)
+  selectedSignalsCount Int @default(0)
+  rejectedDecisionsCount Int @default(0)
+  suppressedDecisionsCount Int @default(0)
+  telegramSentCount Int @default(0)
+  telegramFailedCount Int @default(0)
+  trackerPositionsChecked Int @default(0)
+  tpHitsCount Int @default(0)
+  stopHitsCount Int @default(0)
+  expiredSignalsCount Int @default(0)
+  lastScannerHeartbeatAt DateTime?
+  lastTrackerHeartbeatAt DateTime?
+  lastTelegramSuccessAt DateTime?
+  lastTelegramFailureAt DateTime?
+  lastTelegramSentAt DateTime?
+  lastTelegramFailedAt DateTime?
+  lastTelegramError String?
+  lastScannerError String?
+  lastTrackerError String?
+  lastPriceFeedError String?
+  workerStartedAt DateTime?
+  lastLoopAt DateTime?
+  scannerAvgLoopMs Float?
+  scannerMaxLoopMs Float?
+  trackerAvgLoopMs Float?
+  trackerMaxLoopMs Float?
+  scannerDelayedCycles Int @default(0)
+  trackerDelayedCycles Int @default(0)
+  scannerSkippedCycles Int @default(0)
+  trackerSkippedCycles Int @default(0)
+  workerUptimeSec Int @default(0)
+  memoryRssMb Float?
+  restartCount Int @default(0)
+  updatedAt            DateTime @updatedAt
+}
+
+model StrategyTelemetry {
+  id                    String   @id @default(cuid())
+  strategyId            String   @unique
+  strategyFamily        String
+  evaluationCount       Int      @default(0)
+  selectedCount         Int      @default(0)
+  rejectedCount         Int      @default(0)
+  suppressedCount       Int      @default(0)
+  averageScore          Float    @default(0)
+  rejectionDistribution Json?
+  averageEvalLatencyMs  Float    @default(0)
+  lastSelectedAt        DateTime?
+  lastEvaluatedAt       DateTime?
+  updatedAt             DateTime @updatedAt
+  createdAt             DateTime @default(now())
+}
+
+model StrategyCandidateTruth {
+  id                String   @id @default(cuid())
+  candidateId       String   @unique
+  cycleId           String
+  strategyId        String
+  strategyFamily    String
+  symbol            String
+  timeframe         String
+  marketType        String
+  regime            String
+  direction         String
+  score             Float
+  scoreBreakdown    Json?
+  rank              Int
+  selected          Boolean
+  rejectedReason    String?
+  suppressionReason String?
+  rr                Float?
+  volatilityMetric  Float?
+  confluenceMetric  Float?
+  evaluationLatencyMs Float?
+  lifecycleEventId  String?
+  telegramDispatchId String?
+  trackerPositionId String?
+  incidentId        String?
+  createdAt         DateTime @default(now())
+}
+
+model TelegramDispatchTruth {
+  id               String   @id @default(cuid())
+  dispatchId       String   @unique
+  cycleId          String
+  candidateId      String
+  signalEventId    String?
+  lifecycleEventId String?
+  chatId           String?
+  status           String
+  attemptCount     Int      @default(0)
+  retryCount       Int      @default(0)
+  latencyMs        Int?
+  failureReason    String?
+  dispatchedAt     DateTime?
+  createdAt        DateTime @default(now())
+}
+
+model RuntimeControlState {
+  id                      String   @id @default("runtime_control")
+  scannerPaused           Boolean  @default(false)
+  trackerPaused           Boolean  @default(false)
+  telegramPaused          Boolean  @default(false)
+  lifecyclePaused         Boolean  @default(false)
+  runtimeFrozen           Boolean  @default(false)
+  maintenanceMode         Boolean  @default(false)
+  emergencySafeMode       Boolean  @default(false)
+  cryptoEnabled           Boolean  @default(true)
+  forexEnabled            Boolean  @default(true)
+  updatedAt               DateTime @updatedAt
+  createdAt               DateTime @default(now())
+}
+
+model TimelineProjection {
+  id               String   @id @default(cuid())
+  signalId         String
+  candidateId      String?
+  cycleId          String?
+  latestEventType  String
+  latestEventAt    DateTime
+  status           String
+  timeline         Json
+  updatedAt        DateTime @updatedAt
+  createdAt        DateTime @default(now())
+
+  @@unique([signalId])
+}
+
+model RuntimeControlAudit {
+  id          String   @id @default(cuid())
+  controlId   String
+  action      String
+  actor       String
+  confirmed   Boolean  @default(false)
+  beforeState Json?
+  afterState  Json?
+  createdAt   DateTime @default(now())
+}
+
+model RuntimeLifecycleState {
+  id               String   @id @default("runtime_lifecycle")
+  stage            String   @default("boot")
+  status           String   @default("running")
+  mode             String?
+  marketType       String?
+  completionPct    Float    @default(0)
+  notes            String?
+  lastTransitionAt DateTime?
+  updatedAt        DateTime @updatedAt
+  createdAt        DateTime @default(now())
+}
+
+model OperatorTerminalCommand {
+  id        String   @id @default(cuid())
+  command   String
+  actor     String
+  status    String   @default("accepted")
+  acknowledgedAt DateTime?
+  executedAt DateTime?
+  rejectedReason String?
+  payload   Json?
+  createdAt DateTime @default(now())
+}
+
+model RuntimePartitionState {
+  id                 String   @id
+  marketType         String
+  executionType      String
+  capitalMode        String
+  scannerPaused      Boolean  @default(false)
+  trackerPaused      Boolean  @default(false)
+  dispatchPaused     Boolean  @default(false)
+  healthy            Boolean  @default(true)
+  readiness          String   @default("ready")
+  cooldownState      Json?
+  suppressionState   Json?
+  queueDepth         Int      @default(0)
+  lastScannerAt      DateTime?
+  lastTrackerAt      DateTime?
+  lastDispatchAt     DateTime?
+  updatedAt          DateTime @updatedAt
+  createdAt          DateTime @default(now())
+}

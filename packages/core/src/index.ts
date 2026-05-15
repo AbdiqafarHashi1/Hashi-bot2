@@ -37,3 +37,15 @@ export * from "./live-analysis/forex-mt5-live-adapter";
 export * from "./live-analysis/forex-public-live-adapter";
 export * from "./execution/paper-account";
 export * from "./arbitration/strategy-brain";
+
+export * from "./signal-lifecycle-contracts";
+
+export * from "./strategy-engine-contracts";
+export * from "./engines/regime-detection";
+export * from "./engines/scoring";
+export * from "./engines/families";
+export * from "./connectors/unified-connectors";
+export * from "./execution/execution-engines";
+export * from "./execution/risk-engines";
+export * from "./live-analysis/unified-feed-layer";
+export * from "./arbitration/orchestration-brain";
