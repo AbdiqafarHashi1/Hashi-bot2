@@ -188,8 +188,21 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
    bool bearishTrend=(ctx.emaFast<ctx.emaSlow && ctx.currentClose<=ctx.emaFast);
    bool bullishMomentum=(ctx.currentClose>ctx.currentOpen && ctx.roc>0.0);
    bool bearishMomentum=(ctx.currentClose<ctx.currentOpen && ctx.roc<0.0);
-   bool bullishBreakOrPullback=(ctx.currentClose>=ctx.recentHigh || (ctx.currentLow<=ctx.emaFast && ctx.currentClose>ctx.emaFast));
-   bool bearishBreakOrPullback=(ctx.currentClose<=ctx.recentLow || (ctx.currentHigh>=ctx.emaFast && ctx.currentClose<ctx.emaFast));
+   double recentHigh = -DBL_MAX;
+   double recentLow = DBL_MAX;
+   int lookback = HASHIBOT_RECENT_BARS;
+   if(lookback > ctx.barsLoaded) lookback = ctx.barsLoaded;
+   if(lookback < 1) lookback = 1;
+   for(int i=0; i<lookback; i++)
+     {
+      double high = ctx.recentHigh[i];
+      double low = ctx.recentLow[i];
+      if(high > recentHigh) recentHigh = high;
+      if(low < recentLow) recentLow = low;
+     }
+
+   bool bullishBreakOrPullback=(ctx.currentClose>=recentHigh || (ctx.currentLow<=ctx.emaFast && ctx.currentClose>ctx.emaFast));
+   bool bearishBreakOrPullback=(ctx.currentClose<=recentLow || (ctx.currentHigh>=ctx.emaFast && ctx.currentClose<ctx.emaFast));
 
    TradeDirection d=TRADE_DIR_NONE;
    if(bullishTrend && bullishMomentum && bullishBreakOrPullback) d=TRADE_DIR_LONG;
@@ -200,8 +213,8 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
    double longSwingCandidate=(double)(e-0.7*ctx.atr);
    double shortSwingCandidate=(double)(e+0.7*ctx.atr);
    double swingSL=(d==TRADE_DIR_LONG
-                   ?((ctx.recentLow<longSwingCandidate)?(double)ctx.recentLow:longSwingCandidate)
-                   :((ctx.recentHigh>shortSwingCandidate)?(double)ctx.recentHigh:shortSwingCandidate));
+                   ?((recentLow<longSwingCandidate)?recentLow:longSwingCandidate)
+                   :((recentHigh>shortSwingCandidate)?recentHigh:shortSwingCandidate));
    double atrSL=(d==TRADE_DIR_LONG?e-0.9*ctx.atr:e+0.9*ctx.atr);
    double sl=(d==TRADE_DIR_LONG
               ?((swingSL<atrSL)?swingSL:atrSL)
