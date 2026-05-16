@@ -104,8 +104,7 @@ private:
       else
          depthRatio = (pullbackExtreme - impulseLow) / impulseRange;
 
-      // reject too shallow/deep
-      if(depthRatio < 0.236 || depthRatio > 0.786)
+      if(depthRatio < 0.20 || depthRatio > 0.82)
          return false;
 
       // ATR-normalized pullback band (roughly 0.8 - 2.2 ATR)
@@ -201,6 +200,7 @@ public:
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
 
       double depthRatio = 0.0, pullbackScore = 0.0;
+      bool propMediumBias = (regime.confidence >= 0.62);
       if(!PullbackQuality(ctx, dir, depthRatio, pullbackScore))
         { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 
@@ -214,6 +214,9 @@ public:
       if(!ReclaimAndMomentum(ctx, dir, entryQuality))
         { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 
+      if(propMediumBias && (depthRatio < 0.35 || depthRatio > 0.68))
+        { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
+
       double momentumScore = MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.5);
       double volScore = MathHelpers::Normalize01(ctx.atr, 0.0, MathMax(ctx.currentClose * 0.01, 1e-6));
       double regimeScore = MathHelpers::Clamp(regime.confidence, 0.0, 1.0);
@@ -223,7 +226,8 @@ public:
       candidate.score.scoreLTF = structureScore;
       candidate.score.scoreVol = volScore;
       candidate.score.scoreEntry = entryQuality;
-      candidate.score.scoreUnique = MathHelpers::Clamp((pullbackScore + structureScore + momentumScore) / 3.0, 0.0, 1.0);
+      double riskPlanQuality = MathHelpers::Clamp(1.0 - MathHelpers::Normalize01(MathAbs(depthRatio - 0.5), 0.0, 0.5), 0.0, 1.0);
+      candidate.score.scoreUnique = StrategyTypes::BuildUnifiedQualityScore(regimeScore, structureScore, volScore, entryQuality, riskPlanQuality, (regime.suppression.isSuppressed ? 1.0 : 0.0));
       candidate.score.scoreSuppression = (regime.suppression.isSuppressed ? 1.0 : 0.0);
 
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + pullbackScore + structureScore + entryQuality) / 4.0, 0.0, 1.0);

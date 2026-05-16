@@ -11,11 +11,11 @@
 class CRiskEngine
   {
 private:
-   bool       m_initialized;
+   bool        m_initialized;
    ProfileType m_profile;
-   double     m_riskPerTrade;
-   double     m_maxOpenRisk;
-   int        m_maxTradesDay;
+   double      m_riskPerTrade;
+   double      m_maxOpenRisk;
+   int         m_maxTradesDay;
 
 private:
    bool IsGradeAllowed(const SignalGrade grade) const
@@ -25,8 +25,18 @@ private:
       return (grade == SIGNAL_GRADE_B || grade == SIGNAL_GRADE_A || grade == SIGNAL_GRADE_A_PLUS);
      }
 
+   double NormalizeLots(double lots,const MarketContext &ctx) const
+     {
+      if(lots <= 0.0) return 0.0;
+      double n = lots;
+      if(ctx.minLot > 0.0 && n < ctx.minLot) n = ctx.minLot;
+      if(ctx.maxLot > 0.0 && n > ctx.maxLot) n = ctx.maxLot;
+      if(ctx.lotStep > 0.0) n = MathFloor(n / ctx.lotStep) * ctx.lotStep;
+      return MathMax(n, 0.0);
+     }
+
 public:
-            CRiskEngine(void)
+   CRiskEngine(void)
      {
       m_initialized = false;
       m_profile = PROFILE_UNKNOWN;
@@ -57,37 +67,12 @@ public:
 
    void Reset() {}
 
-   double CalculateRiskAmount(double equity,double riskPercent)
+   double CalculateRiskAmount(double equity,double balance,double riskPercent)
      {
-      if(equity <= 0.0 || riskPercent <= 0.0)
+      double base = (equity > 0.0 ? equity : balance);
+      if(base <= 0.0 || riskPercent <= 0.0)
          return 0.0;
-      return equity * (riskPercent / 100.0);
-     }
-
-   double CalculateLots(const TradePlan &plan,const MarketContext &ctx,double riskAmount)
-     {
-      if(riskAmount <= 0.0)
-         return 0.0;
-      if(plan.entryPrice <= 0.0 || plan.stopLoss <= 0.0)
-         return 0.0;
-
-      double stopDistance = MathAbs(plan.entryPrice - plan.stopLoss);
-      if(stopDistance <= 0.0 || ctx.tickValue <= 0.0 || ctx.tickSize <= 0.0)
-         return 0.0;
-
-      double valuePerPriceUnit = ctx.tickValue / ctx.tickSize;
-      double riskPerLot = stopDistance * valuePerPriceUnit;
-      if(riskPerLot <= 0.0)
-         return 0.0;
-
-      double lots = riskAmount / riskPerLot;
-      if(lots < ctx.minLot)
-         lots = ctx.minLot;
-      if(ctx.maxLot > 0.0 && lots > ctx.maxLot)
-         lots = ctx.maxLot;
-      if(ctx.lotStep > 0.0)
-         lots = MathFloor(lots / ctx.lotStep) * ctx.lotStep;
-      return MathMax(lots, 0.0);
+      return base * (riskPercent / 100.0);
      }
 
    bool CheckBasicLimits(const ArbitrationResult &result,const MarketContext &ctx,RiskDecision &decision)
@@ -99,7 +84,6 @@ public:
          decision.violation = SUPPRESS_AMBIGUOUS;
          return false;
         }
-
       if(!IsGradeAllowed(result.winningGrade))
         {
          decision.decision = RISK_DECISION_BLOCK;
@@ -107,56 +91,74 @@ public:
          decision.violation = SUPPRESS_RISK;
          return false;
         }
-
-      if(ctx.spreadPoints <= 0.0 || ctx.spreadPoints > 80.0)
+      double maxSpread = (m_profile == PROFILE_PROP_FIRM ? 60.0 : 85.0);
+      if(ctx.spreadPoints <= 0.0 || ctx.spreadPoints > maxSpread)
         {
          decision.decision = RISK_DECISION_BLOCK;
          decision.reason = "invalid_or_extreme_spread";
          decision.violation = SUPPRESS_SPREAD;
          return false;
         }
-
       return true;
      }
 
    bool Assess(const ArbitrationResult &result,const MarketContext &ctx,RiskDecision &decision)
      {
-      if(!m_initialized)
-         Init(PROFILE_PERSONAL);
+      if(!m_initialized) Init(PROFILE_PERSONAL);
 
       decision.Reset();
       decision.riskPercent = m_riskPerTrade;
       decision.maxAllowedRisk = m_maxOpenRisk;
+      decision.profileName = (m_profile == PROFILE_PROP_FIRM ? "PROP" : "PERSONAL");
 
       if(!CheckBasicLimits(result, ctx, decision))
+        { decision.approved = false; return false; }
+
+      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+      decision.riskAmount = CalculateRiskAmount(equity, balance, decision.riskPercent);
+
+      TradePlan plan = result.plan;
+      decision.slDistance = MathAbs(plan.entryPrice - plan.stopLoss);
+      if(plan.entryPrice <= 0.0 || plan.stopLoss <= 0.0 || decision.slDistance <= 0.0)
+        {
+         decision.approved = (m_profile != PROFILE_PROP_FIRM);
+         decision.decision = (decision.approved ? RISK_DECISION_APPROVED_NO_SIZING : RISK_DECISION_BLOCK);
+         decision.reason = (decision.approved ? "approved_without_sizing_missing_entry_sl" : "prop_reject_missing_entry_sl");
+         decision.violation = SUPPRESS_RISK;
+         return decision.approved;
+        }
+
+      if(ctx.tickValue <= 0.0 || ctx.tickSize <= 0.0)
         {
          decision.approved = false;
+         decision.decision = RISK_DECISION_BLOCK;
+         decision.reason = "invalid_symbol_tick_value_or_size";
+         decision.violation = SUPPRESS_RISK;
          return false;
         }
 
-      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-      decision.riskAmount = CalculateRiskAmount(equity, decision.riskPercent);
-
-      TradePlan plan = result.plan;
-      if(plan.entryPrice <= 0.0 || plan.stopLoss <= 0.0 || MathAbs(plan.entryPrice - plan.stopLoss) <= 0.0)
+      double valuePerPriceUnit = ctx.tickValue / ctx.tickSize;
+      double riskPerLot = decision.slDistance * valuePerPriceUnit;
+      if(riskPerLot <= 0.0 || decision.riskAmount <= 0.0)
         {
-         decision.approved = true;
-         decision.decision = RISK_DECISION_APPROVED_NO_SIZING;
-         decision.reason = "approved_without_sizing_missing_entry_sl";
-         decision.approvedLots = 0.0;
-         decision.requestedLots = 0.0;
-         return true;
+         decision.approved = false;
+         decision.decision = RISK_DECISION_BLOCK;
+         decision.reason = "invalid_risk_per_lot_or_risk_amount";
+         decision.violation = SUPPRESS_RISK;
+         return false;
         }
 
-      double lots = CalculateLots(plan, ctx, decision.riskAmount);
-      decision.requestedLots = lots;
-      decision.approvedLots = lots;
+      decision.rawLots = decision.riskAmount / riskPerLot;
+      decision.normalizedLots = NormalizeLots(decision.rawLots, ctx);
+      decision.requestedLots = decision.rawLots;
+      decision.approvedLots = decision.normalizedLots;
 
-      if(lots <= 0.0)
+      if(decision.normalizedLots <= 0.0)
         {
          decision.approved = false;
          decision.decision = RISK_DECISION_BLOCKED_PENDING_PLAN;
-         decision.reason = "blocked_pending_trade_plan_or_symbol_params";
+         decision.reason = "normalized_lots_zero";
          decision.violation = SUPPRESS_RISK;
          return false;
         }
@@ -167,26 +169,32 @@ public:
       return true;
      }
 
-
    bool AssessWithProp(const ArbitrationResult &result,const MarketContext &ctx,CPropProtections &prop,RiskDecision &decision)
      {
       bool ok = Assess(result, ctx, decision);
-      if(!ok)
-         return false;
-      if(!prop.CanOpenNewTrade(decision))
-         return false;
+      if(!ok) return false;
+      if(!prop.CanOpenNewTrade(decision)) return false;
       return true;
      }
 
-   string Describe(const RiskDecision &decision)
+   int MaxTradesPerDay() const { return m_maxTradesDay; }
+   double RiskPercent() const { return m_riskPerTrade; }
+   double MaxOpenRiskPercent() const { return m_maxOpenRisk; }
+   int CooldownMinutes() const { return (m_profile == PROFILE_PROP_FIRM ? 30 : 10); }
+
+   string Describe(const RiskDecision &d)
      {
-      return StringFormat("risk approved=%s decision=%d risk%%=%.2f amount=%.2f lots=%.2f reason=%s",
-                          (decision.approved ? "true" : "false"),
-                          (int)decision.decision,
-                          decision.riskPercent,
-                          decision.riskAmount,
-                          decision.approvedLots,
-                          decision.reason);
+      return StringFormat("risk profile=%s approved=%s decision=%d risk%%=%.2f amount=%.2f sl=%.5f raw=%.3f norm=%.3f reason=%s violation=%d",
+                          d.profileName,
+                          (d.approved ? "true" : "false"),
+                          (int)d.decision,
+                          d.riskPercent,
+                          d.riskAmount,
+                          d.slDistance,
+                          d.rawLots,
+                          d.normalizedLots,
+                          d.reason,
+                          (int)d.violation);
      }
   };
 

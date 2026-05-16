@@ -90,6 +90,7 @@ enum SignalGrade
 enum ExecutionMode
   {
    EXEC_MODE_UNKNOWN = 0,
+   EXEC_MODE_DRYRUN,
    EXEC_MODE_LIVE,
    EXEC_MODE_PAPER,
    EXEC_MODE_BACKTEST,
@@ -476,6 +477,10 @@ struct RiskDecision
    double             riskPercent;          // Risk % used
    double             maxAllowedRisk;       // Risk cap considered
    double             riskAmount;           // Risk amount in account currency
+   double             slDistance;           // Entry-to-SL price distance
+   double             rawLots;              // Unnormalized lot estimate
+   double             normalizedLots;       // Broker-normalized lots
+   string             profileName;          // PERSONAL / PROP
    string             reason;               // Decision reason text
    SuppressionReason  violation;            // Primary violation reason
    SuppressionState   suppression;          // Risk-level suppression
@@ -489,6 +494,10 @@ struct RiskDecision
       riskPercent = 0.0;
       maxAllowedRisk = 0.0;
       riskAmount = 0.0;
+      slDistance = 0.0;
+      rawLots = 0.0;
+      normalizedLots = 0.0;
+      profileName = "";
       reason = "";
       violation = SUPPRESS_NONE;
       suppression.Reset();

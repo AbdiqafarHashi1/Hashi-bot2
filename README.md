@@ -346,3 +346,23 @@ Database backup:
 ```bash
 HASHI_ENV_FILE=.env.production ./scripts/backup-db.sh
 ```
+
+## MT5 EA compile + first smoke checklist (Phase 19)
+
+For local MetaEditor / Strategy Tester validation after recent EA phases:
+
+1. Compile both EAs:
+   - `MQL5/Experts/HashiBot/PersonalEA.mq5`
+   - `MQL5/Experts/HashiBot/PropFirmEA.mq5`
+2. In each EA inputs, keep safe defaults for first smoke:
+   - `executionMode = EXEC_MODE_DRYRUN`
+   - `allowLiveExecution = false`
+   - `manualExecutionArmed = false`
+3. Run Strategy Tester visual mode on one symbol/timeframe first.
+4. Confirm Journal shows startup/recovery blocks and scanner/reject/accept logs.
+5. Confirm no broker OrderSend path is used in dry-run.
+6. Repeat with multi-symbol scanner enabled and verify portfolio/rejection logs.
+
+Notes:
+- Personal profile is intentionally more aggressive.
+- Prop profile remains conservative with stricter thresholds/limits.
