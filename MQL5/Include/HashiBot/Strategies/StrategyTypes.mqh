@@ -5,6 +5,7 @@
 #define __HASHIBOT_STRATEGIES_STRATEGYTYPES_MQH__
 
 #include <HashiBot/Core/Types.mqh>
+#include <HashiBot/Utils/MathHelpers.mqh>
 
 #define STRAT_SCORE_WEIGHT_REGIME      0.35
 #define STRAT_SCORE_WEIGHT_VOL         0.15
@@ -94,6 +95,19 @@ namespace StrategyTypes
       plan.useBreakEven = true;
       plan.useTrailing = false;
       return IsTradePlanComplete(plan);
+     }
+
+
+   double BuildUnifiedQualityScore(const double regimeFit,const double structureQuality,const double volatilityQuality,const double entryQuality,const double riskPlanQuality,const double suppressionPenalty)
+     {
+      double rf = MathHelpers::Clamp(regimeFit, 0.0, 1.0);
+      double sq = MathHelpers::Clamp(structureQuality, 0.0, 1.0);
+      double vq = MathHelpers::Clamp(volatilityQuality, 0.0, 1.0);
+      double eq = MathHelpers::Clamp(entryQuality, 0.0, 1.0);
+      double rq = MathHelpers::Clamp(riskPlanQuality, 0.0, 1.0);
+      double sp = MathHelpers::Clamp(suppressionPenalty, 0.0, 1.0);
+      double score = 0.24 * rf + 0.24 * sq + 0.16 * vq + 0.16 * eq + 0.20 * rq - 0.20 * sp;
+      return MathHelpers::Clamp(score, 0.0, 1.0);
      }
 
    void InitCandidateBase(StrategyCandidate &c,const StrategyType strategy)

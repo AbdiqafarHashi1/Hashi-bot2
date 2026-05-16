@@ -144,6 +144,12 @@ public:
       if(!ExpansionPersistence(ctx, dir, persistScore))
         { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 
+      int extCandles=0;
+      for(int i=1;i<MathMin(ctx.barsLoaded,6);i++)
+        if((ctx.recentHigh[i]-ctx.recentLow[i]) > 1.6*ctx.atr) extCandles++;
+      if(extCandles >= 4)
+        { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
+
       double prevRocAbs = MathAbs(MathHelpers::SafeDivide((ctx.previousClose - ctx.recentClose[2]), MathMax(MathAbs(ctx.recentClose[2]), 1e-6), 0.0) * 100.0);
       double rocAccel = MathAbs(ctx.roc) - prevRocAbs;
       if(rocAccel < -0.20)
@@ -177,7 +183,8 @@ public:
       candidate.score.scoreLTF = momentumScore;
       candidate.score.scoreVol = volatilityScore;
       candidate.score.scoreEntry = entryScore;
-      candidate.score.scoreUnique = MathHelpers::Clamp((expansionScore + momentumScore + persistScore) / 3.0, 0.0, 1.0);
+      double planQuality = MathHelpers::Clamp(1.0 - MathHelpers::Normalize01(distEma, 0.0, 2.2*ctx.atr), 0.0, 1.0);
+      candidate.score.scoreUnique = StrategyTypes::BuildUnifiedQualityScore(regimeScore, expansionScore, volatilityScore, entryScore, planQuality, MathHelpers::Clamp((regime.suppression.isSuppressed ? 0.6 : 0.0) + 0.4 * exhaustionPenalty, 0.0, 1.0));
       candidate.score.scoreSuppression = MathHelpers::Clamp((regime.suppression.isSuppressed ? 0.6 : 0.0) + 0.4 * exhaustionPenalty, 0.0, 1.0);
 
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + expansionScore + momentumScore + entryScore + persistScore) / 5.0, 0.0, 1.0);

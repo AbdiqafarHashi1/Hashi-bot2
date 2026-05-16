@@ -178,7 +178,11 @@ public:
          return false;
         }
 
-      double momentumScore = MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.5);
+      double emaSlopeAtr = MathHelpers::SafeDivide(MathAbs(ctx.emaFast - ctx.emaSlow), MathMax(ctx.atr, 1e-6), 0.0);
+      if(emaSlopeAtr < 0.12)
+        { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
+
+      double momentumScore = MathHelpers::Clamp(0.6 * MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.5) + 0.4 * MathHelpers::Normalize01(emaSlopeAtr, 0.08, 0.9), 0.0, 1.0);
       double volScore = MathHelpers::Normalize01(ctx.atr, 0.0, MathMax(ctx.currentClose * 0.01, 1e-6));
       double regimeScore = MathHelpers::Clamp(regime.confidence, 0.0, 1.0);
 
@@ -187,7 +191,8 @@ public:
       candidate.score.scoreLTF = momentumScore;
       candidate.score.scoreVol = volScore;
       candidate.score.scoreEntry = entryQuality;
-      candidate.score.scoreUnique = MathHelpers::Clamp(0.5 * structureScore + 0.5 * momentumScore, 0.0, 1.0);
+      double riskPlanQuality = MathHelpers::Clamp(1.0 - MathHelpers::Normalize01(MathAbs((ctx.previousHigh-ctx.previousLow)), 0.0, MathMax(4.0*ctx.atr,1e-6)), 0.0, 1.0);
+      candidate.score.scoreUnique = StrategyTypes::BuildUnifiedQualityScore(regimeScore, structureScore, volScore, entryQuality, riskPlanQuality, (regime.suppression.isSuppressed ? 1.0 : 0.0));
       candidate.score.scoreSuppression = (regime.suppression.isSuppressed ? 1.0 : 0.0);
 
       // deterministic confidence blend

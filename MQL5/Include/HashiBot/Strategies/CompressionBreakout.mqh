@@ -146,6 +146,11 @@ public:
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
         { Reject(candidate, SUPPRESS_OTHER); return false; }
 
+      if(boxAge < 12)
+        { Reject(candidate, SUPPRESS_OTHER); return false; }
+      if(insideRatio < 0.65 || touchScore < 0.30)
+        { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+
       if(boxWidth < MathMax(ctx.atr * 0.35, ctx.spreadPoints * ctx.point * 3.0))
         { Reject(candidate, SUPPRESS_SPREAD); return false; } // too narrow
       if(boxWidth > ctx.atr * 2.5)
@@ -171,7 +176,8 @@ public:
       candidate.score.scoreLTF = breakoutQ;
       candidate.score.scoreVol = volExpansionProxy;
       candidate.score.scoreEntry = entryQ;
-      candidate.score.scoreUnique = MathHelpers::Clamp((boxQuality + breakoutQ + atrContraction) / 3.0, 0.0, 1.0);
+      double rrProxy = MathHelpers::Clamp(MathHelpers::SafeDivide(boxWidth, MathMax(ctx.atr,1e-6), 0.0) / 2.0, 0.0, 1.0);
+      candidate.score.scoreUnique = StrategyTypes::BuildUnifiedQualityScore(regimeScore, boxQuality, volExpansionProxy, entryQ, rrProxy, (regime.suppression.isSuppressed ? 1.0 : 0.0));
       candidate.score.scoreSuppression = (regime.suppression.isSuppressed ? 1.0 : 0.0);
 
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + entryQ) / 4.0, 0.0, 1.0);

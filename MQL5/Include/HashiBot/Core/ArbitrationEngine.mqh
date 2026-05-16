@@ -13,13 +13,16 @@
 #include <HashiBot/Strategies/ExpansionMomentum.mqh>
 
 #define HASHIBOT_AMBIGUITY_THRESHOLD      0.04
-#define HASHIBOT_MIN_REGIME_CONF          0.40
-#define HASHIBOT_MIN_MARKET_QUALITY_ARB   0.35
-#define HASHIBOT_MAX_SPREAD_POINTS_ARB    85.0
-
-// Profile-ready placeholders (not fully wired yet)
-#define HASHIBOT_MIN_GRADE_PERSONAL       SIGNAL_GRADE_B
-#define HASHIBOT_MIN_GRADE_PROP           SIGNAL_GRADE_A
+#define HASHIBOT_MIN_REGIME_CONF_PERSONAL      0.38
+#define HASHIBOT_MIN_REGIME_CONF_PROP          0.50
+#define HASHIBOT_MIN_MARKET_QUALITY_PERSONAL   0.30
+#define HASHIBOT_MIN_MARKET_QUALITY_PROP       0.42
+#define HASHIBOT_MAX_SPREAD_POINTS_PERSONAL    85.0
+#define HASHIBOT_MAX_SPREAD_POINTS_PROP        60.0
+#define HASHIBOT_MIN_SCORE_PERSONAL            0.55
+#define HASHIBOT_MIN_SCORE_PROP                0.70
+#define HASHIBOT_MIN_GRADE_PERSONAL            SIGNAL_GRADE_B
+#define HASHIBOT_MIN_GRADE_PROP                SIGNAL_GRADE_A
 
 class CArbitrationEngine
   {
@@ -31,6 +34,7 @@ private:
    CCompressionBreakoutStrategy  m_compression;
    CPullbackContinuationStrategy m_pullback;
    CExpansionMomentumStrategy    m_expansion;
+   ProfileType                   m_profile;
 
 private:
    SignalGrade GradeFromScore(const double score) const
@@ -109,11 +113,13 @@ public:
    CArbitrationEngine(void)
      {
       m_initialized = false;
+      m_profile = PROFILE_PERSONAL;
       Reset();
      }
 
-   bool Init()
+   bool Init(ProfileType profile=PROFILE_PERSONAL)
      {
+      m_profile = (profile == PROFILE_PROP_FIRM ? PROFILE_PROP_FIRM : PROFILE_PERSONAL);
       m_initialized = true;
       m_trend.Init();
       m_compression.Init();
@@ -190,11 +196,17 @@ public:
          result.reason = "regime_suppressed";
          result.suppression = regime.suppression;
         }
-      if(regime.confidence < HASHIBOT_MIN_REGIME_CONF)
+      double minRegimeConf = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MIN_REGIME_CONF_PROP : HASHIBOT_MIN_REGIME_CONF_PERSONAL);
+      double minMarketQuality = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MIN_MARKET_QUALITY_PROP : HASHIBOT_MIN_MARKET_QUALITY_PERSONAL);
+      double maxSpread = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MAX_SPREAD_POINTS_PROP : HASHIBOT_MAX_SPREAD_POINTS_PERSONAL);
+      SignalGrade minGrade = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MIN_GRADE_PROP : HASHIBOT_MIN_GRADE_PERSONAL);
+      double minTopScore = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MIN_SCORE_PROP : HASHIBOT_MIN_SCORE_PERSONAL);
+
+      if(regime.confidence < minRegimeConf)
         { result.noTrade = true; result.reason = "low_regime_confidence"; }
-      if(ctx.marketQuality < HASHIBOT_MIN_MARKET_QUALITY_ARB)
+      if(ctx.marketQuality < minMarketQuality)
         { result.noTrade = true; result.reason = "low_market_quality"; }
-      if(ctx.spreadPoints <= 0.0 || ctx.spreadPoints > HASHIBOT_MAX_SPREAD_POINTS_ARB)
+      if(ctx.spreadPoints <= 0.0 || ctx.spreadPoints > maxSpread)
         { result.noTrade = true; result.reason = "extreme_spread"; }
 
       StrategyCandidate c;
@@ -228,16 +240,17 @@ public:
          result.secondScore = m_candidates[second].score.totalScore;
       result.scoreMargin = MathMax(0.0, result.topScore - result.secondScore);
 
-      if(result.topScore < 0.55)
-        { result.noTrade = true; result.reason = "top_score_too_low"; return result; }
-      if(result.topScore < 0.62)
-        { result.noTrade = true; result.reason = "top_confidence_too_low"; return result; }
+      if(result.topScore < minTopScore)
+        { result.noTrade = true; result.reason = "top_score_below_profile_min"; return result; }
       if(HasAmbiguity())
         { result.noTrade = true; result.reason = "ambiguous_top_scores"; return result; }
 
       int winner = SelectWinner();
       if(winner < 0)
         { result.noTrade = true; result.reason = "no_valid_winner"; return result; }
+
+      if(m_candidates[winner].grade < minGrade)
+        { result.noTrade = true; result.reason = "grade_below_profile_min"; return result; }
 
       if(!StrategyTypes::IsTradePlanComplete(m_candidates[winner].plan))
         { result.noTrade = true; result.reason = "incomplete_trade_plan"; return result; }
