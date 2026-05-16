@@ -62,6 +62,16 @@ input int maxPersonalEntriesPerSymbol = 3;
 input SignalGrade personalAddOnMinGrade = SIGNAL_GRADE_A;
 input double personalAddOnMinScore = 0.70;
 input bool personalCompoundingMode = true;
+input bool enableAggressiveScalperMode = true;
+input double scalperMinScore = 0.42;
+input double scalperMinRegimeConfidence = 0.15;
+input double scalperMinMarketQuality = 0.10;
+input double scalperMaxChoppiness = 85.0;
+input double scalperMinAtrPercent = 0.00005;
+input int scalperCooldownMinutes = 0;
+input int scalperMinBarsBetweenEntries = 0;
+input bool scalperAllowBGrade = true;
+input bool scalperAllowFallback = true;
 
 
 
@@ -73,6 +83,7 @@ int g_barsSinceEntry=9999;
 long g_diagBarsProcessed=0,g_diagCandidates=0,g_diagRegimeAccepted=0,g_diagRegimeRejected=0,g_diagWinners=0,g_diagDryRunSubmits=0,g_diagRiskApproved=0,g_diagRiskRejected=0,g_diagPortApproved=0,g_diagPortRejected=0;
 long g_r_regime_conf=0,g_r_market_quality=0,g_r_score=0,g_r_chop=0,g_r_atr=0,g_r_spread=0,g_r_cooldown=0,g_r_minbars=0,g_r_portfolio=0,g_r_risk=0,g_r_incomplete=0,g_r_no_candidate=0;
 long g_fallbackEval=0,g_fallbackAccepted=0,g_fallbackRejected=0,g_symbolsScanned=0,g_symbolsSkipped=0; string g_fallbackLastReject="none";
+long g_scalperCandidatesEvaluated=0,g_scalperCandidatesAccepted=0,g_scalperFallbackAccepted=0,g_scalperFallbackRejected=0;
 
 string DirName(TradeDirection d){ if(d==TRADE_DIR_LONG) return "LONG"; if(d==TRADE_DIR_SHORT) return "SHORT"; return "NONE"; }
 string TfName(){ return EnumToString(contextTimeframe); }
@@ -161,14 +172,57 @@ bool BuildFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &score,st
    g_fallbackAccepted++; reason="fallback_ok"; return true;
   }
 
-bool RuntimeRiskGuard(const string symbol,string &reason)
+
+bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &score,string &reason)
+  {
+   score = 0.0; reason="";
+   if(!scalperAllowFallback){ reason="scalper_fallback_disabled"; g_scalperFallbackRejected++; return false; }
+   if(ctx.currentClose<=0.0 || ctx.atr<=0.0){ reason="scalper_invalid_prices"; g_scalperFallbackRejected++; return false; }
+   if(ctx.spreadPoints > maxSpreadPoints){ reason="scalper_spread_too_high"; g_scalperFallbackRejected++; return false; }
+   if(ctx.atr <= scalperMinAtrPercent*ctx.currentClose){ reason="scalper_atr_too_low"; g_scalperFallbackRejected++; return false; }
+
+   double emaGapNorm=MathAbs(ctx.emaFast-ctx.emaSlow)/MathMax(ctx.atr,0.00001);
+   double bodyNorm=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,0.00001);
+   bool bullishTrend=(ctx.emaFast>ctx.emaSlow && ctx.currentClose>=ctx.emaFast);
+   bool bearishTrend=(ctx.emaFast<ctx.emaSlow && ctx.currentClose<=ctx.emaFast);
+   bool bullishMomentum=(ctx.currentClose>ctx.currentOpen && ctx.roc>0.0);
+   bool bearishMomentum=(ctx.currentClose<ctx.currentOpen && ctx.roc<0.0);
+   bool bullishBreakOrPullback=(ctx.currentClose>=ctx.recentHigh || (ctx.currentLow<=ctx.emaFast && ctx.currentClose>ctx.emaFast));
+   bool bearishBreakOrPullback=(ctx.currentClose<=ctx.recentLow || (ctx.currentHigh>=ctx.emaFast && ctx.currentClose<ctx.emaFast));
+
+   TradeDirection d=TRADE_DIR_NONE;
+   if(bullishTrend && bullishMomentum && bullishBreakOrPullback) d=TRADE_DIR_LONG;
+   else if(bearishTrend && bearishMomentum && bearishBreakOrPullback) d=TRADE_DIR_SHORT;
+   else { reason="scalper_ambiguous_or_no_momentum"; g_scalperFallbackRejected++; return false; }
+
+   double e=(d==TRADE_DIR_LONG?(ctx.ask>0?ctx.ask:ctx.currentClose):(ctx.bid>0?ctx.bid:ctx.currentClose));
+   double swingSL=(d==TRADE_DIR_LONG?MathMin(ctx.recentLow,e-0.7*ctx.atr):MathMax(ctx.recentHigh,e+0.7*ctx.atr));
+   double atrSL=(d==TRADE_DIR_LONG?e-0.9*ctx.atr:e+0.9*ctx.atr);
+   double sl=(d==TRADE_DIR_LONG?MathMin(swingSL,atrSL):MathMax(swingSL,atrSL));
+   double risk=MathAbs(e-sl);
+   if(risk<=0.0){ reason="scalper_invalid_risk"; g_scalperFallbackRejected++; return false; }
+
+   plan.Reset(); plan.strategy=STRATEGY_EXPANSION_MOMENTUM; plan.direction=d; plan.entryPrice=e; plan.stopLoss=sl;
+   plan.takeProfit1=(d==TRADE_DIR_LONG?e+0.8*risk:e-0.8*risk);
+   plan.takeProfit2=(d==TRADE_DIR_LONG?e+1.8*risk:e-1.8*risk);
+
+   double spreadPenalty=MathMin(0.25,ctx.spreadPoints/MathMax(maxSpreadPoints,1.0)*0.25);
+   score=MathMin(0.95,MathMax(0.0,0.30+0.18*MathMin(1.0,emaGapNorm)+0.18*MathMin(1.0,bodyNorm)+0.16*MathMin(1.0,MathAbs(ctx.roc))+0.20*MathMin(1.0,ctx.marketQuality)-spreadPenalty));
+   plan.confidence=score;
+   if(score<scalperMinScore){ reason="scalper_score_too_low"; g_scalperFallbackRejected++; return false; }
+
+   g_scalperFallbackAccepted++; g_scalperCandidatesAccepted++; reason="scalper_fallback_ok";
+   return true;
+  }
+
+bool RuntimeRiskGuard(const string symbol,const int cooldownMins,const int minBarsReq,string &reason)
   {
    datetime now=TimeCurrent(); datetime dayKey=StringToTime(TimeToString(now, TIME_DATE));
    if(g_tradeDayStart!=dayKey){ g_tradeDayStart=dayKey; g_tradesToday=0; }
    if(g_killSwitchActive && killSwitchBlocksNewTrades){ reason="kill_switch_active"; return false; }
    if(g_tradesToday >= g_risk.MaxTradesPerDay()){ reason="max_trades_day_reached"; return false; }
-   if(g_lastCloseTime>0 && (now-g_lastCloseTime)<(cooldownMinutes*60)){ reason="cooldown_active"; return false; }
-   if(g_barsSinceEntry < minBarsBetweenEntries){ reason="too_soon_after_last_entry"; return false; }
+   if(g_lastCloseTime>0 && (now-g_lastCloseTime)<(cooldownMins*60)){ reason="cooldown_active"; return false; }
+   if(g_barsSinceEntry < minBarsReq){ reason="too_soon_after_last_entry"; return false; }
    if(g_tracker.HasActiveTradeForSymbol(symbol) && !allowPersonalMultiEntry){ reason="active_trade_exists"; return false; }
    double eq=AccountInfoDouble(ACCOUNT_EQUITY); if(eq>0.0){ double openRiskPct=100.0*g_tracker.SumOpenRiskAmount()/eq; if(openRiskPct>=g_risk.MaxOpenRiskPercent()){ reason="max_open_risk_reached"; return false; } }
    reason="ok"; return true;
@@ -256,35 +310,59 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       if(g_tracker.ReconcileSymbolWithBroker(symbol, recEvent) && recEvent!="")
          Print("[RECON][PersonalEA] sym=", symbol, " event=", recEvent);
      }
+   bool scalperMode=enableAggressiveScalperMode;
+   double activeMinScore=(scalperMode?scalperMinScore:minCandidateScore);
+   double activeMinRegime=(scalperMode?scalperMinRegimeConfidence:minRegimeConfidence);
+   double activeMinMarketQuality=(scalperMode?scalperMinMarketQuality:minMarketQuality);
+   double activeMaxChop=(scalperMode?scalperMaxChoppiness:maxChoppiness);
+   double activeMinAtrPct=(scalperMode?scalperMinAtrPercent:minAtrPercent);
+   int activeCooldown=(scalperMode?scalperCooldownMinutes:cooldownMinutes);
+   int activeMinBars=(scalperMode?scalperMinBarsBetweenEntries:minBarsBetweenEntries);
+
    RegimeState regime; g_regime.Detect(ctx, regime); g_diagRegimeAccepted++;
-   if(regime.confidence < minRegimeConfidence){ if(ShouldLog(isNewBar)) g_r_regime_conf++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=regime_conf_too_low"); return; }
-   if(ctx.marketQuality < minMarketQuality){ if(ShouldLog(isNewBar)) g_r_market_quality++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=market_quality_too_low"); return; }
-   if(ctx.choppiness > maxChoppiness){ if(ShouldLog(isNewBar)) g_r_chop++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=choppiness_too_high"); return; }
-   if(ctx.atr <= minAtrPercent*ctx.currentClose){ if(ShouldLog(isNewBar)) g_r_atr++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=atr_too_low"); return; }
-   if(ctx.spreadPoints > maxSpreadPoints){ if(ShouldLog(isNewBar)) g_r_spread++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=spread_too_high"); return; } ArbitrationResult arb=g_arb.Evaluate(ctx, regime); g_diagCandidates++; if(arb.hasWinner) g_diagWinners++; else g_r_no_candidate++; g_lastArbTime=TimeCurrent(); RiskDecision risk; g_risk.Assess(arb, ctx, risk);
-   TradeState tstate; string vreason=""; bool validPlan=g_order.ValidateTradePlan(arb.plan, ctx, vreason); if(!validPlan){ g_r_incomplete++; } string guard=""; bool allowed=RuntimeRiskGuard(symbol, guard); if(!allowed){ if(guard=="cooldown_active") g_r_cooldown++; if(guard=="too_soon_after_last_entry") g_r_minbars++; } int actTotal=0,grpCount=0,dirCount=0; string pReason=""; bool portfolioOK=PortfolioGuardrail(symbol, arb.plan.direction, arb.plan.strategy, pReason, actTotal, grpCount, dirCount); if(portfolioOK) g_diagPortApproved++; else { g_diagPortRejected++; g_r_portfolio++; }
+   if(regime.confidence < activeMinRegime){ if(ShouldLog(isNewBar)) g_r_regime_conf++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=regime_conf_too_low"); return; }
+   if(ctx.marketQuality < activeMinMarketQuality){ if(ShouldLog(isNewBar)) g_r_market_quality++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=market_quality_too_low"); return; }
+   if(ctx.choppiness > activeMaxChop){ if(ShouldLog(isNewBar)) g_r_chop++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=choppiness_too_high"); return; }
+   if(ctx.atr <= activeMinAtrPct*ctx.currentClose){ if(ShouldLog(isNewBar)) g_r_atr++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=atr_too_low"); return; }
+   if(ctx.spreadPoints > maxSpreadPoints){ if(ShouldLog(isNewBar)) g_r_spread++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=spread_too_high"); return; }
+
+   ArbitrationResult arb=g_arb.Evaluate(ctx, regime); g_diagCandidates++; if(arb.hasWinner) g_diagWinners++; else g_r_no_candidate++; g_lastArbTime=TimeCurrent();
+   bool candidateGradeOK=(!scalperMode || scalperAllowBGrade || arb.winningGrade>=SIGNAL_GRADE_A);
+   TradePlan chosenPlan=arb.plan; double chosenScore=arb.topScore; bool chosenFromFallback=false;
+   if(scalperMode) g_scalperCandidatesEvaluated++;
+   if(scalperMode && arb.hasWinner && candidateGradeOK && arb.topScore>=activeMinScore) g_scalperCandidatesAccepted++;
+   if((!arb.hasWinner || !candidateGradeOK || chosenScore<activeMinScore) && scalperMode && scalperAllowFallback)
+     {
+      TradePlan fb; double fbScore=0.0; string fbReason="";
+      if(BuildScalperFallbackPlan(ctx, fb, fbScore, fbReason))
+        { chosenPlan=fb; chosenScore=fbScore; chosenFromFallback=true; Print("[SCALPER] accepted sym=",symbol," source=fallback score=",DoubleToString(fbScore,2)); }
+      else { Print("[SCALPER] rejected sym=",symbol," reason=",fbReason); }
+     }
+
+   RiskDecision risk; g_risk.Assess(arb, ctx, risk);
+   TradeState tstate; string vreason=""; bool validPlan=g_order.ValidateTradePlan(chosenPlan, ctx, vreason); if(!validPlan){ g_r_incomplete++; } string guard=""; bool allowed=RuntimeRiskGuard(symbol, activeCooldown, activeMinBars, guard); if(!allowed){ if(guard=="cooldown_active") g_r_cooldown++; if(guard=="too_soon_after_last_entry") g_r_minbars++; } int actTotal=0,grpCount=0,dirCount=0; string pReason=""; bool portfolioOK=PortfolioGuardrail(symbol, chosenPlan.direction, chosenPlan.strategy, pReason, actTotal, grpCount, dirCount); if(portfolioOK) g_diagPortApproved++; else { g_diagPortRejected++; g_r_portfolio++; }
    if(risk.approved){ g_lastRiskOkTime=TimeCurrent(); g_diagRiskApproved++; } else { g_diagRiskRejected++; g_r_risk++; }
    int existingEntries=0; string addOnReason=""; bool addOnOK=CanPersonalAddOn(symbol, arb, risk, addOnReason, existingEntries);
-   if(arb.topScore < minCandidateScore){ if(ShouldLog(isNewBar)) Print("[REJECT][PersonalEA] sym=",symbol," reason=score_below_threshold"); }
-   if(risk.approved && validPlan && allowed && portfolioOK && addOnOK && arb.topScore >= minCandidateScore)
+   if(chosenScore < activeMinScore){ if(ShouldLog(isNewBar)) Print("[REJECT][PersonalEA] sym=",symbol," reason=score_below_threshold"); }
+   if(risk.approved && validPlan && allowed && portfolioOK && addOnOK && chosenScore >= activeMinScore && (!scalperMode || candidateGradeOK || chosenFromFallback))
      {
       string execReason="";
-      bool submitted=false; for(int r=0;r<=maxRetryCount;r++){ submitted=g_order.Submit(arb.plan, risk, ctx, executionMode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, magicNumber, maxSlippagePoints, orderCommentPrefix, tstate, execReason); if(submitted) break; if(r<maxRetryCount){ Print("[RETRY][PersonalEA] sym=",symbol," op=submit attempt=",(r+1)," reason=",execReason); Sleep(retryDelaySeconds*1000); } else Print("[RETRY][PersonalEA] sym=",symbol," op=submit exhausted reason=",execReason); }
+      bool submitted=false; for(int r=0;r<=maxRetryCount;r++){ submitted=g_order.Submit(chosenPlan, risk, ctx, executionMode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, magicNumber, maxSlippagePoints, orderCommentPrefix, tstate, execReason); if(submitted) break; if(r<maxRetryCount){ Print("[RETRY][PersonalEA] sym=",symbol," op=submit attempt=",(r+1)," reason=",execReason); Sleep(retryDelaySeconds*1000); } else Print("[RETRY][PersonalEA] sym=",symbol," op=submit exhausted reason=",execReason); }
       if(submitted && g_tracker.RegisterDryRunTrade(tstate))
         { g_tradesToday++; g_barsSinceEntry=0; g_diagDryRunSubmits++; Print(StringFormat("[LIFECYCLE][PersonalEA] sym=%s submitted ticket=%I64d lots=%.2f", symbol,tstate.ticket,tstate.approvedLots)); }
       else if(!submitted)
-        { g_order.MarkBlocked(arb.plan, risk, symbol, tstate, execReason); g_lastCloseTime=TimeCurrent(); }
+        { g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, execReason); g_lastCloseTime=TimeCurrent(); }
      }
    else
      {
-      g_order.MarkBlocked(arb.plan, risk, symbol, tstate, (!allowed?guard:(risk.reason!=""?risk.reason:vreason))); g_lastCloseTime=TimeCurrent();
+      g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, (!allowed?guard:(risk.reason!=""?risk.reason:vreason))); g_lastCloseTime=TimeCurrent();
      }
    if(ShouldLog(isNewBar))
      {
-      string reason=(risk.approved && validPlan && allowed && portfolioOK && addOnOK)?"none":(!addOnOK?addOnReason:(!portfolioOK?pReason:(!allowed?guard:(risk.reason!=""?risk.reason:vreason))));
+      string reason=(risk.approved && validPlan && allowed && portfolioOK && addOnOK && chosenScore>=activeMinScore)?"none":(!addOnOK?addOnReason:(!portfolioOK?pReason:(!allowed?guard:(risk.reason!=""?risk.reason:vreason))));
       string grp=SymbolGroup(symbol);
       string acctOk=((!allowDemoExecutionOnly || AccountInfoInteger(ACCOUNT_TRADE_MODE)==ACCOUNT_TRADE_MODE_DEMO)?"yes":"no");
-      Print(StringFormat("[SCAN][PersonalEA] sym=%s grp=%s winner=%d score=%.2f grade=%d entries=%d/%d risk=%d life=%d active=%d grpExp=%d dirExp=%d mode=%d acctDemoOk=%s armed=%s addOn=%s reason=%s | %s", symbol,grp,(int)arb.winnerType,arb.topScore,(int)arb.winningGrade,existingEntries,maxPersonalEntriesPerSymbol,(int)risk.decision,(int)tstate.lifecycle,actTotal,grpCount,dirCount,(int)executionMode,acctOk,(manualExecutionArmed?"yes":"no"),addOnReason,reason,RuntimeHealth()));
+      Print(StringFormat("[SCAN][PersonalEA] sym=%s grp=%s winner=%d score=%.2f grade=%d entries=%d/%d risk=%d life=%d active=%d grpExp=%d dirExp=%d mode=%d acctDemoOk=%s armed=%s addOn=%s reason=%s | %s", symbol,grp,(int)arb.winnerType,chosenScore,(int)arb.winningGrade,existingEntries,maxPersonalEntriesPerSymbol,(int)risk.decision,(int)tstate.lifecycle,actTotal,grpCount,dirCount,(int)executionMode,acctOk,(manualExecutionArmed?"yes":"no"),addOnReason,reason,RuntimeHealth()));
      }
   }
 
@@ -294,6 +372,6 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
 void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; datetime bar=iTime(_Symbol, contextTimeframe, 0); bool isNewBar=(bar!=0 && bar!=g_lastBarTime); if(isNewBar) g_lastBarTime=bar; if(!enableMultiSymbolScanner){ ProcessSymbol(_Symbol, isNewBar); return; } for(int i=0;i<g_scanCount;i++){ datetime sb=iTime(g_scan[i], contextTimeframe, 0); bool symNew=(sb!=0 && sb!=g_lastSymBar[i]); if(symNew) g_lastSymBar[i]=sb; if(ShouldLog(symNew)) ProcessSymbol(g_scan[i], symNew); }}
 void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    Print(StringFormat("[CALIB_SUMMARY][PersonalEA] bars=%d candidates=%d regime_ok=%d regime_rej=%d winners=%d dryrun=%d risk_ok=%d risk_rej=%d port_ok=%d port_rej=%d",g_diagBarsProcessed,g_diagCandidates,g_diagRegimeAccepted,g_diagRegimeRejected,g_diagWinners,g_diagDryRunSubmits,g_diagRiskApproved,g_diagRiskRejected,g_diagPortApproved,g_diagPortRejected));
-   Print(StringFormat("[CALIB_REJECTS][PersonalEA] regime_conf=%d market_q=%d score=%d chop=%d atr=%d spread=%d cooldown=%d minbars=%d portfolio=%d risk=%d incomplete=%d no_candidate=%d fallbackEval=%d fallbackOk=%d fallbackRej=%d symbols=%d skipped=%d lastFbRej=%s",g_r_regime_conf,g_r_market_quality,g_r_score,g_r_chop,g_r_atr,g_r_spread,g_r_cooldown,g_r_minbars,g_r_portfolio,g_r_risk,g_r_incomplete,g_r_no_candidate,g_fallbackEval,g_fallbackAccepted,g_fallbackRejected,g_symbolsScanned,g_symbolsSkipped,g_fallbackLastReject));
-   Print(StringFormat("[CALIB_THRESH][PersonalEA] minScore=%.2f minRegime=%.2f minMQ=%.2f maxChop=%.1f minAtrPct=%.5f maxSpread=%.1f cooldown=%d minBars=%d",minCandidateScore,minRegimeConfidence,minMarketQuality,maxChoppiness,minAtrPercent,maxSpreadPoints,cooldownMinutes,minBarsBetweenEntries));
+   Print(StringFormat("[CALIB_REJECTS][PersonalEA] regime_conf=%d market_q=%d score=%d chop=%d atr=%d spread=%d cooldown=%d minbars=%d portfolio=%d risk=%d incomplete=%d no_candidate=%d fallbackEval=%d fallbackOk=%d fallbackRej=%d scalperEval=%d scalperOk=%d scalperFbOk=%d scalperFbRej=%d symbols=%d skipped=%d lastFbRej=%s",g_r_regime_conf,g_r_market_quality,g_r_score,g_r_chop,g_r_atr,g_r_spread,g_r_cooldown,g_r_minbars,g_r_portfolio,g_r_risk,g_r_incomplete,g_r_no_candidate,g_fallbackEval,g_fallbackAccepted,g_fallbackRejected,g_scalperCandidatesEvaluated,g_scalperCandidatesAccepted,g_scalperFallbackAccepted,g_scalperFallbackRejected,g_symbolsScanned,g_symbolsSkipped,g_fallbackLastReject));
+   Print(StringFormat("[CALIB_THRESH][PersonalEA] minScore=%.2f minRegime=%.2f minMQ=%.2f maxChop=%.1f minAtrPct=%.5f maxSpread=%.1f cooldown=%d minBars=%d",(enableAggressiveScalperMode?scalperMinScore:minCandidateScore),(enableAggressiveScalperMode?scalperMinRegimeConfidence:minRegimeConfidence),(enableAggressiveScalperMode?scalperMinMarketQuality:minMarketQuality),(enableAggressiveScalperMode?scalperMaxChoppiness:maxChoppiness),(enableAggressiveScalperMode?scalperMinAtrPercent:minAtrPercent),maxSpreadPoints,(enableAggressiveScalperMode?scalperCooldownMinutes:cooldownMinutes),(enableAggressiveScalperMode?scalperMinBarsBetweenEntries:minBarsBetweenEntries)));
 }
