@@ -69,6 +69,33 @@ namespace Persistence
       return true;
      }
 
+
+   string TrimString(const string value)
+     {
+      int len = StringLen(value);
+      int start = 0;
+      while(start < len)
+        {
+         int c = StringGetCharacter(value, start);
+         if(c != 32 && c != 9 && c != 13 && c != 10)
+            break;
+         start++;
+        }
+
+      int end = len - 1;
+      while(end >= start)
+        {
+         int c = StringGetCharacter(value, end);
+         if(c != 32 && c != 9 && c != 13 && c != 10)
+            break;
+         end--;
+        }
+
+      if(end < start)
+         return "";
+      return StringSubstr(value, start, end - start + 1);
+     }
+
    bool TryGetValue(const string text,const string key,string &out)
      {
       string lines[];
@@ -76,7 +103,7 @@ namespace Persistence
       string prefix = key + "=";
       for(int i = 0; i < n; i++)
         {
-         string line = StringTrimLeft(StringTrimRight(lines[i]));
+         string line = TrimString(lines[i]);
          if(StringFind(line, prefix) == 0)
            {
             out = StringSubstr(line, StringLen(prefix));

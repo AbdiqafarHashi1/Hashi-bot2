@@ -81,7 +81,7 @@ namespace MathHelpers
       for(int i = 0; i < n; i++)
          tmp[i] = arr[i];
 
-      ArraySort(tmp, WHOLE_ARRAY, 0, MODE_ASCEND);
+      ArraySort(tmp);
 
       double pos = p * (n - 1);
       int lo = (int)MathFloor(pos);
