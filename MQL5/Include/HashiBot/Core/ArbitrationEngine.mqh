@@ -197,14 +197,14 @@ public:
          result.suppression = regime.suppression;
         }
       double minRegimeConf = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MIN_REGIME_CONF_PROP : HASHIBOT_MIN_REGIME_CONF_PERSONAL);
-      double minMarketQuality = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MIN_MARKET_QUALITY_PROP : HASHIBOT_MIN_MARKET_QUALITY_PERSONAL);
+      double requiredMarketQuality = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MIN_MARKET_QUALITY_PROP : HASHIBOT_MIN_MARKET_QUALITY_PERSONAL);
       double maxSpread = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MAX_SPREAD_POINTS_PROP : HASHIBOT_MAX_SPREAD_POINTS_PERSONAL);
       SignalGrade minGrade = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MIN_GRADE_PROP : HASHIBOT_MIN_GRADE_PERSONAL);
       double minTopScore = (m_profile == PROFILE_PROP_FIRM ? HASHIBOT_MIN_SCORE_PROP : HASHIBOT_MIN_SCORE_PERSONAL);
 
       if(regime.confidence < minRegimeConf)
         { result.noTrade = true; result.reason = "low_regime_confidence"; }
-      if(ctx.marketQuality < minMarketQuality)
+      if(ctx.marketQuality < requiredMarketQuality)
         { result.noTrade = true; result.reason = "low_market_quality"; }
       if(ctx.spreadPoints <= 0.0 || ctx.spreadPoints > maxSpread)
         { result.noTrade = true; result.reason = "extreme_spread"; }

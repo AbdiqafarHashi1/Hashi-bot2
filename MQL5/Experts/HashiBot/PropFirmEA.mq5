@@ -57,7 +57,7 @@ input int minBarsBetweenEntries = 3;
 input bool enableOpportunityFallback = false;
 input double fallbackMinScore = 0.70;
 input double fallbackMinAtrPercent = 0.05;
-input double fallbackMaxSpreadPoints = maxSpreadPoints;
+input double fallbackMaxSpreadPoints = 55.0;
 
 
 CMarketContextBuilder g_ctxBuilder; CRegimeEngine g_regime; CArbitrationEngine g_arb; CRiskEngine g_risk; COrderManager g_order; CPositionTracker g_tracker; CPropProtections g_prop; CTradeLifecycle g_lifecycle;

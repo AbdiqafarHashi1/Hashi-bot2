@@ -29,15 +29,15 @@ public:
       reason="ok"; return true;
      }
 
-   bool ValidateExecutionAllowed(const ExecutionMode mode,const bool allowLiveExecution,const bool allowDemoExecutionOnly,const bool requireManualExecutionArming,const bool manualExecutionArmed,string &reason)
+   bool ValidateExecutionAllowed(const ExecutionMode execMode,const bool inAllowLiveExecution,const bool inAllowDemoExecutionOnly,const bool inRequireManualExecutionArming,const bool inManualExecutionArmed,string &reason)
      {
-      if(mode == EXEC_MODE_DRYRUN || mode == EXEC_MODE_PAPER || mode == EXEC_MODE_BACKTEST || mode == EXEC_MODE_OPTIMIZATION)
+      if(execMode == EXEC_MODE_DRYRUN || execMode == EXEC_MODE_PAPER || execMode == EXEC_MODE_BACKTEST || execMode == EXEC_MODE_OPTIMIZATION)
         { reason="dryrun_mode"; return true; }
-      if(!allowLiveExecution)
+      if(!inAllowLiveExecution)
         { reason="live_execution_disabled"; return false; }
-      if(allowDemoExecutionOnly && AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO)
+      if(inAllowDemoExecutionOnly && AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO)
         { reason="account_not_demo"; return false; }
-      if(requireManualExecutionArming && !manualExecutionArmed)
+      if(inRequireManualExecutionArming && !inManualExecutionArmed)
         { reason="manual_arming_required"; return false; }
       reason="ok"; return true;
      }
@@ -59,25 +59,25 @@ public:
       if(MathAbs(plan.entryPrice-plan.stopLoss) < minDist) { reason="broker_stop_level_violation"; return false; }
       double reqMargin=0.0;
       if(!OrderCalcMargin((plan.direction==TRADE_DIR_LONG?ORDER_TYPE_BUY:ORDER_TYPE_SELL), ctx.symbol, risk.approvedLots, plan.entryPrice, reqMargin)) { reason="broker_margin_calc_failed"; return false; }
-      if(AccountInfoDouble(ACCOUNT_FREEMARGIN) > 0.0 && reqMargin > AccountInfoDouble(ACCOUNT_FREEMARGIN)) { reason="broker_insufficient_margin"; return false; }
+      if(AccountInfoDouble(ACCOUNT_MARGIN_FREE) > 0.0 && reqMargin > AccountInfoDouble(ACCOUNT_MARGIN_FREE)) { reason="broker_insufficient_margin"; return false; }
       reason="broker_validation_ok"; return true;
      }
 
-   bool SubmitDryRun(const TradePlan &plan,const RiskDecision &risk,const string symbol,TradeState &state)
+   bool SubmitDryRun(const TradePlan &plan,const RiskDecision &risk,const string inSymbol,TradeState &state)
      {
       if(!m_initialized) Init(true);
-      m_lifecycle.CreateSubmittedState(plan, risk, symbol, state);
+      m_lifecycle.CreateSubmittedState(plan, risk, inSymbol, state);
       m_lifecycle.MarkFilledDryRun(state);
       m_lastAction = m_lifecycle.Describe(state);
       return true;
      }
 
-   bool SubmitBrokerOrder(const TradePlan &plan,const RiskDecision &risk,const MarketContext &ctx,TradeState &state,string &reason,const long magicNumber,const int maxSlippagePoints,const string orderCommentPrefix)
+   bool SubmitBrokerOrder(const TradePlan &plan,const RiskDecision &risk,const MarketContext &ctx,TradeState &state,string &reason,const long inMagicNumber,const int inMaxSlippagePoints,const string inOrderCommentPrefix)
      {
       CTrade trade;
-      trade.SetExpertMagicNumber(magicNumber);
-      trade.SetDeviationInPoints(maxSlippagePoints);
-      string comment = orderCommentPrefix + "|HashiBot|" + IntegerToString((int)plan.strategy);
+      trade.SetExpertMagicNumber(inMagicNumber);
+      trade.SetDeviationInPoints(inMaxSlippagePoints);
+      string comment = inOrderCommentPrefix + "|HashiBot|" + IntegerToString((int)plan.strategy);
       bool ok=false;
       if(plan.direction == TRADE_DIR_LONG)
          ok = trade.Buy(risk.approvedLots, ctx.symbol, 0.0, plan.stopLoss, plan.takeProfit1, comment);
@@ -97,20 +97,20 @@ public:
       return true;
      }
 
-   bool Submit(const TradePlan &plan,const RiskDecision &risk,const MarketContext &ctx,const ExecutionMode mode,const bool allowLiveExecution,const bool allowDemoExecutionOnly,const bool requireManualExecutionArming,const bool manualExecutionArmed,const long magicNumber,const int maxSlippagePoints,const string orderCommentPrefix,TradeState &state,string &reason)
+   bool Submit(const TradePlan &plan,const RiskDecision &risk,const MarketContext &ctx,const ExecutionMode execMode,const bool inAllowLiveExecution,const bool inAllowDemoExecutionOnly,const bool inRequireManualExecutionArming,const bool inManualExecutionArmed,const long inMagicNumber,const int inMaxSlippagePoints,const string inOrderCommentPrefix,TradeState &state,string &reason)
      {
       string gate="";
-      if(!ValidateExecutionAllowed(mode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, gate))
+      if(!ValidateExecutionAllowed(execMode, inAllowLiveExecution, inAllowDemoExecutionOnly, inRequireManualExecutionArming, inManualExecutionArmed, gate))
         { reason = gate; m_lastAction = gate; return false; }
-      if(mode == EXEC_MODE_DRYRUN || mode == EXEC_MODE_PAPER || mode == EXEC_MODE_BACKTEST || mode == EXEC_MODE_OPTIMIZATION)
+      if(execMode == EXEC_MODE_DRYRUN || execMode == EXEC_MODE_PAPER || execMode == EXEC_MODE_BACKTEST || execMode == EXEC_MODE_OPTIMIZATION)
         { reason="submitted_dryrun"; return SubmitDryRun(plan, risk, ctx.symbol, state); }
       string brokerReason="";
       if(!ValidateBrokerOrderScaffold(plan, risk, ctx, brokerReason))
         { reason = brokerReason; m_lastAction = brokerReason; return false; }
-      return SubmitBrokerOrder(plan, risk, ctx, state, reason, magicNumber, maxSlippagePoints, orderCommentPrefix);
+      return SubmitBrokerOrder(plan, risk, ctx, state, reason, inMagicNumber, inMaxSlippagePoints, inOrderCommentPrefix);
      }
 
-   void MarkBlocked(const TradePlan &plan,const RiskDecision &risk,const string symbol,TradeState &state,const string reason){ m_lifecycle.MarkBlocked(plan, risk, symbol, state, reason); m_lastAction=m_lifecycle.Describe(state); }
+   void MarkBlocked(const TradePlan &plan,const RiskDecision &risk,const string inSymbol,TradeState &state,const string reason){ m_lifecycle.MarkBlocked(plan, risk, inSymbol, state, reason); m_lastAction=m_lifecycle.Describe(state); }
    string DescribeLastAction(){ return m_lastAction; }
   };
 
