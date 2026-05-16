@@ -181,8 +181,9 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
    if(ctx.spreadPoints > maxSpreadPoints){ reason="scalper_spread_too_high"; g_scalperFallbackRejected++; return false; }
    if(ctx.atr <= scalperMinAtrPercent*ctx.currentClose){ reason="scalper_atr_too_low"; g_scalperFallbackRejected++; return false; }
 
-   double emaGapNorm=MathAbs(ctx.emaFast-ctx.emaSlow)/MathMax(ctx.atr,0.00001);
-   double bodyNorm=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,0.00001);
+   double atrSafe=(ctx.atr>0.00001?(double)ctx.atr:0.00001);
+   double emaGapNorm=(double)MathAbs(ctx.emaFast-ctx.emaSlow)/atrSafe;
+   double bodyNorm=(double)MathAbs(ctx.currentClose-ctx.currentOpen)/atrSafe;
    bool bullishTrend=(ctx.emaFast>ctx.emaSlow && ctx.currentClose>=ctx.emaFast);
    bool bearishTrend=(ctx.emaFast<ctx.emaSlow && ctx.currentClose<=ctx.emaFast);
    bool bullishMomentum=(ctx.currentClose>ctx.currentOpen && ctx.roc>0.0);
@@ -196,9 +197,15 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
    else { reason="scalper_ambiguous_or_no_momentum"; g_scalperFallbackRejected++; return false; }
 
    double e=(d==TRADE_DIR_LONG?(ctx.ask>0?ctx.ask:ctx.currentClose):(ctx.bid>0?ctx.bid:ctx.currentClose));
-   double swingSL=(d==TRADE_DIR_LONG?MathMin(ctx.recentLow,e-0.7*ctx.atr):MathMax(ctx.recentHigh,e+0.7*ctx.atr));
+   double longSwingCandidate=(double)(e-0.7*ctx.atr);
+   double shortSwingCandidate=(double)(e+0.7*ctx.atr);
+   double swingSL=(d==TRADE_DIR_LONG
+                   ?((ctx.recentLow<longSwingCandidate)?(double)ctx.recentLow:longSwingCandidate)
+                   :((ctx.recentHigh>shortSwingCandidate)?(double)ctx.recentHigh:shortSwingCandidate));
    double atrSL=(d==TRADE_DIR_LONG?e-0.9*ctx.atr:e+0.9*ctx.atr);
-   double sl=(d==TRADE_DIR_LONG?MathMin(swingSL,atrSL):MathMax(swingSL,atrSL));
+   double sl=(d==TRADE_DIR_LONG
+              ?((swingSL<atrSL)?swingSL:atrSL)
+              :((swingSL>atrSL)?swingSL:atrSL));
    double risk=MathAbs(e-sl);
    if(risk<=0.0){ reason="scalper_invalid_risk"; g_scalperFallbackRejected++; return false; }
 
@@ -206,8 +213,17 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
    plan.takeProfit1=(d==TRADE_DIR_LONG?e+0.8*risk:e-0.8*risk);
    plan.takeProfit2=(d==TRADE_DIR_LONG?e+1.8*risk:e-1.8*risk);
 
-   double spreadPenalty=MathMin(0.25,ctx.spreadPoints/MathMax(maxSpreadPoints,1.0)*0.25);
-   score=MathMin(0.95,MathMax(0.0,0.30+0.18*MathMin(1.0,emaGapNorm)+0.18*MathMin(1.0,bodyNorm)+0.16*MathMin(1.0,MathAbs(ctx.roc))+0.20*MathMin(1.0,ctx.marketQuality)-spreadPenalty));
+   double spreadDenom=(maxSpreadPoints>1.0?(double)maxSpreadPoints:1.0);
+   double spreadPenaltyRaw=((double)ctx.spreadPoints/spreadDenom)*0.25;
+   double spreadPenalty=(spreadPenaltyRaw<0.25?spreadPenaltyRaw:0.25);
+   double rocNorm=MathAbs(ctx.roc); if(rocNorm>1.0) rocNorm=1.0;
+   double emaNorm=emaGapNorm; if(emaNorm>1.0) emaNorm=1.0;
+   double bodyNormCapped=bodyNorm; if(bodyNormCapped>1.0) bodyNormCapped=1.0;
+   double mqNorm=(double)ctx.marketQuality; if(mqNorm>1.0) mqNorm=1.0;
+   double rawScore=0.30+0.18*emaNorm+0.18*bodyNormCapped+0.16*rocNorm+0.20*mqNorm-spreadPenalty;
+   if(rawScore<0.0) rawScore=0.0;
+   if(rawScore>0.95) rawScore=0.95;
+   score=rawScore;
    plan.confidence=score;
    if(score<scalperMinScore){ reason="scalper_score_too_low"; g_scalperFallbackRejected++; return false; }
 
