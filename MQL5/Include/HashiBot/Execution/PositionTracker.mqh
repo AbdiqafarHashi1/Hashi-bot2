@@ -93,7 +93,7 @@ public:
      }
 
 
-   int SyncFromBroker(const long magicNumber,const string commentPrefix)
+   int SyncFromBroker(const long trackerMagicNumber,const string commentPrefix)
      {
       int recovered = 0;
       for(int i = 0; i < PositionsTotal() && m_count < HASHIBOT_MAX_ACTIVE_TRADES; i++)
@@ -103,7 +103,7 @@ public:
             continue;
          long pmagic = (long)PositionGetInteger(POSITION_MAGIC);
          string pcomment = PositionGetString(POSITION_COMMENT);
-         if(pmagic != magicNumber && (commentPrefix != "" && StringFind(pcomment, commentPrefix) != 0))
+         if(pmagic != trackerMagicNumber && (commentPrefix != "" && StringFind(pcomment, commentPrefix) != 0))
             continue;
 
          string sym = PositionGetString(POSITION_SYMBOL);
