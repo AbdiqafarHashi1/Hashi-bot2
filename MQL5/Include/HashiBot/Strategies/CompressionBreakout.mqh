@@ -135,6 +135,7 @@ public:
      {
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_COMPRESSION_BREAKOUT);
 
+      int gateBox=0,gateDuration=0,gateAtrContraction=0,gateBreakoutClose=0,gateVolExpansion=0,gateSwingWall=0,gatePlan=0;
       bool regimeOK = (regime.regime == REGIME_COMPRESSION || regime.regime == REGIME_EXPANSION);
       if(!regimeOK)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
@@ -153,15 +154,15 @@ public:
       double boxHigh=0.0, boxLow=0.0, boxWidth=0.0, insideRatio=0.0, touchScore=0.0;
       int boxAge=0;
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
-        { Reject(candidate, SUPPRESS_OTHER); return false; }
+        { gateBox=1; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:6);
       if(boxAge < minBoxAge)
-        { Reject(candidate, SUPPRESS_OTHER); return false; }
+        { gateDuration=1; Reject(candidate, SUPPRESS_OTHER); return false; }
       double minInside=(m_profile==PROFILE_PROP_FIRM?0.60:0.46);
       double minTouch=(m_profile==PROFILE_PROP_FIRM?0.28:0.14);
       if(insideRatio < minInside || touchScore < minTouch)
-        { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+        { gateAtrContraction=1; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 
       if(boxWidth < MathMax(ctx.atr * 0.35, ctx.spreadPoints * ctx.point * 3.0))
         { Reject(candidate, SUPPRESS_SPREAD); return false; } // too narrow
@@ -171,7 +172,7 @@ public:
       TradeDirection dir = TRADE_DIR_NONE;
       double breakoutQ = 0.0, entryQ = 0.0;
       if(!BreakoutSignal(ctx, boxHigh, boxLow, boxWidth, dir, breakoutQ, entryQ))
-        { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+        { gateBreakoutClose=1; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 
       candidate.direction = dir;
 
@@ -195,7 +196,7 @@ public:
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + entryQ) / 4.0, 0.0, 1.0);
 
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, 1.2, candidate.plan))
-        { Reject(candidate, SUPPRESS_OTHER); return false; }
+        { gatePlan=1; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       // SL around opposite/inside box edge with ATR/spread buffer
       double buffer = MathMax(0.20 * ctx.atr, ctx.spreadPoints * ctx.point * 1.5);
