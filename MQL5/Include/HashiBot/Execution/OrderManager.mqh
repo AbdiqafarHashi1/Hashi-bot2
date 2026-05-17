@@ -68,6 +68,8 @@ public:
       if(!m_initialized) Init(true);
       m_lifecycle.CreateSubmittedState(plan, risk, inSymbol, state);
       m_lifecycle.MarkFilledDryRun(state);
+      m_lastAction = "dryrun_lifecycle_created";
+      Print(StringFormat("[DRYRUN_CREATE] ok=true reason=created symbol=%s strategy=%d dir=%d lots=%.2f", inSymbol, (int)plan.strategy, (int)plan.direction, risk.approvedLots));
       m_lastAction = m_lifecycle.Describe(state);
       return true;
      }
@@ -99,11 +101,19 @@ public:
 
    bool Submit(const TradePlan &plan,const RiskDecision &risk,const MarketContext &ctx,const ExecutionMode execMode,const bool inAllowLiveExecution,const bool inAllowDemoExecutionOnly,const bool inRequireManualExecutionArming,const bool inManualExecutionArmed,const long inMagicNumber,const int inMaxSlippagePoints,const string inOrderCommentPrefix,TradeState &state,string &reason)
      {
-      string gate="";
-      if(!ValidateExecutionAllowed(execMode, inAllowLiveExecution, inAllowDemoExecutionOnly, inRequireManualExecutionArming, inManualExecutionArmed, gate))
+      const bool dryrunMode=(execMode == EXEC_MODE_DRYRUN || execMode == EXEC_MODE_PAPER || execMode == EXEC_MODE_BACKTEST || execMode == EXEC_MODE_OPTIMIZATION);
+      string gate=(dryrunMode?"dryrun_mode":"broker_mode");
+      bool brokerAllowed=true;
+      if(!dryrunMode)
+         brokerAllowed=ValidateExecutionAllowed(execMode, inAllowLiveExecution, inAllowDemoExecutionOnly, inRequireManualExecutionArming, inManualExecutionArmed, gate);
+      Print(StringFormat("[SUBMIT_GATE] mode=%d dryrunAllowed=%s brokerAllowed=%s reason=%s", (int)execMode, (dryrunMode?"true":"false"), (brokerAllowed?"true":"false"), gate));
+      if(dryrunMode)
+        {
+         reason="submitted_dryrun";
+         return SubmitDryRun(plan, risk, ctx.symbol, state);
+        }
+      if(!brokerAllowed)
         { reason = gate; m_lastAction = gate; return false; }
-      if(execMode == EXEC_MODE_DRYRUN || execMode == EXEC_MODE_PAPER || execMode == EXEC_MODE_BACKTEST || execMode == EXEC_MODE_OPTIMIZATION)
-        { reason="submitted_dryrun"; return SubmitDryRun(plan, risk, ctx.symbol, state); }
       string brokerReason="";
       if(!ValidateBrokerOrderScaffold(plan, risk, ctx, brokerReason))
         { reason = brokerReason; m_lastAction = brokerReason; return false; }
