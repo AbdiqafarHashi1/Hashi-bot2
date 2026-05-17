@@ -77,6 +77,8 @@ public:
       ctx.roc = 0.0;
       ctx.choppiness = 0.0;
       ctx.marketQuality = 0.0;
+      ctx.trendStrength = 0.0;
+      ctx.regimeScore = 0.0;
       ctx.htfAligned = false;
       ctx.ltfAligned = false;
       ctx.newsBlocked = false;
@@ -119,6 +121,9 @@ public:
          ctx.roc = MathHelpers::CalculateROC(ctx.recentClose, copied, 5);
          ctx.choppiness = MathHelpers::CalculateChoppinessIndex(ctx.recentHigh, ctx.recentLow, ctx.recentClose, copied, 14);
          ctx.marketQuality = MathHelpers::CalculateMarketQuality(ctx.emaFast, ctx.emaSlow, ctx.atr, ctx.roc, ctx.choppiness);
+         double atrBase=(ctx.atr>0.0?ctx.atr:MathMax(1e-6,ctx.currentClose*0.0001));
+         ctx.trendStrength = MathHelpers::Clamp(MathAbs(ctx.emaFast-ctx.emaSlow)/atrBase,0.0,1.0);
+         ctx.regimeScore = MathHelpers::Clamp(0.50*ctx.marketQuality + 0.50*ctx.trendStrength,0.0,1.0);
         }
 
       return true;
