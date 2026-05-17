@@ -83,7 +83,10 @@ public:
         { m_lastAction="invalid_direction"; return false; }
       m_lifecycle.MarkFilledDryRun(state);
       if(state.lifecycle!=TRADE_STATE_FILLED)
-        { m_lastAction="invalid_trade_state"; return false; }
+        {
+         m_lastAction=StringFormat("invalid_trade_state source=OrderManager::SubmitDryRun actual=%d expected=[%d]",(int)state.lifecycle,(int)TRADE_STATE_FILLED);
+         return false;
+        }
       m_lastAction = "dryrun_lifecycle_created";
       Print(StringFormat("[DRYRUN_CREATE] ok=true reason=created symbol=%s strategy=%d dir=%d lots=%.2f", inSymbol, (int)plan.strategy, (int)plan.direction, risk.approvedLots));
       m_lastAction = m_lifecycle.Describe(state);
