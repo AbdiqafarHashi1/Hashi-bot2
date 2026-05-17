@@ -107,13 +107,13 @@ private:
       else
          depthRatio = (pullbackExtreme - impulseLow) / impulseRange;
 
-      if(depthRatio < 0.24 || depthRatio > 0.74)
+      if(depthRatio < 0.30 || depthRatio > 0.68)
          return false;
 
       // ATR-normalized pullback band (roughly 0.8 - 2.2 ATR)
       double pullbackAbs = MathAbs((dir == TRADE_DIR_LONG ? impulseHigh - pullbackExtreme : pullbackExtreme - impulseLow));
       double atrN = MathHelpers::SafeDivide(pullbackAbs, ctx.atr, 0.0);
-      if(atrN < 0.7 || atrN > 1.9)
+      if(atrN < 0.8 || atrN > 1.7)
          return false;
 
       // EMA zone proximity
@@ -138,7 +138,7 @@ private:
 
       double body = MathAbs(ctx.currentClose - ctx.currentOpen);
       double bodyQ = MathHelpers::Clamp(body / range, 0.0, 1.0);
-      if(bodyQ < 0.30)
+      if(bodyQ < 0.38)
          return false; // doji/weak
 
       double upperWick = ctx.currentHigh - MathMax(ctx.currentOpen, ctx.currentClose);
@@ -180,7 +180,7 @@ public:
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
       double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MIN_REGIME_CONF:0.32);
       double minMq=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MIN_MARKET_QUALITY:0.28);
-      double maxChop=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MAX_CHOPPINESS:78.0);
+      double maxChop=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MAX_CHOPPINESS:64.0);
       if(regime.confidence < minRegimeConf)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
       if(ctx.marketQuality < minMq)
@@ -201,7 +201,7 @@ public:
 
       // EMA + momentum alignment
       bool emaTrend = (dir == TRADE_DIR_LONG ? (ctx.emaFast > ctx.emaSlow) : (ctx.emaFast < ctx.emaSlow));
-      bool rocTrend = (dir == TRADE_DIR_LONG ? (ctx.roc > -0.05) : (ctx.roc < 0.05));
+      bool rocTrend = (dir == TRADE_DIR_LONG ? (ctx.roc > 0.02) : (ctx.roc < -0.02));
       if(!(emaTrend && rocTrend))
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
 
@@ -217,6 +217,8 @@ public:
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
 
       double entryQuality = 0.0;
+      double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
+      if(bodyAtr>1.75){ Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
       if(!ReclaimAndMomentum(ctx, dir, entryQuality))
         { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 

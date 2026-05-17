@@ -136,7 +136,7 @@ public:
         }
       double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:0.26);
       double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:0.24);
-      double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:76.0);
+      double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:62.0);
       if(regime.confidence < minRegimeConf)
         {
          Reject(candidate, SUPPRESS_MARKET_QUALITY); // low confidence
@@ -170,7 +170,7 @@ public:
         }
 
       bool emaOk = (dir == TRADE_DIR_LONG ? (ctx.emaFast > ctx.emaSlow) : (ctx.emaFast < ctx.emaSlow));
-      bool rocOk = (dir == TRADE_DIR_LONG ? (ctx.roc > -0.03) : (ctx.roc < 0.03));
+      bool rocOk = (dir == TRADE_DIR_LONG ? (ctx.roc > 0.03) : (ctx.roc < -0.03));
       bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast) : (ctx.currentClose <= ctx.emaFast));
       if(!(emaOk && rocOk && priceVsEma))
         {
@@ -179,6 +179,8 @@ public:
         }
 
       double entryQuality = 0.0;
+      double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
+      if(bodyAtr>1.9){ Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
       if(!HasReclaimTrigger(ctx, dir, entryQuality))
         {
          Reject(candidate, SUPPRESS_AMBIGUOUS); // no reclaim trigger
@@ -186,7 +188,7 @@ public:
         }
 
       double emaSlopeAtr = MathHelpers::SafeDivide(MathAbs(ctx.emaFast - ctx.emaSlow), MathMax(ctx.atr, 1e-6), 0.0);
-      double minSlope=(m_profile==PROFILE_PROP_FIRM?0.12:0.07);
+      double minSlope=(m_profile==PROFILE_PROP_FIRM?0.14:0.11);
       if(emaSlopeAtr < minSlope)
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
 
