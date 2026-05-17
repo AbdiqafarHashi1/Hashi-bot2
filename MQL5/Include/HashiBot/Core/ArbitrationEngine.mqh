@@ -19,7 +19,7 @@
 #define HASHIBOT_MIN_MARKET_QUALITY_PROP       0.42
 #define HASHIBOT_MAX_SPREAD_POINTS_PERSONAL    85.0
 #define HASHIBOT_MAX_SPREAD_POINTS_PROP        60.0
-#define HASHIBOT_MIN_SCORE_PERSONAL            0.55
+#define HASHIBOT_MIN_SCORE_PERSONAL            0.48
 #define HASHIBOT_MIN_SCORE_PROP                0.70
 #define HASHIBOT_MIN_GRADE_PERSONAL            SIGNAL_GRADE_B
 #define HASHIBOT_MIN_GRADE_PROP                SIGNAL_GRADE_A
@@ -242,8 +242,10 @@ public:
 
       if(result.topScore < minTopScore)
         { result.noTrade = true; result.reason = "top_score_below_profile_min"; return result; }
+      if(result.scoreMargin < 0.01 && result.topScore < (minTopScore + 0.05))
+        { result.noTrade = true; result.reason = "weak_top_and_low_margin"; return result; }
       if(HasAmbiguity())
-        { result.noTrade = true; result.reason = "ambiguous_top_scores"; return result; }
+        { result.scoreMargin = MathMax(0.0, result.scoreMargin - 0.02); result.reason = "ambiguous_top_scores_soft"; }
 
       int winner = SelectWinner();
       if(winner < 0)
