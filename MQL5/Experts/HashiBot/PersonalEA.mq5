@@ -132,6 +132,11 @@ long g_fallbackEval=0,g_fallbackAccepted=0,g_fallbackRejected=0,g_symbolsScanned
 long g_scalperCandidatesEvaluated=0,g_scalperCandidatesAccepted=0,g_scalperFallbackAccepted=0,g_scalperFallbackRejected=0;
 long g_trendAccepted=0,g_trendRejected=0,g_pullbackAccepted=0,g_pullbackRejected=0,g_compressionAccepted=0,g_compressionRejected=0,g_expansionAccepted=0,g_expansionRejected=0;
 long g_microEvaluated=0,g_microAccepted=0,g_microRejected=0,g_microSubmitted=0;
+long g_microModuleCalled=0,g_microGateSpread=0,g_microGateAtr=0,g_microGateMomentum=0,g_microGateProfile=0,g_microCandCreated=0,g_microValidPlans=0,g_microWinners=0;
+long g_exitTp1=0,g_exitTp2=0,g_exitBE=0,g_exitTime=0,g_exitInvalidation=0,g_exitTrailing=0,g_exitTotal=0;
+double g_exitHoldBarsSum=0.0,g_exitMaeSum=0.0,g_exitMfeSum=0.0;
+double g_arbWinnerScoreSum[5],g_arbWinnerScoreCount[5],g_arbRejectScoreSum[5],g_arbRejectScoreCount[5];
+long g_arbRejectStale=0,g_arbRejectExhaustion=0;
 long g_winTrend=0,g_winPullback=0,g_winCompression=0,g_winExpansion=0,g_winMicro=0;
 long g_lossTrend=0,g_lossPullback=0,g_lossCompression=0,g_lossExpansion=0,g_lossMicro=0;
 double g_netPnl[5],g_sumR[5]; long g_closedCount[5],g_rejectTopReason[5][8];
@@ -381,11 +386,13 @@ bool ResolveSelectedPlan(const MarketContext &ctx,const ArbitrationResult &arb,T
   }
 bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &score,string &reason)
   {
+   g_microModuleCalled++;
    score = 0.0; reason="";
-   if(!scalperAllowFallback){ reason="scalper_fallback_disabled"; g_scalperFallbackRejected++; return false; }
+   if(!enableMicroScalperMode){ reason="micro_disabled"; g_microGateProfile++; g_scalperFallbackRejected++; return false; }
+   if(!scalperAllowFallback){ reason="scalper_fallback_disabled"; g_microGateProfile++; g_scalperFallbackRejected++; return false; }
    if(ctx.currentClose<=0.0 || ctx.atr<=0.0){ reason="scalper_invalid_prices"; g_scalperFallbackRejected++; return false; }
-   if(ctx.spreadPoints > microMaxSpreadPoints){ reason="scalper_spread_too_high"; g_scalperFallbackRejected++; return false; }
-   if(ctx.atr <= scalperMinAtrPercent*ctx.currentClose){ reason="scalper_atr_too_low"; g_scalperFallbackRejected++; return false; }
+   if(ctx.spreadPoints > microMaxSpreadPoints){ reason="scalper_spread_too_high"; g_microGateSpread++; g_scalperFallbackRejected++; return false; }
+   if(ctx.atr <= scalperMinAtrPercent*ctx.currentClose){ reason="scalper_atr_too_low"; g_microGateAtr++; g_scalperFallbackRejected++; return false; }
 
    double atrSafe=(ctx.atr>0.00001?(double)ctx.atr:0.00001);
    double emaGapNorm=(double)MathAbs(ctx.emaFast-ctx.emaSlow)/atrSafe;
@@ -407,13 +414,13 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
       if(low < recentLow) recentLow = low;
      }
 
-   bool bullishBreakOrPullback=(ctx.currentClose>=recentHigh || (ctx.currentLow<=ctx.emaFast && ctx.currentClose>ctx.emaFast));
-   bool bearishBreakOrPullback=(ctx.currentClose<=recentLow || (ctx.currentHigh>=ctx.emaFast && ctx.currentClose<ctx.emaFast));
+   bool bullishBreakOrPullback=(ctx.currentClose>=recentHigh-microBreakoutBufferAtr*ctx.atr || (ctx.currentLow<=ctx.emaFast && ctx.currentClose>ctx.emaFast));
+   bool bearishBreakOrPullback=(ctx.currentClose<=recentLow+microBreakoutBufferAtr*ctx.atr || (ctx.currentHigh>=ctx.emaFast && ctx.currentClose<ctx.emaFast));
 
    TradeDirection d=TRADE_DIR_NONE;
    if(bullishTrend && bullishMomentum && bullishBreakOrPullback) d=TRADE_DIR_LONG;
    else if(bearishTrend && bearishMomentum && bearishBreakOrPullback) d=TRADE_DIR_SHORT;
-   else { reason="scalper_ambiguous_or_no_momentum"; g_scalperFallbackRejected++; return false; }
+   else { reason="scalper_ambiguous_or_no_momentum"; g_microGateMomentum++; g_scalperFallbackRejected++; return false; }
 
    double e=(d==TRADE_DIR_LONG?(ctx.ask>0?ctx.ask:ctx.currentClose):(ctx.bid>0?ctx.bid:ctx.currentClose));
    double longSwingCandidate=(double)(e-microStopAtr*ctx.atr);
@@ -431,6 +438,7 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
    plan.Reset(); plan.strategy=STRATEGY_EXPANSION_MOMENTUM; plan.direction=d; plan.entryPrice=e; plan.stopLoss=sl;
    plan.takeProfit1=(d==TRADE_DIR_LONG?e+microTp1R*risk:e-microTp1R*risk);
    plan.takeProfit2=(d==TRADE_DIR_LONG?e+microTp2R*risk:e-microTp2R*risk);
+   g_microCandCreated++;
 
    double spreadDenom=(maxSpreadPoints>1.0?(double)maxSpreadPoints:1.0);
    double spreadPenaltyRaw=((double)ctx.spreadPoints/spreadDenom)*0.25;
@@ -445,6 +453,7 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
    score=rawScore;
    plan.confidence=score;
    if(score<scalperMinScore){ reason="scalper_score_too_low"; g_scalperFallbackRejected++; return false; }
+   g_microValidPlans++;
 
    g_scalperFallbackAccepted++; g_scalperCandidatesAccepted++; reason="scalper_fallback_ok";
    return true;
@@ -567,6 +576,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       TradeState active; if(!g_tracker.GetActiveTradeAt(i, active)) continue;
       if(active.symbol!=symbol || active.closed) continue;
       TradeLifecycleState prev=active.lifecycle; bool wasClosed=active.closed; g_lifecycle.UpdateDryRunTrade(active, ctx); g_tracker.UpdateTradeByTicket(active.ticket, active); if(active.closed) g_lastCloseTime=TimeCurrent(); if(!wasClosed && active.closed){ int b=StrategyBucket(active.strategy); double pnl=active.realizedR*active.riskAmount; g_netPnl[b]+=pnl; g_sumR[b]+=active.realizedR; g_closedCount[b]++; if(active.realizedR>0){ if(b==0) g_winTrend++; else if(b==1) g_winPullback++; else if(b==2) g_winCompression++; else if(b==3) g_winExpansion++; else g_winMicro++; g_consecutiveLosses=0; } else { if(b==0) g_lossTrend++; else if(b==1) g_lossPullback++; else if(b==2) g_lossCompression++; else if(b==3) g_lossExpansion++; else g_lossMicro++; g_consecutiveLosses++; } }
+      if(!wasClosed && active.closed){ g_exitTotal++; g_exitHoldBarsSum+=active.barsInTrade; if(active.closeReason=="tp_hit") g_exitTp2++; else if(active.closeReason=="breakeven_exit") g_exitBE++; else if(active.closeReason=="timeout") g_exitTime++; else if(active.closeReason=="early_invalidation") g_exitInvalidation++; else if(active.closeReason=="sl_hit" && active.trailingActive) g_exitTrailing++; }
       if(prev!=active.lifecycle) Print(StringFormat("[LIFECYCLE][PersonalEA] sym=%s ticket=%I64d %d->%d", symbol, active.ticket,(int)prev,(int)active.lifecycle));
       ManageActiveBrokerTrade(symbol, active, ctx);
      }
@@ -594,6 +604,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    if(ctx.spreadPoints > maxSpreadPoints){ if(ShouldLog(isNewBar)) g_r_spread++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=spread_too_high"); return; }
 
    ArbitrationResult arb=g_arb.Evaluate(ctx, regime); g_diagCandidates++; if(arb.hasWinner) g_diagWinners++; else g_r_no_candidate++; g_lastArbTime=TimeCurrent();
+   for(int ai=0; ai<arb.candidateCount; ai++){ int ab=StrategyBucket(arb.candidates[ai].strategy); if(arb.candidates[ai].isValid){ g_arbRejectScoreSum[ab]+=arb.candidates[ai].score.totalScore; g_arbRejectScoreCount[ab]++; } }
    if(ShouldLog(isNewBar))
      {
       string scoreBoard="";
@@ -693,7 +704,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      {
       string breason=(!validPlan?"invalid_plan":(!risk.approved?"risk_not_approved":(!portfolioOK?"portfolio_not_approved":(!allowed?guard:(!scaleOK?scaleReason:(chosenScore < activeMinScore?"score_below_threshold":((scalperMode && !candidateGradeOK && !chosenFromFallback)?"scalper_grade_not_approved":"pre_submit_gate_rejected"))))))); g_pipeSubmitRej[sb]++; g_rejectTopReason[sb][RejectionReasonBucket(breason)]++; if(validPlan && risk.approved && portfolioOK && allowed && !scaleOK){} else g_pipeLifecycleRej[sb]++; Print("[ORDER_RESULT] ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=pre_submit line=620",breason)); Print("[LIFECYCLE_CREATE] ok=false reason=",breason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, breason); Print("[SCALE] rejected reason=",breason," sym=",symbol); g_lastCloseTime=TimeCurrent();
      }
-   if(arb.hasWinner){ if(chosenFromFallback) g_winMicro++; else if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_winTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_winPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_winCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_winExpansion++; }
+   if(arb.hasWinner){ int wb=StrategyBucket(arb.winningStrategy); g_arbWinnerScoreSum[wb]+=arb.winningScore; g_arbWinnerScoreCount[wb]++; if(chosenFromFallback) { g_winMicro++; g_microWinners++; } else if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_winTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_winPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_winCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_winExpansion++; }
    if(ShouldLog(isNewBar))
      {
       string reason=(risk.approved && validPlan && allowed && portfolioOK && scaleOK && chosenScore>=activeMinScore)?"none":(!scaleOK?scaleReason:(!portfolioOK?pReason:(!allowed?guard:(risk.reason!=""?risk.reason:vreason))));
@@ -799,6 +810,13 @@ void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    Print(StringFormat("[CALIB_THRESH][PersonalEA] minScore=%.2f minRegime=%.2f minMQ=%.2f maxChop=%.1f minAtrPct=%.5f maxSpread=%.1f cooldown=%d minBars=%d",(enableMicroScalperMode?scalperMinScore:minCandidateScore),(enableMicroScalperMode?scalperMinRegimeConfidence:minRegimeConfidence),(enableMicroScalperMode?scalperMinMarketQuality:minMarketQuality),(enableMicroScalperMode?scalperMaxChoppiness:maxChoppiness),(enableMicroScalperMode?scalperMinAtrPercent:minAtrPercent),maxSpreadPoints,(enableMicroScalperMode?scalperCooldownMinutes:cooldownMinutes),(enableMicroScalperMode?scalperMinBarsBetweenEntries:minBarsBetweenEntries)));
    string sn[5]={"TrendContinuation","PullbackContinuation","CompressionBreakout","ExpansionMomentum","MicroScalper"};
    for(int i=0;i<5;i++){ double avgR=(g_closedCount[i]>0?g_sumR[i]/(double)g_closedCount[i]:0.0); int top=0; long best=0; for(int r=0;r<8;r++){ if(g_rejectTopReason[i][r]>best){ best=g_rejectTopReason[i][r]; top=r; } } Print(StringFormat("[STRATEGY_SUMMARY] strategy=%s candidates=%d validPlans=%d winners=%d riskApproved=%d portfolioApproved=%d ordersSubmitted=%d wins=%d losses=%d netPnL=%.2f avgR=%.2f rejectTopReason=%d",sn[i],g_diagValidDirCandidates[i],g_pipePlanOk[i],g_pipeWinnerSel[i],g_pipeRiskOk[i],g_pipePortOk[i],g_pipeSubmitOk[i],(i==0?g_winTrend:(i==1?g_winPullback:(i==2?g_winCompression:(i==3?g_winExpansion:g_winMicro)))),(i==0?g_lossTrend:(i==1?g_lossPullback:(i==2?g_lossCompression:(i==3?g_lossExpansion:g_lossMicro)))),g_netPnl[i],avgR,top)); }
+   Print(StringFormat("[TRADE_EXIT_SUMMARY] tp1=%d tp2=%d be=%d time=%d earlyInvalidation=%d trailing=%d avgHoldBars=%.2f avgMAE=%.2f avgMFE=%.2f",g_exitTp1,g_exitTp2,g_exitBE,g_exitTime,g_exitInvalidation,g_exitTrailing,(g_exitTotal>0?g_exitHoldBarsSum/g_exitTotal:0.0),(g_exitTotal>0?g_exitMaeSum/g_exitTotal:0.0),(g_exitTotal>0?g_exitMfeSum/g_exitTotal:0.0)));
+   Print(StringFormat("[ARBITRATION_SUMMARY] winnerAvg trend=%.2f pullback=%.2f compression=%.2f expansion=%.2f micro=%.2f rejectedAvg trend=%.2f pullback=%.2f compression=%.2f expansion=%.2f micro=%.2f staleRejects=%d exhaustionRejects=%d",
+      (g_arbWinnerScoreCount[0]>0?g_arbWinnerScoreSum[0]/g_arbWinnerScoreCount[0]:0.0),(g_arbWinnerScoreCount[1]>0?g_arbWinnerScoreSum[1]/g_arbWinnerScoreCount[1]:0.0),(g_arbWinnerScoreCount[2]>0?g_arbWinnerScoreSum[2]/g_arbWinnerScoreCount[2]:0.0),(g_arbWinnerScoreCount[3]>0?g_arbWinnerScoreSum[3]/g_arbWinnerScoreCount[3]:0.0),(g_arbWinnerScoreCount[4]>0?g_arbWinnerScoreSum[4]/g_arbWinnerScoreCount[4]:0.0),
+      (g_arbRejectScoreCount[0]>0?g_arbRejectScoreSum[0]/g_arbRejectScoreCount[0]:0.0),(g_arbRejectScoreCount[1]>0?g_arbRejectScoreSum[1]/g_arbRejectScoreCount[1]:0.0),(g_arbRejectScoreCount[2]>0?g_arbRejectScoreSum[2]/g_arbRejectScoreCount[2]:0.0),(g_arbRejectScoreCount[3]>0?g_arbRejectScoreSum[3]/g_arbRejectScoreCount[3]:0.0),(g_arbRejectScoreCount[4]>0?g_arbRejectScoreSum[4]/g_arbRejectScoreCount[4]:0.0),
+      g_arbRejectStale,g_arbRejectExhaustion));
+   Print(StringFormat("[MICRO_DEBUG_SUMMARY] enabled=%s profileAllows=%s moduleCalled=%d gateSpread=%d gateAtr=%d gateMomentum=%d gateProfile=%d candidates=%d validPlans=%d winners=%d submitted=%d",
+      (enableMicroScalperMode?"true":"false"),(personalProfile==PERSONAL_AGGRESSIVE_COMPOUND?"true":"false"),g_microModuleCalled,g_microGateSpread,g_microGateAtr,g_microGateMomentum,g_microGateProfile,g_microCandCreated,g_microValidPlans,g_microWinners,g_microSubmitted));
    Print(StringFormat("[GOV_SUMMARY] profile=%d dayStartEq=%.2f eq=%.2f riskPct=%.2f maxOpenRiskPct=%.2f maxDailyLossPct=%.2f consecLosses=%d maxConsecLosses=%d maxTradesDay=%d maxActive=%d compounding=%s levCap=%.1f testerLotCap=%.2f",
                       (int)personalProfile,g_dayStartEquity,AccountInfoDouble(ACCOUNT_EQUITY),g_effectiveRiskPerTradePct,g_effectiveMaxOpenRiskPct,g_effectiveMaxDailyLossPct,g_consecutiveLosses,personalMaxConsecutiveLosses,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,(g_effectiveCompounding?"on":"off"),personalEffectiveLeverageCap,g_effectiveLotCap));
 }

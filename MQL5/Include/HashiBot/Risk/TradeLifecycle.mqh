@@ -5,18 +5,25 @@
 #include <HashiBot/Execution/TrailingManager.mqh>
 
 #define HASHIBOT_MAX_BARS_IN_TRADE  48
+#define HASHIBOT_TP1_BE_BUFFER_R    0.06
 
 class CTradeLifecycle
   {
 private:
    long             m_nextTicket;
    CTrailingManager m_trailing;
+   double           m_tp1MoveFrac;
+   double           m_minTrailRR;
+   double           m_momentumCollapseFrac;
 
 public:
    bool Init()
      {
       m_nextTicket = 1000001;
       m_trailing.Init();
+      m_tp1MoveFrac = 0.55;
+      m_minTrailRR = 1.15;
+      m_momentumCollapseFrac = 0.25;
       return true;
      }
 
@@ -24,7 +31,7 @@ public:
      {
       m_nextTicket = 1000001;
       m_trailing.Reset();
-     }
+    }
 
    void CreateSubmittedState(const TradePlan &plan,const RiskDecision &risk,const string symbol,TradeState &state)
      {
@@ -93,6 +100,34 @@ public:
       m_trailing.MaybeMoveToBreakeven(state);
      }
 
+   double CurrentPriceForDirection(const TradeState &state,const MarketContext &ctx)
+     {
+      if(state.direction==TRADE_DIR_LONG) return (ctx.bid>0.0?ctx.bid:ctx.currentClose);
+      if(state.direction==TRADE_DIR_SHORT) return (ctx.ask>0.0?ctx.ask:ctx.currentClose);
+      return ctx.currentClose;
+     }
+
+   double CurrentRR(const TradeState &state,const MarketContext &ctx)
+     {
+      double risk=MathAbs(state.entryPrice-state.stopLoss);
+      if(risk<=0.0) return 0.0;
+      double px=CurrentPriceForDirection(state,ctx);
+      if(state.direction==TRADE_DIR_LONG) return (px-state.entryPrice)/risk;
+      if(state.direction==TRADE_DIR_SHORT) return (state.entryPrice-px)/risk;
+      return 0.0;
+     }
+
+   bool IsMomentumCollapsed(const TradeState &state,const MarketContext &ctx)
+     {
+      double curBody=MathAbs(ctx.currentClose-ctx.currentOpen);
+      double curRange=MathAbs(ctx.currentHigh-ctx.currentLow);
+      if(ctx.atr<=0.0 || curRange<=0.0) return false;
+      double bodyAtr=curBody/ctx.atr;
+      double bodyRange=curBody/curRange;
+      bool against=(state.direction==TRADE_DIR_LONG?ctx.currentClose<ctx.currentOpen:ctx.currentClose>ctx.currentOpen);
+      return (bodyAtr<m_momentumCollapseFrac && bodyRange<0.25 && against);
+     }
+
    void MarkTrailing(TradeState &state)
      {
       state.trailingActive = true;
@@ -128,6 +163,25 @@ public:
       state.closeReason = "timeout";
       state.reason = "closed_timeout";
       state.updateTime = TimeCurrent();
+     state.lastUpdateTime = TimeCurrent();
+    }
+   void MarkClosedBE(TradeState &state)
+     {
+      state.lifecycle = TRADE_STATE_CLOSED_TIMEOUT;
+      state.closed = true;
+      state.closeReason = "breakeven_exit";
+      state.reason = "closed_be";
+      state.updateTime = TimeCurrent();
+      state.lastUpdateTime = TimeCurrent();
+     }
+
+   void MarkClosedInvalidation(TradeState &state)
+     {
+      state.lifecycle = TRADE_STATE_CLOSED_TIMEOUT;
+      state.closed = true;
+      state.closeReason = "early_invalidation";
+      state.reason = "closed_early_invalidation";
+      state.updateTime = TimeCurrent();
       state.lastUpdateTime = TimeCurrent();
      }
 
@@ -147,16 +201,34 @@ public:
       if(CheckTP1(state, ctx))
         {
          state.tp1Hit = true;
-         MoveToBreakeven(state);
-         MarkTrailing(state);
+         double lockRisk=MathAbs(state.entryPrice-state.stopLoss)*HASHIBOT_TP1_BE_BUFFER_R;
+         if(state.direction==TRADE_DIR_LONG)
+            state.stopLoss=MathMax(state.stopLoss,state.entryPrice+lockRisk);
+         else
+            state.stopLoss=MathMin(state.stopLoss,state.entryPrice-lockRisk);
+         state.breakevenMoved=true;
+         if(CurrentRR(state,ctx)>=m_minTrailRR)
+            MarkTrailing(state);
         }
 
       if(state.trailingActive)
          m_trailing.MaybeTrail(state, ctx);
 
+      if(state.tp1Hit && CheckSL(state,ctx))
+        {
+         MarkClosedBE(state);
+         return;
+        }
+
       if(CheckTP2(state, ctx))
         {
          MarkClosedTP(state);
+         return;
+        }
+
+      if(state.barsInTrade > (HASHIBOT_MAX_BARS_IN_TRADE/2) && !state.tp1Hit && IsMomentumCollapsed(state,ctx))
+        {
+         MarkClosedInvalidation(state);
          return;
         }
 
