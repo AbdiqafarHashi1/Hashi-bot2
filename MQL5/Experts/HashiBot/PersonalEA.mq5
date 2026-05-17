@@ -419,12 +419,15 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
    return true;
   }
 
-bool RuntimeRiskGuard(const string symbol,const int cooldownMins,const int minBarsReq,string &reason)
+bool RuntimeRiskGuard(const string symbol,const int cooldownMins,const int minBarsReq,string &reason,const string source="normal_scan",const bool bypassDailyCapForDryRunProof=false)
   {
    datetime now=TimeCurrent(); datetime dayKey=StringToTime(TimeToString(now, TIME_DATE));
    if(g_tradeDayStart!=dayKey){ g_tradeDayStart=dayKey; g_tradesToday=0; }
+   int maxTradesDay=g_risk.MaxTradesPerDay();
+   Print(StringFormat("[GOV_CAP] maxTradesDay=%d tradesToday=%d source=%s",maxTradesDay,g_tradesToday,source));
    if(g_killSwitchActive && killSwitchBlocksNewTrades){ reason="kill_switch_active"; return false; }
-   if(g_tradesToday >= g_risk.MaxTradesPerDay()){ reason="max_trades_day_reached"; return false; }
+   bool dayCapReached=(g_tradesToday >= maxTradesDay);
+   if(dayCapReached && !bypassDailyCapForDryRunProof){ reason="max_trades_day_reached"; return false; }
    if(g_lastCloseTime>0 && (now-g_lastCloseTime)<(cooldownMins*60)){ reason="cooldown_active"; return false; }
    if(g_barsSinceEntry < minBarsReq){ reason="too_soon_after_last_entry"; return false; }
 
@@ -598,7 +601,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       else g_diagRiskRejectedOther++;
      }
 
-   string guard=""; bool allowed=RuntimeRiskGuard(symbol, activeCooldown, activeMinBars, guard); if(!allowed){ if(guard=="cooldown_active") g_r_cooldown++; if(guard=="too_soon_after_last_entry") g_r_minbars++; }
+   string guard=""; bool allowed=RuntimeRiskGuard(symbol, activeCooldown, activeMinBars, guard, "normal_scan", false); if(!allowed){ if(guard=="cooldown_active") g_r_cooldown++; if(guard=="too_soon_after_last_entry") g_r_minbars++; }
    int actTotal=0,grpCount=0,dirCount=0; string pReason=""; bool portfolioOK=PortfolioGuardrail(symbol, chosenPlan.direction, chosenPlan.strategy, pReason, actTotal, grpCount, dirCount);
    Print(StringFormat("[PIPE] portfolio ok=%s reason=%s",(portfolioOK?"true":"false"),pReason));
    if(portfolioOK){ g_diagPortApproved++; g_pipePortOk[sb]++; } else { g_diagPortRejected++; g_r_portfolio++; g_pipePortRej[sb]++; }
@@ -677,7 +680,9 @@ bool RunDeterministicExecutionSelfTest()
    RiskDecision risk; g_risk.Assess(riskArb, ctx, risk);
    int total=0,groupCount=0,dirCount=0; string pReason="";
    bool portfolioOK=PortfolioGuardrail(sym, plan.direction, plan.strategy, pReason, total, groupCount, dirCount);
-   string guard=""; bool runtimeOK=RuntimeRiskGuard(sym, cooldownMinutes, minBarsBetweenEntries, guard);
+   bool bypassDailyCapForDryRunProof=(executionMode==EXEC_MODE_DRYRUN);
+   Print(StringFormat("[SELFTEST_GOV] bypassDailyCapForDryRunProof=%s",(bypassDailyCapForDryRunProof?"true":"false")));
+   string guard=""; bool runtimeOK=RuntimeRiskGuard(sym, cooldownMinutes, minBarsBetweenEntries, guard, "selftest", bypassDailyCapForDryRunProof);
    int entries=0; TradeDirection basketDir=TRADE_DIR_NONE; double basketRisk=0.0,basketAvg=0.0; datetime newest=0; string scaleReason="";
    bool scaleOK=CanScaleInPersonal(sym, plan, ctx, 0.95, g_barsSinceEntry, scaleReason, entries, basketDir, basketRisk, basketAvg, newest);
 
@@ -694,13 +699,24 @@ bool RunDeterministicExecutionSelfTest()
 
    string lifecycleReason="";
    bool reg=g_tracker.RegisterDryRunTrade(tstate, lifecycleReason);
+   if(reg)
+     {
+      g_tradesToday++;
+      g_diagDryRunSubmits++;
+      g_diagDryRunLifecycleCreated++;
+      g_barsSinceEntry=0;
+     }
    Print(StringFormat("[SELFTEST_LIFECYCLE] ok=%s reason=%s ticket=%I64d lifecycle=%d active=%d",(reg?"true":"false"),lifecycleReason,tstate.ticket,(int)tstate.lifecycle,g_tracker.CountActiveTrades()));
    return reg;
   }
 
 int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_risk.Init(PROFILE_PERSONAL); g_order.Init(true); g_tracker.Init(); g_lifecycle.Init(); g_scanCount=ParseScannerSymbols();
    if(executionMode==EXEC_MODE_LIVE && allowLiveExecution && manualExecutionArmed){ int recovered=g_tracker.SyncFromBroker(magicNumber, orderCommentPrefix); g_lastBrokerSyncTime=TimeCurrent(); Print("[RECOVERY][PersonalEA] recovered=", recovered); } else Print("[RECOVERY][PersonalEA] dryrun_or_unarmed_clean_state");
-   if(selfTestForceOnceOnInit) RunDeterministicExecutionSelfTest();
+   if(enableDeterministicExecutionSelfTest && selfTestForceOnceOnInit)
+     {
+      Print("[SELFTEST_START]");
+      RunDeterministicExecutionSelfTest();
+     }
    return INIT_SUCCEEDED; }
 void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; datetime bar=iTime(_Symbol, contextTimeframe, 0); bool isNewBar=(bar!=0 && bar!=g_lastBarTime); if(isNewBar) g_lastBarTime=bar; if(!enableMultiSymbolScanner){ ProcessSymbol(_Symbol, isNewBar); return; } for(int i=0;i<g_scanCount;i++){ datetime sb=iTime(g_scan[i], contextTimeframe, 0); bool symNew=(sb!=0 && sb!=g_lastSymBar[i]); if(symNew) g_lastSymBar[i]=sb; if(ShouldLog(symNew)) ProcessSymbol(g_scan[i], symNew); }}
 void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
