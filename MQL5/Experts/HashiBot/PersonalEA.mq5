@@ -249,6 +249,88 @@ bool BuildFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &score,st
   }
 
 
+
+
+bool IsPlanExecutable(const TradePlan &plan)
+  {
+   return (plan.direction!=TRADE_DIR_NONE && plan.entryPrice>0.0 && plan.stopLoss>0.0 && plan.takeProfit1>0.0 && plan.takeProfit2>0.0);
+  }
+
+bool BuildSelectedPlanFallback(const MarketContext &ctx,const StrategyType strategy,const TradeDirection direction,const double stopAtrMult,const double tp1R,const double tp2R,TradePlan &plan,string &reason)
+  {
+   reason="";
+   TradeDirection dir=direction;
+   if(dir==TRADE_DIR_NONE)
+     {
+      if(ctx.emaFast>ctx.emaSlow) dir=TRADE_DIR_LONG;
+      else if(ctx.emaFast<ctx.emaSlow) dir=TRADE_DIR_SHORT;
+      else { reason="direction_missing"; return false; }
+     }
+   double atr=(ctx.atr>0.0?ctx.atr:MathMax(ctx.currentClose*0.001,ctx.point*10.0));
+   if(atr<=0.0){ reason="atr_missing"; return false; }
+   double entry=(dir==TRADE_DIR_LONG?(ctx.ask>0.0?ctx.ask:ctx.currentClose):(ctx.bid>0.0?ctx.bid:ctx.currentClose));
+   if(entry<=0.0){ reason="entry_missing"; return false; }
+
+   double stopDist=MathMax(atr*MathMax(stopAtrMult,0.2),ctx.point*10.0);
+   double risk=MathMax(stopDist,ctx.point*10.0);
+   plan.Reset();
+   plan.strategy=strategy;
+   plan.direction=dir;
+   plan.entryPrice=entry;
+   plan.stopLoss=(dir==TRADE_DIR_LONG?entry-stopDist:entry+stopDist);
+   plan.takeProfit1=(dir==TRADE_DIR_LONG?entry+tp1R*risk:entry-tp1R*risk);
+   plan.takeProfit2=(dir==TRADE_DIR_LONG?entry+tp2R*risk:entry-tp2R*risk);
+   plan.riskR=1.0;
+   plan.useBreakEven=true;
+   plan.useTrailing=false;
+   return IsPlanExecutable(plan);
+  }
+
+bool ResolveSelectedPlan(const MarketContext &ctx,const ArbitrationResult &arb,TradePlan &selected,double &selectedScore,SignalGrade &selectedGrade,string &reason)
+  {
+   selected=arb.plan;
+   selectedScore=(arb.hasWinner?arb.winningScore:arb.topScore);
+   selectedGrade=arb.winningGrade;
+   reason="ok";
+
+   if(arb.hasWinner)
+     {
+      bool copied=false;
+      for(int i=0;i<arb.candidateCount;i++)
+        {
+         const StrategyCandidate c=arb.candidates[i];
+         if(c.strategy!=arb.winningStrategy) continue;
+         if(c.score.totalScore+1e-9<arb.winningScore) continue;
+         selected=c.plan;
+         selectedScore=c.score.totalScore;
+         selectedGrade=c.grade;
+         copied=true;
+         Print(StringFormat("[PLAN_COPY] strategy=%s ok=true",StrategyName(selected.strategy)));
+         break;
+        }
+      if(!copied)
+         Print(StringFormat("[PLAN_COPY] strategy=%s ok=false",StrategyName(arb.winningStrategy)));
+     }
+
+   if(IsPlanExecutable(selected)) return true;
+
+   double stopMult=1.4;
+   if(selected.strategy==STRATEGY_TREND_CONTINUATION) stopMult=1.8;
+   else if(selected.strategy==STRATEGY_PULLBACK_CONTINUATION) stopMult=1.5;
+   else if(selected.strategy==STRATEGY_COMPRESSION_BREAKOUT) stopMult=1.2;
+   else if(selected.strategy==STRATEGY_EXPANSION_MOMENTUM) stopMult=1.4;
+
+   TradePlan built;
+   string breason="";
+   bool bok=BuildSelectedPlanFallback(ctx, (selected.strategy==STRATEGY_NONE?STRATEGY_EXPANSION_MOMENTUM:selected.strategy), selected.direction, stopMult, 1.0, 2.0, built, breason);
+   Print(StringFormat("[PLAN_BUILD] strategy=%s ok=%s reason=%s dir=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyName((selected.strategy==STRATEGY_NONE?STRATEGY_EXPANSION_MOMENTUM:selected.strategy)),(bok?"true":"false"),breason,DirName(built.direction),built.entryPrice,built.stopLoss,built.takeProfit1,built.takeProfit2));
+   if(!bok){ reason="plan_build_failed:"+breason; return false; }
+
+   selected=built;
+   if(selectedGrade==SIGNAL_GRADE_REJECT) selectedGrade=SIGNAL_GRADE_B;
+   reason="rebuilt";
+   return true;
+  }
 bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &score,string &reason)
   {
    score = 0.0; reason="";
@@ -447,7 +529,9 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
 
    for(int ci=0;ci<arb.candidateCount;ci++){ StrategyType st=arb.candidates[ci].strategy; bool ok=arb.candidates[ci].isValid; int b=StrategyBucket(st); if(arb.candidates[ci].direction==TRADE_DIR_LONG || arb.candidates[ci].direction==TRADE_DIR_SHORT) g_diagValidDirCandidates[b]++; else g_diagAmbiguousDirRejects[b]++; if(st==STRATEGY_TREND_CONTINUATION){ if(ok) g_trendAccepted++; else g_trendRejected++; } else if(st==STRATEGY_PULLBACK_CONTINUATION){ if(ok) g_pullbackAccepted++; else g_pullbackRejected++; } else if(st==STRATEGY_COMPRESSION_BREAKOUT){ if(ok) g_compressionAccepted++; else g_compressionRejected++; } else if(st==STRATEGY_EXPANSION_MOMENTUM){ if(ok) g_expansionAccepted++; else g_expansionRejected++; } }
    bool candidateGradeOK=(!scalperMode || scalperAllowBGrade || arb.winningGrade>=SIGNAL_GRADE_A);
-   TradePlan chosenPlan=arb.plan; double chosenScore=arb.topScore; bool chosenFromFallback=false;
+   TradePlan chosenPlan; double chosenScore=0.0; SignalGrade chosenGrade=SIGNAL_GRADE_REJECT; string selectedPlanReason=""; bool chosenFromFallback=false;
+   bool selectedPlanOK=ResolveSelectedPlan(ctx, arb, chosenPlan, chosenScore, chosenGrade, selectedPlanReason);
+   Print(StringFormat("[ARB] selected_plan_valid ok=%s reason=%s",(selectedPlanOK?"true":"false"),selectedPlanReason));
    if(scalperMode) g_scalperCandidatesEvaluated++;
    if(scalperMode && arb.hasWinner && candidateGradeOK && arb.topScore>=activeMinScore) g_scalperCandidatesAccepted++;
    if((!arb.hasWinner || !candidateGradeOK || chosenScore<activeMinScore) && scalperMode && scalperAllowFallback)
@@ -461,11 +545,11 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    if(chosenPlan.direction==TRADE_DIR_NONE || chosenPlan.entryPrice<=0.0 || chosenPlan.stopLoss<=0.0 || chosenPlan.takeProfit1<=0.0 || chosenPlan.takeProfit2<=0.0)
      {
       g_diagNoValidWinner++;
-      Print("[ARB] no_valid_winner reason=invalid_or_missing_selected_plan");
+      Print("[ARB] no_valid_winner reason=invalid_or_missing_selected_plan:"+selectedPlanReason);
       return;
      }
 
-   SignalGrade chosenGrade=(chosenFromFallback?SIGNAL_GRADE_B:arb.winningGrade);
+   if(chosenFromFallback) chosenGrade=SIGNAL_GRADE_B;
    int sb=StrategyBucket(chosenPlan.strategy);
    if(!arb.hasWinner && StringFind(arb.reason,"no_valid_winner")>=0) g_diagNoValidWinner++;
    g_pipeWinnerSel[sb]++;
