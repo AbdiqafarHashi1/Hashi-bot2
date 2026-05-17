@@ -31,8 +31,17 @@ public:
 
    bool ValidateExecutionAllowed(const ExecutionMode execMode,const bool inAllowLiveExecution,const bool inAllowDemoExecutionOnly,const bool inRequireManualExecutionArming,const bool inManualExecutionArmed,string &reason)
      {
-      if(execMode == EXEC_MODE_DRYRUN || execMode == EXEC_MODE_PAPER || execMode == EXEC_MODE_BACKTEST || execMode == EXEC_MODE_OPTIMIZATION)
-        { reason="dryrun_mode"; return true; }
+      if(execMode == EXEC_MODE_LOG_ONLY)
+        { reason="log_only_mode"; return true; }
+      if(execMode == EXEC_MODE_TESTER_SIM)
+        { reason=(MQLInfoInteger(MQL_TESTER)?"tester_sim_mode":"tester_sim_outside_tester"); return MQLInfoInteger(MQL_TESTER); }
+      if(execMode == EXEC_MODE_DEMO)
+        {
+         if(AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO){ reason="demo_mode_requires_demo_account"; return false; }
+         if(!inAllowLiveExecution){ reason="demo_execution_disabled"; return false; }
+         if(inRequireManualExecutionArming && !inManualExecutionArmed){ reason="manual_arming_required"; return false; }
+         reason="demo_mode_ok"; return true;
+        }
       if(!inAllowLiveExecution)
         { reason="live_execution_disabled"; return false; }
       if(inAllowDemoExecutionOnly && AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO)
@@ -106,7 +115,7 @@ public:
          ok = trade.Sell(risk.approvedLots, ctx.symbol, 0.0, plan.stopLoss, plan.takeProfit1, comment);
       if(!ok)
         {
-         reason = "broker_send_failed_retcode_" + IntegerToString((int)trade.ResultRetcode());
+         reason = "broker_send_failed_retcode_" + IntegerToString((int)trade.ResultRetcode()) + "_" + trade.ResultRetcodeDescription();
          m_lastAction = reason;
          return false;
         }
@@ -114,24 +123,18 @@ public:
       state.ticket = (long)trade.ResultOrder();
       state.reason = "broker_submitted";
       m_lastAction = "broker_submitted";
-      reason = "broker_submitted_retcode_" + IntegerToString((int)trade.ResultRetcode());
+      reason = "broker_submitted_retcode_" + IntegerToString((int)trade.ResultRetcode()) + "_" + trade.ResultRetcodeDescription();
       return true;
      }
 
    bool Submit(const TradePlan &plan,const RiskDecision &risk,const MarketContext &ctx,const ExecutionMode execMode,const bool inAllowLiveExecution,const bool inAllowDemoExecutionOnly,const bool inRequireManualExecutionArming,const bool inManualExecutionArmed,const long inMagicNumber,const int inMaxSlippagePoints,const string inOrderCommentPrefix,TradeState &state,string &reason)
      {
-      const bool dryrunMode=(execMode == EXEC_MODE_DRYRUN || execMode == EXEC_MODE_PAPER || execMode == EXEC_MODE_BACKTEST || execMode == EXEC_MODE_OPTIMIZATION);
-      string gate=(dryrunMode?"dryrun_mode":"broker_mode");
-      bool brokerAllowed=true;
-      if(!dryrunMode)
-         brokerAllowed=ValidateExecutionAllowed(execMode, inAllowLiveExecution, inAllowDemoExecutionOnly, inRequireManualExecutionArming, inManualExecutionArmed, gate);
-      Print(StringFormat("[SUBMIT_GATE] mode=%d dryrunAllowed=%s brokerAllowed=%s reason=%s", (int)execMode, (dryrunMode?"true":"false"), (brokerAllowed?"true":"false"), gate));
-      if(dryrunMode)
-        {
-         bool ok=SubmitDryRun(plan, risk, ctx.symbol, state);
-         reason=(ok?"submitted_dryrun":m_lastAction);
-         return ok;
-        }
+      const bool logOnlyMode=(execMode == EXEC_MODE_LOG_ONLY);
+      string gate="broker_mode";
+      bool brokerAllowed=ValidateExecutionAllowed(execMode, inAllowLiveExecution, inAllowDemoExecutionOnly, inRequireManualExecutionArming, inManualExecutionArmed, gate);
+      Print(StringFormat("[SUBMIT_GATE] mode=%d logOnly=%s brokerAllowed=%s reason=%s", (int)execMode, (logOnlyMode?"true":"false"), (brokerAllowed?"true":"false"), gate));
+      if(logOnlyMode)
+        { reason="log_only_no_submit"; m_lastAction=reason; return false; }
       if(!brokerAllowed)
         { reason = gate; m_lastAction = gate; return false; }
       string brokerReason="";

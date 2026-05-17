@@ -21,7 +21,7 @@ input bool enableVerboseLogs = false;
 input bool logOnlyOnNewBar = true;
 input string scannerSymbols = "EURUSD,GBPUSD,USDJPY,XAUUSD";
 input bool enableMultiSymbolScanner = false;
-input ExecutionMode executionMode = EXEC_MODE_DRYRUN;
+input ExecutionMode executionMode = EXEC_MODE_LOG_ONLY;
 input bool allowLiveExecution = false;
 input bool allowDemoExecutionOnly = true;
 input bool requireManualExecutionArming = true;
@@ -282,7 +282,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       string execReason="";
       bool submitted=false; for(int r=0;r<=maxRetryCount;r++){ submitted=g_order.Submit(arb.plan, risk, ctx, executionMode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, magicNumber, maxSlippagePoints, orderCommentPrefix, tstate, execReason); if(submitted) break; if(r<maxRetryCount){ Print("[RETRY][PropFirmEA] sym=",symbol," op=submit attempt=",(r+1)," reason=",execReason); Sleep(retryDelaySeconds*1000); } else Print("[RETRY][PropFirmEA] sym=",symbol," op=submit exhausted reason=",execReason); }
       string lifecycleReason="not_attempted";
-      if(submitted && g_tracker.RegisterDryRunTrade(tstate, lifecycleReason))
+      if(submitted)
         { g_tradesToday++; g_barsSinceEntry=0; g_diagDryRunSubmits++; Print(StringFormat("[LIFECYCLE][PropFirmEA] sym=%s submitted ticket=%I64d lots=%.2f", symbol,tstate.ticket,tstate.approvedLots)); Print("[PROP_APPROVED] sym=",symbol," candidate/risk/portfolio passed"); g_propApprovals++; if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_propSubTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_propSubPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_propSubCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_propSubExpansion++; }
       else if(!submitted)
         { g_order.MarkBlocked(arb.plan, risk, symbol, tstate, execReason); g_lastCloseTime=TimeCurrent(); }
@@ -302,7 +302,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      }
   }
 
-int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PROP_FIRM); g_risk.Init(PROFILE_PROP_FIRM); g_prop.Init(); g_order.Init(true); g_propInitialEquity=AccountInfoDouble(ACCOUNT_EQUITY); g_propDayStartEquity=g_propInitialEquity; PropLogRulesStartup(); g_tracker.Init(); g_lifecycle.Init(); g_scanCount=ParseScannerSymbols(); if(executionMode==EXEC_MODE_LIVE && allowLiveExecution && manualExecutionArmed){ int recovered=g_tracker.SyncFromBroker(magicNumber, orderCommentPrefix); g_lastBrokerSyncTime=TimeCurrent(); Print("[RECOVERY][PropFirmEA] recovered=", recovered); } else Print("[RECOVERY][PropFirmEA] dryrun_or_unarmed_clean_state"); return INIT_SUCCEEDED; }
+int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PROP_FIRM); g_risk.Init(PROFILE_PROP_FIRM); g_prop.Init(); g_order.Init(false); g_propInitialEquity=AccountInfoDouble(ACCOUNT_EQUITY); g_propDayStartEquity=g_propInitialEquity; PropLogRulesStartup(); g_tracker.Init(); g_lifecycle.Init(); g_scanCount=ParseScannerSymbols(); if((executionMode==EXEC_MODE_LIVE || executionMode==EXEC_MODE_DEMO) && allowLiveExecution && manualExecutionArmed){ int recovered=g_tracker.SyncFromBroker(magicNumber, orderCommentPrefix); g_lastBrokerSyncTime=TimeCurrent(); Print("[RECOVERY][PropFirmEA] recovered=", recovered); } else Print("[RECOVERY][PropFirmEA] log_only_or_tester_clean_state"); return INIT_SUCCEEDED; }
 void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; datetime bar=iTime(_Symbol, contextTimeframe, 0); bool isNewBar=(bar!=0 && bar!=g_lastBarTime); if(isNewBar) g_lastBarTime=bar; if(!enableMultiSymbolScanner){ ProcessSymbol(_Symbol, isNewBar); return; } for(int i=0;i<g_scanCount;i++){ datetime sb=iTime(g_scan[i], contextTimeframe, 0); bool symNew=(sb!=0 && sb!=g_lastSymBar[i]); if(symNew) g_lastSymBar[i]=sb; if(ShouldLog(symNew)) ProcessSymbol(g_scan[i], symNew); }}
 void OnDeinit(const int reason){ g_prop.SaveState(); Print("PropFirmEA deinit reason=", reason);
    Print(StringFormat("[CALIB_SUMMARY][PropFirmEA] bars=%d candidates=%d regime_ok=%d regime_rej=%d winners=%d dryrun=%d risk_ok=%d risk_rej=%d port_ok=%d port_rej=%d",g_diagBarsProcessed,g_diagCandidates,g_diagRegimeAccepted,g_diagRegimeRejected,g_diagWinners,g_diagDryRunSubmits,g_diagRiskApproved,g_diagRiskRejected,g_diagPortApproved,g_diagPortRejected));
