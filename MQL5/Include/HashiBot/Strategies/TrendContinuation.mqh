@@ -134,9 +134,9 @@ public:
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE); // invalid regime
          return false;
         }
-      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:0.26);
-      double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:0.24);
-      double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:62.0);
+      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:0.38);
+      double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:0.34);
+      double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:56.0);
       if(regime.confidence < minRegimeConf)
         {
          Reject(candidate, SUPPRESS_MARKET_QUALITY); // low confidence
@@ -180,7 +180,7 @@ public:
 
       double entryQuality = 0.0;
       double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
-      if(bodyAtr>1.9){ Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+      if(bodyAtr>1.45){ Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
       if(!HasReclaimTrigger(ctx, dir, entryQuality))
         {
          Reject(candidate, SUPPRESS_AMBIGUOUS); // no reclaim trigger
@@ -208,7 +208,7 @@ public:
       // deterministic confidence blend
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + structureScore + momentumScore + entryQuality) / 4.0, 0.0, 1.0);
 
-      if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_TREND_CONTINUATION, dir, ctx, 1.8, candidate.plan))
+      if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_TREND_CONTINUATION, dir, ctx, 1.6, candidate.plan))
         {
          Reject(candidate, SUPPRESS_OTHER); // invalid trade plan
          return false;

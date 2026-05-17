@@ -683,8 +683,22 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       if(active.symbol!=symbol || active.closed) continue;
       TradeLifecycleState prev=active.lifecycle; bool wasClosed=active.closed; g_lifecycle.UpdateDryRunTrade(active, ctx); g_tracker.UpdateTradeByTicket(active.ticket, active); if(active.closed) g_lastCloseTime=TimeCurrent(); if(!wasClosed && active.closed){ int b=StrategyBucket(active.strategy); double pnl=active.realizedR*active.riskAmount; g_symNetPnl[symIdx]+=pnl; g_symSumR[symIdx]+=active.realizedR; g_netPnl[b]+=pnl; g_sumR[b]+=active.realizedR; g_closedCount[b]++; if(active.realizedR>0){ g_strategyLossStreak[b]=0; g_symWins[symIdx]++; if(b==0) g_winTrend++; else if(b==1) g_winPullback++; else if(b==2) g_winCompression++; else if(b==3) g_winExpansion++; else g_winMicro++; g_consecutiveLosses=0; } else { g_strategyLossStreak[b]++; g_symLosses[symIdx]++; g_symCooldown[symIdx]=MathMax((long)g_symCooldown[symIdx],(long)symbolCooldownAfterLoss); if(b==0) g_lossTrend++; else if(b==1) g_lossPullback++; else if(b==2) g_lossCompression++; else if(b==3) g_lossExpansion++; else g_lossMicro++; g_consecutiveLosses++; } }
       if(!wasClosed && active.closed){ int b=StrategyBucket(active.strategy); g_strategyHoldBarsSum[b]+=active.barsInTrade; }
-      if(!wasClosed && active.closed){ g_exitTotal++; g_exitHoldBarsSum+=active.barsInTrade; if(active.closeReason=="tp_hit") g_exitTp2++; else if(active.closeReason=="breakeven_exit") g_exitBE++; else if(active.closeReason=="timeout") g_exitTime++; else if(active.closeReason=="early_invalidation") g_exitInvalidation++; else if(active.closeReason=="sl_hit" && active.trailingActive) g_exitTrailing++; }
-      if(prev!=active.lifecycle) Print(StringFormat("[LIFECYCLE][PersonalEA] sym=%s ticket=%I64d %d->%d", symbol, active.ticket,(int)prev,(int)active.lifecycle));
+      if(prev!=active.lifecycle)
+        {
+         if(active.tp1Hit && !wasClosed) { g_exitTp1++; Print(StringFormat("[LIFECYCLE_ACTION] action=tp1_partial sym=%s ticket=%I64d rrNow=%.2f",symbol,active.ticket,active.realizedR)); }
+         if(active.breakevenMoved) Print(StringFormat("[LIFECYCLE_ACTION] action=be_move sym=%s ticket=%I64d sl=%.5f",symbol,active.ticket,active.stopLoss));
+         if(active.trailingActive) Print(StringFormat("[LIFECYCLE_ACTION] action=trail_update sym=%s ticket=%I64d sl=%.5f",symbol,active.ticket,active.stopLoss));
+         Print(StringFormat("[LIFECYCLE][PersonalEA] sym=%s ticket=%I64d %d->%d", symbol, active.ticket,(int)prev,(int)active.lifecycle));
+        }
+      if(!wasClosed && active.closed)
+        {
+         g_exitTotal++; g_exitHoldBarsSum+=active.barsInTrade;
+         if(active.closeReason=="tp_hit"){ g_exitTp2++; Print(StringFormat("[LIFECYCLE_ACTION] action=tp2_close sym=%s ticket=%I64d",symbol,active.ticket)); }
+         else if(active.closeReason=="breakeven_exit"){ g_exitBE++; Print(StringFormat("[LIFECYCLE_ACTION] action=be_move sym=%s ticket=%I64d",symbol,active.ticket)); }
+         else if(active.closeReason=="timeout"){ g_exitTime++; Print(StringFormat("[LIFECYCLE_ACTION] action=time_stop sym=%s ticket=%I64d",symbol,active.ticket)); }
+         else if(active.closeReason=="early_invalidation"){ g_exitInvalidation++; Print(StringFormat("[LIFECYCLE_ACTION] action=early_invalid sym=%s ticket=%I64d",symbol,active.ticket)); }
+         else if(active.closeReason=="sl_hit" && active.trailingActive){ g_exitTrailing++; Print(StringFormat("[LIFECYCLE_ACTION] action=mae_guard sym=%s ticket=%I64d",symbol,active.ticket)); }
+        }
       ManageActiveBrokerTrade(symbol, active, ctx);
      }
    if(ShouldLog(isNewBar) && basketEntries>0) Print(StringFormat("[BASKET][PersonalEA] sym=%s entries=%d dir=%s risk=%.2f avg=%.5f newest=%s",symbol,basketEntries,DirName(basketDir),basketRisk,basketAvgEntry,TimeToString(basketNewest,TIME_MINUTES)));
@@ -731,6 +745,11 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      }
    if(bestIdx>=0){ arb.hasWinner=true; arb.winningStrategy=arb.candidates[bestIdx].strategy; arb.winningScore=arb.candidates[bestIdx].score.totalScore; arb.winningGrade=arb.candidates[bestIdx].grade; arb.plan=arb.candidates[bestIdx].plan; }
    else { arb.hasWinner=false; arb.reason="no_trade_regime_aware_filter"; if(topRejectReason=="rr_after_spread_too_low") g_noTradeRR++; else if(topRejectReason=="regime_mismatch_or_penalty") g_noTradeRegime++; else if(topRejectReason=="bucket_integrity_block") g_noTradeBucket++; else g_noTradeOther++; Print(StringFormat("[NO_TRADE_DECISION] reason=%s bestStrategy=%s bestScore=%.2f dominantRegime=%d rrAfterSpread=%.2f",topRejectReason,"none",0.0,(int)regime.regime,0.0)); }
+   Print(StringFormat("[ARBITRATION_DECISION] selectedStrategy=%s selectedScore=%.2f selectedRR=%.2f rejectReasonTop=%s candidateCount=%d validCount=%d noTradeReason=%s",
+                      (arb.hasWinner?StrategyName(arb.winningStrategy):"none"),
+                      (arb.hasWinner?arb.winningScore:0.0),
+                      (arb.hasWinner?RRNetAfterSpread(arb.plan,ctx):0.0),
+                      topRejectReason,arb.candidateCount,(bestIdx>=0?1:0),(arb.hasWinner?"none":arb.reason)));
    Print(StringFormat("[REGIME_ARBITRATION_SUMMARY] dominantRegime=%d trendWeight=%.2f pullbackWeight=%.2f compressionWeight=%.2f expansionWeight=%.2f microWeight=%.2f topRejectReason=%s",(int)regime.regime,wTrend,wPull,wComp,wExp,wMicro,topRejectReason));
    Print(StringFormat("[EDGE_ARBITRATION_SUMMARY] candidateCount=%d validPlanCount=%d rejectedCount=%d selectedCount=%d noTradeCount=%d topRejectReasons=%s bestStrategy=%s bestSymbol=%s bestScore=%.2f realizedExpectancy=%.2f accountMode=%s",arb.candidateCount,g_pipePlanOk[0]+g_pipePlanOk[1]+g_pipePlanOk[2]+g_pipePlanOk[3]+g_pipePlanOk[4],MathMax(0,arb.candidateCount-(arb.hasWinner?1:0)),(arb.hasWinner?1:0),(arb.hasWinner?0:1),topRejectReason,(arb.hasWinner?StrategyName(arb.winningStrategy):"none"),symbol,(arb.hasWinner?arb.winningScore:0.0),(g_exitTotal>0?(g_sumR[0]+g_sumR[1]+g_sumR[2]+g_sumR[3]+g_sumR[4])/(double)g_exitTotal:0.0),(g_accountMode==1?"ATTACK_MODE":(g_accountMode==2?"DEFENSE_MODE":"RECOVERY_MODE"))));
    for(int ai=0; ai<arb.candidateCount; ai++){ int ab=StrategyBucket(arb.candidates[ai].strategy); if(arb.candidates[ai].isValid){ g_arbRejectScoreSum[ab]+=arb.candidates[ai].score.totalScore; g_arbRejectScoreCount[ab]++; } }
@@ -1008,7 +1027,8 @@ void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    long winsAll=g_winTrend+g_winPullback+g_winCompression+g_winExpansion+g_winMicro; long lossesAll=g_lossTrend+g_lossPullback+g_lossCompression+g_lossExpansion+g_lossMicro;
    double winRate=(winsAll+lossesAll>0?(double)winsAll/(double)(winsAll+lossesAll):0.0);
    Print(StringFormat("[EXPECTANCY_SUMMARY] avgWin=%.2f avgLoss=%.2f avgR=%.2f winRate=%.2f PF=0.00 earlyInvalidationCount=%d timeStopCount=%d beCount=%d tp1Count=%d tp2Count=%d largestLossStrategy=unknown largestLossReason=unknown",avgWin,avgLoss,avgR,winRate,g_exitInvalidation,g_exitTime,g_exitBE,g_exitTp1,g_exitTp2));
-   Print(StringFormat("[NO_TRADE_SUMMARY] rrTooLow=%d regimeLow=%d chop=%d weakMomentum=%d swingWall=%d exhaustion=%d lossStreak=%d bucketError=%d negExpectancy=%d other=%d",g_noTradeRR,g_noTradeRegime,g_noTradeChop,g_noTradeMomentum,g_noTradeSwing,g_noTradeExhaustion,g_noTradeLossStreak,g_noTradeBucket,g_noTradeNegExpectancy,g_noTradeOther));
+   Print(StringFormat("[NO_TRADE_SUMMARY] rrAfterSpreadLow=%d chop=%d weakMomentum=%d badRegime=%d badMarketQuality=%d exhaustion=%d nearSwingWall=%d negativeExpectancy=%d lossCluster=%d riskBlocked=%d bucketError=%d deadStrategy=%d spreadTooHigh=%d",
+                      g_noTradeRR,g_noTradeChop,g_noTradeMomentum,g_noTradeRegime,g_r_market_quality,g_noTradeExhaustion,g_noTradeSwing,g_noTradeNegExpectancy,g_noTradeLossStreak,g_r_risk,g_noTradeBucket,0,g_r_spread));
    for(int spi=0;spi<5;spi++){ long wins=(spi==0?g_winTrend:(spi==1?g_winPullback:(spi==2?g_winCompression:(spi==3?g_winExpansion:g_winMicro)))); long losses=(spi==0?g_lossTrend:(spi==1?g_lossPullback:(spi==2?g_lossCompression:(spi==3?g_lossExpansion:g_lossMicro)))); long cands=g_diagValidDirCandidates[spi]; long valid=g_pipePlanOk[spi]; long sel=g_pipeWinnerSel[spi]; double avgR=(g_closedCount[spi]>0?g_sumR[spi]/(double)g_closedCount[spi]:0.0); double rejRate=(cands>0?(double)(cands-valid)/(double)cands:0.0); double pf=(losses>0?(double)wins/(double)losses:(wins>0?2.0:0.0)); Print(StringFormat("[STRATEGY_REGIME_PERF] strategy=%s candidates=%d validPlans=%d selected=%d wins=%d losses=%d rollingPF=%.2f rollingExpectancy=%.2f avgR=%.2f rejectionRate=%.2f",(spi==0?"trend":(spi==1?"pullback":(spi==2?"compression":(spi==3?"expansion":"micro")))),cands,valid,sel,wins,losses,pf,g_netPnl[spi],avgR,rejRate)); }
    for(int si=0;si<g_scanCount;si++)
       Print(StringFormat("[SYMBOL_SUMMARY] symbol=%s candidates=%d validPlans=%d selected=%d submitted=%d wins=%d losses=%d netPnL=%.2f avgR=%.2f cooldown=%d regimeScore=%.2f marketQuality=%.2f",g_scan[si],g_symCandidates[si],g_symValidPlans[si],g_symSelected[si],g_symSubmitted[si],g_symWins[si],g_symLosses[si],g_symNetPnl[si],((g_symWins[si]+g_symLosses[si])>0?g_symSumR[si]/(double)(g_symWins[si]+g_symLosses[si]):0.0),g_symCooldown[si],g_symRegimeScore[si],g_symMarketQuality[si]));
