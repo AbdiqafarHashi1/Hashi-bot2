@@ -4,8 +4,17 @@
 #include <HashiBot/Core/Types.mqh>
 #include <HashiBot/Execution/TrailingManager.mqh>
 
-#define HASHIBOT_MAX_BARS_IN_TRADE  32
-#define HASHIBOT_TP1_BE_BUFFER_R    0.06
+#define HASHIBOT_MAX_BARS_IN_TRADE  48
+#define HASHIBOT_TP1_BE_BUFFER_R    0.10
+
+enum LifecycleTemplateMode
+  {
+   LIFECYCLE_SCALP=0,
+   LIFECYCLE_PULLBACK_TREND=1,
+   LIFECYCLE_BREAKOUT_EXPANSION=2,
+   LIFECYCLE_TREND_RUNNER=3,
+   LIFECYCLE_DEFENSIVE_SCRATCH=4
+  };
 
 class CTradeLifecycle
   {
@@ -21,9 +30,9 @@ public:
      {
       m_nextTicket = 1000001;
       m_trailing.Init();
-      m_tp1MoveFrac = 0.50;
-      m_minTrailRR = 0.95;
-      m_momentumCollapseFrac = 0.32;
+      m_tp1MoveFrac = 0.35;
+      m_minTrailRR = 1.45;
+      m_momentumCollapseFrac = 0.38;
       return true;
      }
 
@@ -175,11 +184,33 @@ public:
       state.lastUpdateTime = TimeCurrent();
      }
 
+   double CalcMfeR(const TradeState &state,const MarketContext &ctx)
+     {
+      double risk=MathAbs(state.entryPrice-state.stopLoss); if(risk<=0.0) return 0.0;
+      if(state.direction==TRADE_DIR_LONG) return (ctx.currentHigh-state.entryPrice)/risk;
+      if(state.direction==TRADE_DIR_SHORT) return (state.entryPrice-ctx.currentLow)/risk;
+      return 0.0;
+     }
+   double CalcMaeR(const TradeState &state,const MarketContext &ctx)
+     {
+      double risk=MathAbs(state.entryPrice-state.stopLoss); if(risk<=0.0) return 0.0;
+      if(state.direction==TRADE_DIR_LONG) return (state.entryPrice-ctx.currentLow)/risk;
+      if(state.direction==TRADE_DIR_SHORT) return (ctx.currentHigh-state.entryPrice)/risk;
+      return 0.0;
+     }
+   LifecycleTemplateMode DetermineTemplate(const TradeState &state,const MarketContext &ctx,double rrAfterSpread,string &reason)
+     {
+      if(ctx.choppiness>62.0 || ctx.marketQuality<0.34){ reason="defensive_chop_or_low_quality"; return LIFECYCLE_DEFENSIVE_SCRATCH; }
+      if(state.strategy==STRATEGY_EXPANSION_MOMENTUM && ctx.regimeScore>0.58){ reason="expansion_quality"; return LIFECYCLE_BREAKOUT_EXPANSION; }
+      if(state.strategy==STRATEGY_PULLBACK_CONTINUATION && ctx.trendStrength>0.52){ reason="pullback_trend_alignment"; return LIFECYCLE_PULLBACK_TREND; }
+      if((state.strategy==STRATEGY_TREND_CONTINUATION || state.strategy==STRATEGY_COMPRESSION_BREAKOUT) && rrAfterSpread>=1.8){ reason="trend_runner_rr"; return LIFECYCLE_TREND_RUNNER; }
+      reason="scalp_default"; return LIFECYCLE_SCALP;
+     }
    void MarkClosedInvalidation(TradeState &state)
      {
       state.lifecycle = TRADE_STATE_CLOSED_TIMEOUT;
       state.closed = true;
-      state.closeReason = "early_invalidation";
+      if(state.closeReason=="") state.closeReason = "early_invalidation";
       state.reason = "closed_early_invalidation";
       state.updateTime = TimeCurrent();
       state.lastUpdateTime = TimeCurrent();
@@ -193,13 +224,22 @@ public:
       state.barsInTrade++;
 
       double initRisk=MathAbs(state.entryPrice-state.stopLoss);
+      double curRR=CurrentRR(state,ctx);
+      double rrAfterSpread=(initRisk>0.0?((MathAbs(state.takeProfit1-state.entryPrice)-ctx.spreadPoints*ctx.point)/initRisk):0.0);
+      string tmplReason=""; LifecycleTemplateMode tmpl=DetermineTemplate(state,ctx,rrAfterSpread,tmplReason);
+      Print(StringFormat("[LIFECYCLE_TEMPLATE] strategy=%d mode=%d reason=%s rrAfterSpread=%.2f trendStrength=%.2f marketQuality=%.2f",(int)state.strategy,(int)tmpl,tmplReason,rrAfterSpread,ctx.trendStrength,ctx.marketQuality));
+      double bodyAtr=(ctx.atr>0.0?MathAbs(ctx.currentClose-ctx.currentOpen)/ctx.atr:0.0);
+      bool followThroughWeak=(state.barsInTrade>=3 && curRR<0.12);
+      bool failedExpansion=(state.barsInTrade>=5 && curRR<0.25 && bodyAtr<0.20);
+      bool momentumFail=(state.barsInTrade>=2 && IsMomentumCollapsed(state,ctx));
+
       if(CheckSL(state, ctx))
         {
          MarkClosedSL(state);
          return;
         }
 
-      if(CheckTP1(state, ctx))
+      if(!state.tp1Hit && CheckTP1(state, ctx))
         {
          state.tp1Hit = true;
          double lockRisk=initRisk*HASHIBOT_TP1_BE_BUFFER_R;
@@ -208,12 +248,28 @@ public:
          else
             state.stopLoss=MathMin(state.stopLoss,state.entryPrice-lockRisk);
          state.breakevenMoved=true;
-         if(CurrentRR(state,ctx)>=m_minTrailRR)
-            MarkTrailing(state);
+         state.realizedR += m_tp1MoveFrac * 1.0;
+         double mfeNow=CalcMfeR(state,ctx);
+         string wclass=(mfeNow>=2.2?"STRONG_RUNNER":(mfeNow>=1.2?"NORMAL_WINNER":"WEAK_WINNER"));
+         Print(StringFormat("[WINNER_CLASSIFICATION] ticket=%I64d class=%s mfeR=%.2f trendStrength=%.2f structureValid=%s action=%s",state.ticket,wclass,mfeNow,ctx.trendStrength,(ctx.choppiness<60.0?"true":"false"),(mfeNow>=2.2?"extend_tp2":"protect")));
         }
 
+      if(state.tp1Hit && !state.trailingActive && curRR>=m_minTrailRR)
+         MarkTrailing(state);
+
       if(state.trailingActive)
+        {
+         double prevSL=state.stopLoss;
          m_trailing.MaybeTrail(state, ctx);
+         if(ctx.atr>0.0)
+           {
+            double antiWick=(state.direction==TRADE_DIR_LONG?ctx.currentLow:ctx.currentHigh);
+            double wickGuard=(state.direction==TRADE_DIR_LONG?antiWick-0.30*ctx.atr:antiWick+0.30*ctx.atr);
+            if(state.direction==TRADE_DIR_LONG) state.stopLoss=MathMin(state.stopLoss,MathMax(prevSL,wickGuard));
+            else state.stopLoss=MathMax(state.stopLoss,MathMin(prevSL,wickGuard));
+            Print(StringFormat("[STRUCTURE_TRAIL] active=%s swingRef=%.5f atrBuffer=%.5f newSL=%.5f reason=runner_trail",(state.trailingActive?"true":"false"),antiWick,0.30*ctx.atr,state.stopLoss));
+           }
+        }
 
       if(state.tp1Hit && CheckSL(state,ctx))
         {
@@ -227,11 +283,19 @@ public:
          return;
         }
 
-      double curRR=CurrentRR(state,ctx);
-      bool stalled=(state.barsInTrade>8 && curRR<0.15 && !state.tp1Hit);
-      bool adverse=(state.barsInTrade>=4 && curRR<-0.45);
-      if((state.barsInTrade > (HASHIBOT_MAX_BARS_IN_TRADE/3) && !state.tp1Hit && IsMomentumCollapsed(state,ctx)) || stalled || adverse)
+      double maeR=CalcMaeR(state,ctx), mfeR=CalcMfeR(state,ctx);
+      double qualityNow=MathMax(0.0,MathMin(1.0,0.55 + 0.20*curRR + 0.12*mfeR - 0.25*maeR - 0.02*state.barsInTrade + 0.15*ctx.marketQuality - 0.10*(ctx.choppiness/100.0)));
+      string qAction=(qualityNow<0.28?"exit":(qualityNow<0.42?"tighten":"hold"));
+      Print(StringFormat("[TRADE_QUALITY_DECAY] ticket=%I64d strategy=%d qualityNow=%.2f entryQuality=%.2f maeR=%.2f mfeR=%.2f action=%s reason=%s",state.ticket,(int)state.strategy,qualityNow,MathMax(0.0,MathMin(1.0,state.initialRiskR)),maeR,mfeR,qAction,(qualityNow<0.28?"quality_decay_exit":(qualityNow<0.42?"quality_decay_tighten":"stable"))));
+      if(qualityNow<0.28 && curRR>-0.95){ state.closeReason="quality_decay_exit"; MarkClosedInvalidation(state); return; }
+      bool hardAdverse=(state.barsInTrade>=4 && curRR<=-0.75);
+      bool stagnation=(state.barsInTrade>12 && curRR<0.20 && !state.tp1Hit);
+      bool fastInvalidation=(followThroughWeak || failedExpansion || momentumFail);
+      if(hardAdverse || stagnation || fastInvalidation)
         {
+         if(hardAdverse) state.closeReason="adverse_excursion_guard";
+         else if(stagnation) state.closeReason="defensive_scratch";
+         else state.closeReason=(momentumFail?"momentum_failed":"failed_follow_through");
          MarkClosedInvalidation(state);
          return;
         }

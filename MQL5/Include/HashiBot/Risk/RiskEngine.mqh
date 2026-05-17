@@ -115,16 +115,25 @@ public:
         { decision.approved = false; return false; }
       double rr=0.0;
       double riskDist=MathAbs(result.plan.entryPrice-result.plan.stopLoss);
-      if(riskDist>0.0) rr=MathAbs(result.plan.takeProfit1-result.plan.entryPrice)/riskDist;
+      if(riskDist>0.0) rr=MathAbs(result.plan.takeProfit2-result.plan.entryPrice)/riskDist;
       double qMult=1.0;
-      if(result.winningScore<0.62) qMult*=0.65;
-      else if(result.winningScore>0.78) qMult*=1.10;
-      if(rr<1.25) qMult*=0.60;
-      else if(rr>1.8) qMult*=1.08;
-      if(ctx.choppiness>60.0) qMult*=0.70;
-      if(ctx.marketQuality<0.38) qMult*=0.72;
-      if(ctx.spreadPoints>55.0) qMult*=0.68;
-      decision.riskPercent=MathHelpers::Clamp(decision.riskPercent*qMult,0.05,m_riskPerTrade);
+      double regimeMult=MathHelpers::Clamp(0.65 + 0.70*ctx.regimeScore,0.50,1.30);
+      double trendMult=MathHelpers::Clamp(0.70 + 0.45*ctx.trendStrength,0.55,1.25);
+      double spreadMult=(ctx.spreadPoints>55.0?0.55:(ctx.spreadPoints>40.0?0.75:1.0));
+      double chopMult=(ctx.choppiness>64.0?0.50:(ctx.choppiness>58.0?0.72:1.0));
+      double qualityMult=(ctx.marketQuality<0.34?0.60:(ctx.marketQuality<0.42?0.80:1.0));
+      if(result.winningScore<0.62) qMult*=0.60;
+      else if(result.winningScore>0.84) qMult*=1.15;
+      if(rr<1.5) qMult*=0.55;
+      else if(rr>=2.2) qMult*=1.18;
+      if(result.winningStrategy==STRATEGY_EXPANSION_MOMENTUM && rr>=2.0 && ctx.regimeScore>0.60) qMult*=1.10;
+      if(result.winningStrategy==STRATEGY_PULLBACK_CONTINUATION && ctx.trendStrength>0.55) qMult*=1.06;
+      if(result.winningStrategy==STRATEGY_NONE) qMult*=0.55;
+      qMult*=regimeMult*trendMult*spreadMult*chopMult*qualityMult;
+      double dd=0.0; double eq=AccountInfoDouble(ACCOUNT_EQUITY); double bal=AccountInfoDouble(ACCOUNT_BALANCE); if(bal>0.0) dd=MathMax(0.0,(bal-eq)/bal);
+      if(dd>0.05) qMult*=0.75; if(dd>0.10) qMult*=0.65; if(dd>0.15) qMult*=0.45;
+      decision.riskPercent=MathHelpers::Clamp(decision.riskPercent*qMult,0.03,m_riskPerTrade);
+      decision.reason=StringFormat("risk_scaled rr=%.2f qMult=%.2f regime=%.2f trend=%.2f spread=%.2f chop=%.2f",rr,qMult,regimeMult,trendMult,spreadMult,chopMult);
 
       double equity = AccountInfoDouble(ACCOUNT_EQUITY);
       double balance = AccountInfoDouble(ACCOUNT_BALANCE);
