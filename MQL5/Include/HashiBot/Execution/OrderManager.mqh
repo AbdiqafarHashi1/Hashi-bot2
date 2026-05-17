@@ -66,8 +66,24 @@ public:
    bool SubmitDryRun(const TradePlan &plan,const RiskDecision &risk,const string inSymbol,TradeState &state)
      {
       if(!m_initialized) Init(true);
+      if(!m_dryRun)
+        { m_lastAction="dryrun_disabled"; return false; }
+      if(inSymbol=="")
+        { m_lastAction="invalid_trade_snapshot"; return false; }
+      if(plan.direction!=TRADE_DIR_LONG && plan.direction!=TRADE_DIR_SHORT)
+        { m_lastAction="invalid_direction"; return false; }
+      if(risk.approvedLots<=0.0)
+        { m_lastAction="invalid_volume"; return false; }
+      if(plan.entryPrice<=0.0 || plan.stopLoss<=0.0 || plan.takeProfit1<=0.0 || plan.takeProfit2<=0.0)
+        { m_lastAction="invalid_prices"; return false; }
       m_lifecycle.CreateSubmittedState(plan, risk, inSymbol, state);
+      if(state.ticket<=0)
+        { m_lastAction="lifecycle_id_failed"; return false; }
+      if(state.direction!=TRADE_DIR_LONG && state.direction!=TRADE_DIR_SHORT)
+        { m_lastAction="invalid_direction"; return false; }
       m_lifecycle.MarkFilledDryRun(state);
+      if(state.lifecycle!=TRADE_STATE_FILLED)
+        { m_lastAction="invalid_trade_state"; return false; }
       m_lastAction = "dryrun_lifecycle_created";
       Print(StringFormat("[DRYRUN_CREATE] ok=true reason=created symbol=%s strategy=%d dir=%d lots=%.2f", inSymbol, (int)plan.strategy, (int)plan.direction, risk.approvedLots));
       m_lastAction = m_lifecycle.Describe(state);
@@ -109,8 +125,9 @@ public:
       Print(StringFormat("[SUBMIT_GATE] mode=%d dryrunAllowed=%s brokerAllowed=%s reason=%s", (int)execMode, (dryrunMode?"true":"false"), (brokerAllowed?"true":"false"), gate));
       if(dryrunMode)
         {
-         reason="submitted_dryrun";
-         return SubmitDryRun(plan, risk, ctx.symbol, state);
+         bool ok=SubmitDryRun(plan, risk, ctx.symbol, state);
+         reason=(ok?"submitted_dryrun":m_lastAction);
+         return ok;
         }
       if(!brokerAllowed)
         { reason = gate; m_lastAction = gate; return false; }

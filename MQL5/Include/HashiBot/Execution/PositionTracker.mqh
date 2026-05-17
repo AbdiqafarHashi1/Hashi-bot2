@@ -36,10 +36,28 @@ public:
       return false;
      }
 
-   bool RegisterDryRunTrade(const TradeState &state)
+   bool RegisterDryRunTrade(const TradeState &state,string &reason)
      {
+      reason = "ok";
+      if(state.ticket <= 0)
+        { reason = "lifecycle_id_failed"; return false; }
+      if(state.symbol == "")
+        { reason = "invalid_trade_snapshot"; return false; }
+      if(state.direction != TRADE_DIR_LONG && state.direction != TRADE_DIR_SHORT)
+        { reason = "invalid_direction"; return false; }
+      if(state.approvedLots <= 0.0)
+        { reason = "invalid_volume"; return false; }
+      if(state.entryPrice <= 0.0 || state.stopLoss <= 0.0 || state.takeProfit1 <= 0.0 || state.takeProfit2 <= 0.0)
+        { reason = "invalid_prices"; return false; }
+      if(state.lifecycle != TRADE_STATE_SUBMITTED && state.lifecycle != TRADE_STATE_FILLED && state.lifecycle != TRADE_STATE_TRAILING && state.lifecycle != TRADE_STATE_BREAKEVEN)
+        { reason = "invalid_trade_state"; return false; }
+      for(int i=0;i<m_count;i++)
+        {
+         if(m_active[i].ticket == state.ticket || (m_active[i].symbol == state.symbol && !m_active[i].closed))
+           { reason = "duplicate_trade"; return false; }
+        }
       if(m_count >= HASHIBOT_MAX_ACTIVE_TRADES)
-         return false;
+        { reason = "registry_insert_failed"; return false; }
       m_active[m_count] = state;
       m_count++;
       return true;

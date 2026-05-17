@@ -281,10 +281,13 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      {
       string execReason="";
       bool submitted=false; for(int r=0;r<=maxRetryCount;r++){ submitted=g_order.Submit(arb.plan, risk, ctx, executionMode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, magicNumber, maxSlippagePoints, orderCommentPrefix, tstate, execReason); if(submitted) break; if(r<maxRetryCount){ Print("[RETRY][PropFirmEA] sym=",symbol," op=submit attempt=",(r+1)," reason=",execReason); Sleep(retryDelaySeconds*1000); } else Print("[RETRY][PropFirmEA] sym=",symbol," op=submit exhausted reason=",execReason); }
-      if(submitted && g_tracker.RegisterDryRunTrade(tstate))
+      string lifecycleReason="not_attempted";
+      if(submitted && g_tracker.RegisterDryRunTrade(tstate, lifecycleReason))
         { g_tradesToday++; g_barsSinceEntry=0; g_diagDryRunSubmits++; Print(StringFormat("[LIFECYCLE][PropFirmEA] sym=%s submitted ticket=%I64d lots=%.2f", symbol,tstate.ticket,tstate.approvedLots)); Print("[PROP_APPROVED] sym=",symbol," candidate/risk/portfolio passed"); g_propApprovals++; if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_propSubTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_propSubPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_propSubCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_propSubExpansion++; }
       else if(!submitted)
         { g_order.MarkBlocked(arb.plan, risk, symbol, tstate, execReason); g_lastCloseTime=TimeCurrent(); }
+      else
+        { g_order.MarkBlocked(arb.plan, risk, symbol, tstate, lifecycleReason); g_lastCloseTime=TimeCurrent(); }
      }
    else
      {
