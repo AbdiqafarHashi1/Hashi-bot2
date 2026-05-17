@@ -669,7 +669,6 @@ bool RunDeterministicExecutionSelfTest()
    plan.stopLoss=plan.entryPrice-(150.0*pad);
    plan.takeProfit1=plan.entryPrice+(150.0*pad);
    plan.takeProfit2=plan.entryPrice+(300.0*pad);
-   plan.takeProfit=plan.takeProfit1;
    plan.confidence=0.90;
 
    string vReason="";
