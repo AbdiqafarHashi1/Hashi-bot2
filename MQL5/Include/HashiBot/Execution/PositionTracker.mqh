@@ -50,7 +50,15 @@ public:
       if(state.entryPrice <= 0.0 || state.stopLoss <= 0.0 || state.takeProfit1 <= 0.0 || state.takeProfit2 <= 0.0)
         { reason = "invalid_prices"; return false; }
       if(state.lifecycle != TRADE_STATE_SUBMITTED && state.lifecycle != TRADE_STATE_FILLED && state.lifecycle != TRADE_STATE_TRAILING && state.lifecycle != TRADE_STATE_BREAKEVEN)
-        { reason = "invalid_trade_state"; return false; }
+        {
+         reason = StringFormat("invalid_trade_state source=PositionTracker::RegisterDryRunTrade context=registry actual=%d expected=[%d,%d,%d,%d]",
+                               (int)state.lifecycle,
+                               (int)TRADE_STATE_SUBMITTED,
+                               (int)TRADE_STATE_FILLED,
+                               (int)TRADE_STATE_TRAILING,
+                               (int)TRADE_STATE_BREAKEVEN);
+         return false;
+        }
       for(int i=0;i<m_count;i++)
         {
          if(m_active[i].ticket == state.ticket || (m_active[i].symbol == state.symbol && !m_active[i].closed))

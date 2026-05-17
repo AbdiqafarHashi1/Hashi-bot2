@@ -16,6 +16,9 @@
 #define HASHIBOT_MAX_SCAN_SYMBOLS 12
 input ENUM_TIMEFRAMES contextTimeframe = PERIOD_M5;
 input bool enableDryRunSelfCheck = true;
+input bool enableDeterministicExecutionSelfTest = false;
+input string selfTestSymbol = "EURUSD";
+input bool selfTestForceOnceOnInit = true;
 input bool enableVerboseLogs = false;
 input bool logOnlyOnNewBar = true;
 input string scannerSymbols = "EURUSD,GBPUSD,USDJPY,XAUUSD";
@@ -105,6 +108,7 @@ long g_winTrend=0,g_winPullback=0,g_winCompression=0,g_winExpansion=0,g_winMicro
 long g_scaleEvaluated=0,g_scaleAccepted=0,g_scaleRejected=0,g_scaleSubmitted=0;
 long g_pipeWinnerSel[5],g_pipePlanOk[5],g_pipePlanRej[5],g_pipeRiskOk[5],g_pipeRiskRej[5],g_pipePortOk[5],g_pipePortRej[5],g_pipeSubmitOk[5],g_pipeSubmitRej[5],g_pipeLifecycleOk[5],g_pipeLifecycleRej[5];
 long g_diagNoValidWinner=0,g_diagInvalidBeforeArb[5],g_diagValidDirCandidates[5],g_diagAmbiguousDirRejects[5],g_diagWinnerValidDir[5],g_diagWinnerBlockedInvalidPlan[5];
+bool g_selfTestExecuted=false;
 
 
 string DirName(TradeDirection d){ if(d==TRADE_DIR_LONG) return "LONG"; if(d==TRADE_DIR_SHORT) return "SHORT"; return "NONE"; }
@@ -603,6 +607,9 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    if(ShouldLog(isNewBar)) Print(StringFormat("[SCALE] evaluated sym=%s entries=%d/%d dir=%s score=%.2f totalRisk=%.2f reason=%s",symbol,existingEntries,maxPersonalEntriesPerSymbol,DirName(existingDir),chosenScore,existingRisk,scaleReason));
    if(scaleOK && ShouldLog(isNewBar)) Print("[SCALE] accepted sym=",symbol," reason=",scaleReason," lotMultiplier=",DoubleToString(scaleInLotMultiplier,2)," (risk-engine lots unchanged)");
    if(chosenScore < activeMinScore){ if(ShouldLog(isNewBar)) Print("[REJECT][PersonalEA] sym=",symbol," reason=score_below_threshold"); }
+   Print(StringFormat("[STATE_AUDIT] context=pre_submit mode=%d symbol=%s strategy=%s dir=%s state=%d lifecycleState=%d tradeState=%d ticket=%I64d orderId=%I64d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f lots=%.2f hasPlan=%s hasRisk=%s",
+                      (int)executionMode,symbol,StrategyName(chosenPlan.strategy),DirName(chosenPlan.direction),(int)tstate.lifecycle,(int)tstate.lifecycle,(int)tstate.lifecycle,tstate.ticket,tstate.ticket,chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,risk.approvedLots,(validPlan?"true":"false"),(risk.approved?"true":"false")));
+
    if(risk.approved && validPlan && allowed && portfolioOK && scaleOK && chosenScore >= activeMinScore && (!scalperMode || candidateGradeOK || chosenFromFallback))
      {
       string execReason="";
@@ -622,7 +629,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      }
    else
      {
-      string breason=(!validPlan?"invalid_plan":(!risk.approved?"risk_not_approved":(!portfolioOK?"portfolio_not_approved":(!allowed?guard:(!scaleOK?scaleReason:"invalid_trade_state"))))); g_pipeSubmitRej[sb]++; if(validPlan && risk.approved && portfolioOK && allowed && !scaleOK){} else g_pipeLifecycleRej[sb]++; Print("[PIPE] dryrun_submit ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=pre_submit line=620",breason)); Print("[LIFECYCLE_CREATE] ok=false reason=",breason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, breason); Print("[SCALE] rejected reason=",breason," sym=",symbol); g_lastCloseTime=TimeCurrent();
+      string breason=(!validPlan?"invalid_plan":(!risk.approved?"risk_not_approved":(!portfolioOK?"portfolio_not_approved":(!allowed?guard:(!scaleOK?scaleReason:(chosenScore < activeMinScore?"score_below_threshold":((scalperMode && !candidateGradeOK && !chosenFromFallback)?"scalper_grade_not_approved":"pre_submit_gate_rejected"))))))); g_pipeSubmitRej[sb]++; if(validPlan && risk.approved && portfolioOK && allowed && !scaleOK){} else g_pipeLifecycleRej[sb]++; Print("[PIPE] dryrun_submit ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=pre_submit line=620",breason)); Print("[LIFECYCLE_CREATE] ok=false reason=",breason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, breason); Print("[SCALE] rejected reason=",breason," sym=",symbol); g_lastCloseTime=TimeCurrent();
      }
    if(arb.hasWinner){ if(chosenFromFallback) g_winMicro++; else if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_winTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_winPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_winCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_winExpansion++; }
    if(ShouldLog(isNewBar))
@@ -634,8 +641,67 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      }
   }
 
+
+bool RunDeterministicExecutionSelfTest()
+  {
+   if(g_selfTestExecuted)
+      return true;
+   g_selfTestExecuted=true;
+
+   if(!enableDeterministicExecutionSelfTest)
+      return false;
+   if(executionMode!=EXEC_MODE_DRYRUN)
+     { Print("[SELFTEST] skip reason=not_dryrun mode=",(int)executionMode); return false; }
+   if(allowLiveExecution)
+     { Print("[SELFTEST] skip reason=live_enabled"); return false; }
+
+   string sym=(selfTestSymbol==""?_Symbol:selfTestSymbol);
+   MarketContext ctx;
+   if(!g_ctxBuilder.Build(sym, contextTimeframe, ctx))
+     { Print("[SELFTEST] fail reason=context_build_failed symbol=",sym); return false; }
+
+   TradePlan plan; plan.Reset();
+   plan.strategy=STRATEGY_EXPANSION_MOMENTUM;
+   plan.direction=TRADE_DIR_LONG;
+   plan.grade=SIGNAL_GRADE_B;
+   double pad=MathMax(10.0*ctx.point, ctx.tickSize);
+   plan.entryPrice=(ctx.ask>0.0?ctx.ask:ctx.currentClose);
+   plan.stopLoss=plan.entryPrice-(150.0*pad);
+   plan.takeProfit1=plan.entryPrice+(150.0*pad);
+   plan.takeProfit2=plan.entryPrice+(300.0*pad);
+   plan.takeProfit=plan.takeProfit1;
+   plan.confidence=0.90;
+
+   string vReason="";
+   bool validPlan=g_order.ValidateTradePlan(plan, ctx, vReason);
+   ArbitrationResult riskArb; BuildRiskArbFromPlan(plan, 0.95, SIGNAL_GRADE_B, riskArb);
+   RiskDecision risk; g_risk.Assess(riskArb, ctx, risk);
+   int total=0,groupCount=0,dirCount=0; string pReason="";
+   bool portfolioOK=PortfolioGuardrail(sym, plan.direction, plan.strategy, pReason, total, groupCount, dirCount);
+   string guard=""; bool runtimeOK=RuntimeRiskGuard(sym, cooldownMinutes, minBarsBetweenEntries, guard);
+   int entries=0; TradeDirection basketDir=TRADE_DIR_NONE; double basketRisk=0.0,basketAvg=0.0; datetime newest=0; string scaleReason="";
+   bool scaleOK=CanScaleInPersonal(sym, plan, ctx, 0.95, g_barsSinceEntry, scaleReason, entries, basketDir, basketRisk, basketAvg, newest);
+
+   Print(StringFormat("[SELFTEST_PIPE] symbol=%s plan=%s reason=%s risk=%s riskReason=%s lots=%.2f portfolio=%s pReason=%s runtime=%s runtimeReason=%s scale=%s scaleReason=%s",
+                     sym,(validPlan?"true":"false"),vReason,(risk.approved?"true":"false"),risk.reason,risk.approvedLots,(portfolioOK?"true":"false"),pReason,(runtimeOK?"true":"false"),guard,(scaleOK?"true":"false"),scaleReason));
+
+   if(!(validPlan && risk.approved && portfolioOK && runtimeOK && scaleOK))
+     { Print("[SELFTEST] fail reason=gate_blocked"); return false; }
+
+   TradeState tstate; string execReason="";
+   bool submitted=g_order.Submit(plan, risk, ctx, executionMode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, magicNumber, maxSlippagePoints, orderCommentPrefix, tstate, execReason);
+   Print(StringFormat("[SELFTEST_SUBMIT] ok=%s reason=%s ticket=%I64d lifecycle=%d lots=%.2f",(submitted?"true":"false"),execReason,tstate.ticket,(int)tstate.lifecycle,tstate.approvedLots));
+   if(!submitted) return false;
+
+   string lifecycleReason="";
+   bool reg=g_tracker.RegisterDryRunTrade(tstate, lifecycleReason);
+   Print(StringFormat("[SELFTEST_LIFECYCLE] ok=%s reason=%s ticket=%I64d lifecycle=%d active=%d",(reg?"true":"false"),lifecycleReason,tstate.ticket,(int)tstate.lifecycle,g_tracker.CountActiveTrades()));
+   return reg;
+  }
+
 int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_risk.Init(PROFILE_PERSONAL); g_order.Init(true); g_tracker.Init(); g_lifecycle.Init(); g_scanCount=ParseScannerSymbols();
    if(executionMode==EXEC_MODE_LIVE && allowLiveExecution && manualExecutionArmed){ int recovered=g_tracker.SyncFromBroker(magicNumber, orderCommentPrefix); g_lastBrokerSyncTime=TimeCurrent(); Print("[RECOVERY][PersonalEA] recovered=", recovered); } else Print("[RECOVERY][PersonalEA] dryrun_or_unarmed_clean_state");
+   if(selfTestForceOnceOnInit) RunDeterministicExecutionSelfTest();
    return INIT_SUCCEEDED; }
 void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; datetime bar=iTime(_Symbol, contextTimeframe, 0); bool isNewBar=(bar!=0 && bar!=g_lastBarTime); if(isNewBar) g_lastBarTime=bar; if(!enableMultiSymbolScanner){ ProcessSymbol(_Symbol, isNewBar); return; } for(int i=0;i<g_scanCount;i++){ datetime sb=iTime(g_scan[i], contextTimeframe, 0); bool symNew=(sb!=0 && sb!=g_lastSymBar[i]); if(symNew) g_lastSymBar[i]=sb; if(ShouldLog(symNew)) ProcessSymbol(g_scan[i], symNew); }}
 void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
