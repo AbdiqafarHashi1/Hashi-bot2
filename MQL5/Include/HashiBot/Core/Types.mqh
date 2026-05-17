@@ -317,6 +317,8 @@ struct MarketContext
    double            roc;                               // ROC placeholder
    double            choppiness;                        // Choppiness placeholder
    double            marketQuality;                     // Market quality placeholder
+   double            trendStrength;                     // Trend strength proxy [0..1]
+   double            regimeScore;                       // Regime score/confidence proxy [0..1]
 
    bool              htfAligned;                        // HTF directional alignment
    bool              ltfAligned;                        // LTF directional alignment
@@ -371,6 +373,8 @@ struct MarketContext
       roc = 0.0;
       choppiness = 0.0;
       marketQuality = 0.0;
+      trendStrength = 0.0;
+      regimeScore = 0.0;
 
       htfAligned = false;
       ltfAligned = false;

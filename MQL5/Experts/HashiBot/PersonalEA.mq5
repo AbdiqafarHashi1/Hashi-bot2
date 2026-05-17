@@ -776,6 +776,9 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    int activeMinBars=(scalperMode?scalperMinBarsBetweenEntries:minBarsBetweenEntries);
 
    RegimeState regime; g_regime.Detect(ctx, regime); g_diagRegimeAccepted++; g_symRegimeScore[symIdx]=regime.confidence;
+   ctx.regimeScore=regime.confidence;
+   if(regime.trendUp || regime.trendDown)
+      ctx.trendStrength=MathMax(ctx.trendStrength,regime.confidence);
    if(g_symCooldown[symIdx]>0){ Print(StringFormat("[NO_TRADE_DECISION] reason=symbol_cooldown bestStrategy=none bestScore=0.00 dominantRegime=%d rrAfterSpread=0.00",(int)regime.regime)); return; }
    if(regime.confidence < activeMinRegime){ if(ShouldLog(isNewBar)) g_r_regime_conf++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=regime_conf_too_low"); return; }
    if(ctx.marketQuality < activeMinMarketQuality){ if(ShouldLog(isNewBar)) g_r_market_quality++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=market_quality_too_low"); return; }
@@ -1133,11 +1136,11 @@ void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    long winsAll2=g_winTrend+g_winPullback+g_winCompression+g_winExpansion+g_winMicro;
    long lossesAll2=g_lossTrend+g_lossPullback+g_lossCompression+g_lossExpansion+g_lossMicro;
    double winRateAll=(winsAll2+lossesAll2>0?(double)winsAll2/(double)(winsAll2+lossesAll2):0.0);
-   double avgWin=(winsAll2>0?MathMax(0.0,sumRAll)/(double)winsAll2:0.0), avgLoss=(lossesAll2>0?MathAbs(MathMin(0.0,sumRAll))/(double)lossesAll2:0.0);
-   double payoff=(avgLoss>0?avgWin/avgLoss:0.0); double reqWr=(payoff>0?1.0/(1.0+payoff):1.0);
-   string pgAction=((avgLoss>avgWin && winRateAll<reqWr)?"blockWeakFlow":((avgLoss>avgWin)?"defense":"normal"));
-   Print(StringFormat("[PAYOFF_GUARD] active=%s avgWin=%.2f avgLoss=%.2f winRate=%.2f requiredWinRate=%.2f action=%s reason=%s",(pgAction=="normal"?"false":"true"),avgWin,avgLoss,winRateAll,reqWr,pgAction,(pgAction=="normal"?"payoff_ok":"negative_payoff_behavior")));
-   Print(StringFormat("[ACCEPTANCE_METRICS] totalCandidates=%d acceptedTrades=%d rejectedTrades=%d acceptRate=%.2f avgAcceptedRR=%.2f avgRejectedRR=%.2f avgWin=%.2f avgLoss=%.2f winRate=%.2f payoffRatio=%.2f expectancy=%.2f pf=%.2f maxDD=%.2f reason=%s",g_acceptCandidates,g_acceptTrades,g_rejectTrades,(g_acceptCandidates>0?(double)g_acceptTrades/(double)g_acceptCandidates:0.0),(g_acceptTrades>0?g_acceptRRSum/(double)g_acceptTrades:0.0),(g_rejectTrades>0?g_rejectRRSum/(double)g_rejectTrades:0.0),avgWin,avgLoss,winRateAll,payoff,avgRAll,(lossesAll2>0?(double)winsAll2/(double)lossesAll2:(winsAll2>0?2.0:0.0)),(g_peakEquity>0?100.0*(g_peakEquity-AccountInfoDouble(ACCOUNT_EQUITY))/g_peakEquity:0.0),pgAction));
+   double avgWinAll=(winsAll2>0?MathMax(0.0,sumRAll)/(double)winsAll2:0.0), avgLossAll=(lossesAll2>0?MathAbs(MathMin(0.0,sumRAll))/(double)lossesAll2:0.0);
+   double payoff=(avgLossAll>0?avgWinAll/avgLossAll:0.0); double reqWr=(payoff>0?1.0/(1.0+payoff):1.0);
+   string pgAction=((avgLossAll>avgWinAll && winRateAll<reqWr)?"blockWeakFlow":((avgLossAll>avgWinAll)?"defense":"normal"));
+   Print(StringFormat("[PAYOFF_GUARD] active=%s avgWin=%.2f avgLoss=%.2f winRate=%.2f requiredWinRate=%.2f action=%s reason=%s",(pgAction=="normal"?"false":"true"),avgWinAll,avgLossAll,winRateAll,reqWr,pgAction,(pgAction=="normal"?"payoff_ok":"negative_payoff_behavior")));
+   Print(StringFormat("[ACCEPTANCE_METRICS] totalCandidates=%d acceptedTrades=%d rejectedTrades=%d acceptRate=%.2f avgAcceptedRR=%.2f avgRejectedRR=%.2f avgWin=%.2f avgLoss=%.2f winRate=%.2f payoffRatio=%.2f expectancy=%.2f pf=%.2f maxDD=%.2f reason=%s",g_acceptCandidates,g_acceptTrades,g_rejectTrades,(g_acceptCandidates>0?(double)g_acceptTrades/(double)g_acceptCandidates:0.0),(g_acceptTrades>0?g_acceptRRSum/(double)g_acceptTrades:0.0),(g_rejectTrades>0?g_rejectRRSum/(double)g_rejectTrades:0.0),avgWinAll,avgLossAll,winRateAll,payoff,avgRAll,(lossesAll2>0?(double)winsAll2/(double)lossesAll2:(winsAll2>0?2.0:0.0)),(g_peakEquity>0?100.0*(g_peakEquity-AccountInfoDouble(ACCOUNT_EQUITY))/g_peakEquity:0.0),pgAction));
    for(int ci=0;ci<5;ci++){ long wins=(ci==0?g_winTrend:(ci==1?g_winPullback:(ci==2?g_winCompression:(ci==3?g_winExpansion:g_winMicro)))); long losses=(ci==0?g_lossTrend:(ci==1?g_lossPullback:(ci==2?g_lossCompression:(ci==3?g_lossExpansion:g_lossMicro)))); double sAvgWin=(wins>0?MathMax(0.0,g_sumR[ci])/(double)wins:0.0); double sAvgLoss=(losses>0?MathAbs(MathMin(0.0,g_sumR[ci]))/(double)losses:0.0); double sPay=(sAvgLoss>0?sAvgWin/sAvgLoss:0.0); double sExp=(g_closedCount[ci]>0?g_sumR[ci]/(double)g_closedCount[ci]:0.0); string status=(g_strategyCooldownBars[ci]>0?"blocked":(sExp<0?"penalized":"active")); Print(StringFormat("[STRATEGY_CONTRIBUTION] strategy=%s selected=%d wins=%d losses=%d winRate=%.2f avgWin=%.2f avgLoss=%.2f payoffRatio=%.2f expectancy=%.2f netPnL=%.2f maxDD=%.2f status=%s",(ci==0?"trend":(ci==1?"pullback":(ci==2?"compression":(ci==3?"expansion":"micro")))),g_pipeWinnerSel[ci],wins,losses,(wins+losses>0?(double)wins/(double)(wins+losses):0.0),sAvgWin,sAvgLoss,sPay,sExp,g_netPnl[ci],MathMax(0.0,-g_netPnl[ci]),status)); }
 
 }
