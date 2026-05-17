@@ -81,7 +81,7 @@ private:
 
       double riskDist = MathAbs(c.plan.entryPrice - c.plan.stopLoss);
       if(riskDist <= 0.0) { reason = "invalid_stop_distance"; return false; }
-      double minDist = MathMax(2.0 * c.point, 1e-6);
+      double minDist = MathMax(2.0 * _Point, 1e-6);
       if(riskDist < minDist) { reason = "stop_distance_too_small"; return false; }
 
       if(c.plan.direction == TRADE_DIR_LONG)
