@@ -141,6 +141,9 @@ int g_barsSinceEntry=9999;
 int g_effectiveMaxActiveTrades=0,g_effectiveMaxTradesPerDay=0,g_effectiveCooldownMinutes=0,g_effectiveMinBarsBetweenEntries=0;
 double g_effectiveRiskPerTradePct=0.0,g_effectiveMaxOpenRiskPct=0.0,g_effectiveMaxDailyLossPct=0.0,g_effectiveLotCap=0.0;
 bool g_effectiveCompounding=false;
+bool g_enablePersonalMultiSymbolScannerEffective=false;
+bool g_enableMultiSymbolScannerEffective=false;
+string g_scannerSymbolsEffective="";
 long g_diagBarsProcessed=0,g_diagCandidates=0,g_diagRegimeAccepted=0,g_diagRegimeRejected=0,g_diagWinners=0,g_diagDryRunSubmits=0,g_diagRiskApproved=0,g_diagRiskRejected=0,g_diagPortApproved=0,g_diagPortRejected=0;
 long g_diagRiskInputValid=0,g_diagRiskInputInvalid=0,g_diagDryRunLifecycleCreated=0;
 long g_diagRiskRejectedNoTradeOrWinner=0,g_diagRiskRejectedInvalidStopDistance=0,g_diagRiskRejectedInvalidTick=0,g_diagRiskRejectedLotBelowMin=0,g_diagRiskRejectedInvalidRiskPct=0,g_diagRiskRejectedOther=0;
@@ -248,7 +251,7 @@ bool ShouldLog(bool isNewBar){ if(enableVerboseLogs) return true; if(logOnlyOnNe
 
 int ParseScannerSymbols()
   {
-   int c=0; string parts[]; int n=StringSplit(scannerSymbols, ',', parts);
+   int c=0; string parts[]; int n=StringSplit(g_scannerSymbolsEffective, ',', parts);
    for(int i=0;i<n && c<HASHIBOT_MAX_SCAN_SYMBOLS;i++)
      {
       string s=parts[i]; StringTrimLeft(s); StringTrimRight(s);
@@ -923,7 +926,10 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
    g_startEquity=AccountInfoDouble(ACCOUNT_EQUITY); if(g_startEquity<=0.0) g_startEquity=AccountInfoDouble(ACCOUNT_BALANCE); g_peakEquity=g_startEquity;
    g_risk.ConfigurePersonalCaps(g_effectiveRiskPerTradePct,g_effectiveMaxOpenRiskPct,g_effectiveMaxTradesPerDay);
    g_order.Init(false); g_tracker.Init(); g_lifecycle.Init();
-   if(enablePersonalMultiSymbolScanner){ scannerSymbols=personalScannerSymbols; enableMultiSymbolScanner=true; }
+   g_enablePersonalMultiSymbolScannerEffective=enablePersonalMultiSymbolScanner;
+   g_enableMultiSymbolScannerEffective=enableMultiSymbolScanner;
+   g_scannerSymbolsEffective=scannerSymbols;
+   if(g_enablePersonalMultiSymbolScannerEffective){ g_scannerSymbolsEffective=personalScannerSymbols; g_enableMultiSymbolScannerEffective=true; }
    g_scanCount=ParseScannerSymbols();
    g_lifecycleIntrabarLimited=(MQLInfoInteger(MQL_TESTER)>0 && MQLInfoInteger(MQL_OPTIMIZATION)==0 && !MQLInfoInteger(MQL_FORWARD));
    string modeLabel=(executionMode==EXEC_MODE_LOG_ONLY?"log_only":(executionMode==EXEC_MODE_DRYRUN?"dryrun":(executionMode==EXEC_MODE_TESTER_SIM?"tester_sim":"live_or_demo")));
@@ -941,7 +947,7 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
       RunDeterministicExecutionSelfTest();
      }
    return INIT_SUCCEEDED; }
-void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; datetime bar=iTime(_Symbol, contextTimeframe, 0); bool isNewBar=(bar!=0 && bar!=g_lastBarTime); if(isNewBar) g_lastBarTime=bar; if(!enableMultiSymbolScanner){ ProcessSymbol(_Symbol, isNewBar); return; } for(int i=0;i<g_scanCount;i++){ datetime sb=iTime(g_scan[i], contextTimeframe, 0); bool symNew=(sb!=0 && sb!=g_lastSymBar[i]); if(symNew) g_lastSymBar[i]=sb; if(ShouldLog(symNew)) ProcessSymbol(g_scan[i], symNew); }}
+void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; datetime bar=iTime(_Symbol, contextTimeframe, 0); bool isNewBar=(bar!=0 && bar!=g_lastBarTime); if(isNewBar) g_lastBarTime=bar; if(!g_enableMultiSymbolScannerEffective){ ProcessSymbol(_Symbol, isNewBar); return; } for(int i=0;i<g_scanCount;i++){ datetime sb=iTime(g_scan[i], contextTimeframe, 0); bool symNew=(sb!=0 && sb!=g_lastSymBar[i]); if(symNew) g_lastSymBar[i]=sb; if(ShouldLog(symNew)) ProcessSymbol(g_scan[i], symNew); }}
 void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    Print(StringFormat("[CALIB_SUMMARY][PersonalEA] bars=%d candidates=%d regime_ok=%d regime_rej=%d winners=%d dryrun=%d risk_ok=%d risk_rej=%d port_ok=%d port_rej=%d",g_diagBarsProcessed,g_diagCandidates,g_diagRegimeAccepted,g_diagRegimeRejected,g_diagWinners,g_diagDryRunSubmits,g_diagRiskApproved,g_diagRiskRejected,g_diagPortApproved,g_diagPortRejected));
    Print(StringFormat("[CALIB_REJECTS][PersonalEA] regime_conf=%d market_q=%d score=%d chop=%d atr=%d spread=%d cooldown=%d minbars=%d portfolio=%d risk=%d incomplete=%d no_candidate=%d fallbackEval=%d fallbackOk=%d fallbackRej=%d scalperEval=%d scalperOk=%d scalperFbOk=%d scalperFbRej=%d symbols=%d skipped=%d lastFbRej=%s",g_r_regime_conf,g_r_market_quality,g_r_score,g_r_chop,g_r_atr,g_r_spread,g_r_cooldown,g_r_minbars,g_r_portfolio,g_r_risk,g_r_incomplete,g_r_no_candidate,g_fallbackEval,g_fallbackAccepted,g_fallbackRejected,g_scalperCandidatesEvaluated,g_scalperCandidatesAccepted,g_scalperFallbackAccepted,g_scalperFallbackRejected,g_symbolsScanned,g_symbolsSkipped,g_fallbackLastReject));
