@@ -14,6 +14,11 @@
 #include <Trade/Trade.mqh>
 
 #define HASHIBOT_MAX_SCAN_SYMBOLS 12
+enum PersonalCalibrationProfile
+  {
+   PERSONAL_CALIBRATION_SAFE=0,
+   PERSONAL_AGGRESSIVE_COMPOUND=1
+  };
 input ENUM_TIMEFRAMES contextTimeframe = PERIOD_M5;
 input bool enableDryRunSelfCheck = true;
 input bool enableDeterministicExecutionSelfTest = false;
@@ -45,7 +50,7 @@ input bool enableRuntimeKillSwitch = true;
 input int maxConsecutiveRuntimeErrors = 5;
 input bool killSwitchBlocksNewTrades = true;
 input bool enablePortfolioGuardrails = true;
-input int maxActiveTradesTotal = 8;
+input int maxActiveTradesTotal = 10;
 input int maxTradesPerSymbolGroup = 4;
 input int maxSameDirectionExposure = 5;
 input double minCandidateScore = 0.60;
@@ -53,7 +58,13 @@ input double minRegimeConfidence = 0.33;
 input double minMarketQuality = 0.3;
 input double maxChoppiness = 68.0;
 input double minAtrPercent = 0.00015;
-input double maxSpreadPoints = 85.0;
+input double maxSpreadPoints = 45.0;
+input bool enableSessionFilter = true;
+input int sessionStartHourUtc = 6;
+input int sessionEndHourUtc = 20;
+input double maxExhaustionBodyAtr = 1.8;
+input int swingLookbackBars = 20;
+input double minSwingBufferAtr = 0.30;
 input int cooldownMinutes = 5;
 input int minBarsBetweenEntries = 1;
 input bool enableOpportunityFallback = true;
@@ -69,13 +80,27 @@ input double scaleInMaxTotalSymbolRiskPct = 2.0;
 input double scaleInLotMultiplier = 1.0;
 input bool scaleInOnlySameDirection = true;
 input bool personalCompoundingMode = true;
+input PersonalCalibrationProfile personalProfile = PERSONAL_AGGRESSIVE_COMPOUND;
+input int personalMaxTradesPerDay = 18;
+input int personalMaxActiveTrades = 12;
+input double personalRiskPerTradePct = 1.10;
+input double personalMaxDailyLossPct = 4.50;
+input int personalMaxConsecutiveLosses = 7;
+input bool personalEnableCompounding = true;
+input double personalEffectiveLeverageCap = 30.0;
+input double testerSimMaxLotsCap = 0.80;
+input double testerSimRiskPerTradePct = 0.90;
+input double testerSimMaxOpenRiskPct = 4.50;
+input int testerSimMaxTradesPerDay = 18;
+input double maxDailyLossPct = 4.50;
+input int maxConsecutiveLosses = 7;
 input bool enableMicroScalperMode = true;
 input int microLookbackBars = 6;
 input double microMinBodyAtr = 0.10;
 input double microBreakoutBufferAtr = 0.02;
-input double microStopAtr = 0.8;
-input double microTp1R = 0.6;
-input double microTp2R = 1.2;
+input double microStopAtr = 0.65;
+input double microTp1R = 0.9;
+input double microTp2R = 1.6;
 input bool microAllowCounterRegime = true;
 input int microCooldownBars = 0;
 input double microMaxSpreadPoints = 85.0;
@@ -96,6 +121,9 @@ datetime g_lastBarTime=0; int g_heartbeatTick=0; int g_tradesToday=0; datetime g
 string g_scan[HASHIBOT_MAX_SCAN_SYMBOLS]; datetime g_lastSymBar[HASHIBOT_MAX_SCAN_SYMBOLS]; int g_scanCount=0;
 datetime g_lastCtxBuildTime=0; datetime g_lastArbTime=0; datetime g_lastRiskOkTime=0; datetime g_lastBrokerSyncTime=0; int g_consecutiveRuntimeErrors=0; string g_lastErrorReason="none"; bool g_killSwitchActive=false;
 int g_barsSinceEntry=9999;
+int g_effectiveMaxActiveTrades=0,g_effectiveMaxTradesPerDay=0,g_effectiveCooldownMinutes=0,g_effectiveMinBarsBetweenEntries=0;
+double g_effectiveRiskPerTradePct=0.0,g_effectiveMaxOpenRiskPct=0.0,g_effectiveMaxDailyLossPct=0.0,g_effectiveLotCap=0.0;
+bool g_effectiveCompounding=false;
 long g_diagBarsProcessed=0,g_diagCandidates=0,g_diagRegimeAccepted=0,g_diagRegimeRejected=0,g_diagWinners=0,g_diagDryRunSubmits=0,g_diagRiskApproved=0,g_diagRiskRejected=0,g_diagPortApproved=0,g_diagPortRejected=0;
 long g_diagRiskInputValid=0,g_diagRiskInputInvalid=0,g_diagDryRunLifecycleCreated=0;
 long g_diagRiskRejectedNoTradeOrWinner=0,g_diagRiskRejectedInvalidStopDistance=0,g_diagRiskRejectedInvalidTick=0,g_diagRiskRejectedLotBelowMin=0,g_diagRiskRejectedInvalidRiskPct=0,g_diagRiskRejectedOther=0;
@@ -105,6 +133,9 @@ long g_scalperCandidatesEvaluated=0,g_scalperCandidatesAccepted=0,g_scalperFallb
 long g_trendAccepted=0,g_trendRejected=0,g_pullbackAccepted=0,g_pullbackRejected=0,g_compressionAccepted=0,g_compressionRejected=0,g_expansionAccepted=0,g_expansionRejected=0;
 long g_microEvaluated=0,g_microAccepted=0,g_microRejected=0,g_microSubmitted=0;
 long g_winTrend=0,g_winPullback=0,g_winCompression=0,g_winExpansion=0,g_winMicro=0;
+long g_lossTrend=0,g_lossPullback=0,g_lossCompression=0,g_lossExpansion=0,g_lossMicro=0;
+double g_netPnl[5],g_sumR[5]; long g_closedCount[5],g_rejectTopReason[5][8];
+int g_consecutiveLosses=0; double g_dayStartEquity=0.0;
 long g_scaleEvaluated=0,g_scaleAccepted=0,g_scaleRejected=0,g_scaleSubmitted=0;
 long g_pipeWinnerSel[5],g_pipePlanOk[5],g_pipePlanRej[5],g_pipeRiskOk[5],g_pipeRiskRej[5],g_pipePortOk[5],g_pipePortRej[5],g_pipeSubmitOk[5],g_pipeSubmitRej[5],g_pipeLifecycleOk[5],g_pipeLifecycleRej[5];
 long g_diagNoValidWinner=0,g_diagInvalidBeforeArb[5],g_diagValidDirCandidates[5],g_diagAmbiguousDirRejects[5],g_diagWinnerValidDir[5],g_diagWinnerBlockedInvalidPlan[5];
@@ -191,7 +222,7 @@ bool PortfolioGuardrail(const string symbol,const TradeDirection d,const Strateg
    groupCount=CountGroupExposure(group);
    dirCount=CountSameDirectionExposure(d);
    if(!enablePortfolioGuardrails){ reason="off"; return true; }
-   if(total >= maxActiveTradesTotal){ reason="max_active_total"; return false; }
+   if(total >= g_effectiveMaxActiveTrades){ reason="max_active_total"; return false; }
    if(groupCount >= maxTradesPerSymbolGroup){ reason="max_group_exposure"; return false; }
    if(dirCount >= maxSameDirectionExposure){ reason="max_same_direction_usd"; return false; }
    reason="ok"; return true;
@@ -211,7 +242,7 @@ bool CanScaleInPersonal(const string symbol,const TradePlan &plan,const MarketCo
   {
    g_scaleEvaluated++;
    g_tracker.GetSymbolBasketSummary(symbol, entries, basketDir, basketRisk, avgEntry, newestEntry);
-   if(!enablePersonalScaling){ reason="scaling_disabled"; g_scaleRejected++; return false; }
+   if(!enablePersonalScaling || !g_effectiveCompounding){ reason="scaling_disabled"; g_scaleRejected++; return false; }
    if(entries<=0){ reason="base_entry"; g_scaleAccepted++; return true; }
    if(entries>=maxPersonalEntriesPerSymbol){ reason="max_entries_per_symbol"; g_scaleRejected++; return false; }
    if(barsSinceLast<minBarsBetweenScaleIns){ reason="min_bars_between_scale_ins"; g_scaleRejected++; return false; }
@@ -419,6 +450,30 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
    return true;
   }
 
+
+int RejectionReasonBucket(const string reason)
+  {
+   if(reason=="spread_too_high" || reason=="invalid_or_extreme_spread") return 0;
+   if(reason=="choppiness_too_high") return 1;
+   if(reason=="atr_too_low") return 2;
+   if(reason=="score_below_threshold" || reason=="scalper_score_too_low") return 3;
+   if(reason=="portfolio_not_approved" || reason=="max_active_total" || reason=="max_group_exposure") return 4;
+   if(reason=="risk_not_approved" || reason=="normalized_lots_zero") return 5;
+   if(reason=="too_soon_after_last_entry" || reason=="cooldown_active") return 6;
+   return 7;
+  }
+
+bool PassSessionFilter(const datetime t,const string symbol,string &reason)
+  {
+   if(!enableSessionFilter){ reason="session_filter_off"; return true; }
+   MqlDateTime ts; TimeToStruct(t, ts);
+   if(sessionStartHourUtc<=sessionEndHourUtc)
+     { if(ts.hour<sessionStartHourUtc || ts.hour>=sessionEndHourUtc){ reason="session_out_of_window"; return false; } }
+   else
+     { if(ts.hour<sessionStartHourUtc && ts.hour>=sessionEndHourUtc){ reason="session_out_of_window"; return false; } }
+   reason="session_ok"; return true;
+  }
+
 bool RuntimeRiskGuard(const string symbol,const int cooldownMins,const int minBarsReq,string &reason,const string source="normal_scan",const bool bypassDailyCapForDryRunProof=false)
   {
    datetime now=TimeCurrent(); datetime dayKey=StringToTime(TimeToString(now, TIME_DATE));
@@ -430,6 +485,9 @@ bool RuntimeRiskGuard(const string symbol,const int cooldownMins,const int minBa
    if(dayCapReached && !bypassDailyCapForDryRunProof){ reason="max_trades_day_reached"; return false; }
    if(g_lastCloseTime>0 && (now-g_lastCloseTime)<(cooldownMins*60)){ reason="cooldown_active"; return false; }
    if(g_barsSinceEntry < minBarsReq){ reason="too_soon_after_last_entry"; return false; }
+   if(personalMaxConsecutiveLosses>0 && g_consecutiveLosses>=personalMaxConsecutiveLosses){ reason="max_consecutive_losses_reached"; return false; }
+   double eqNow=AccountInfoDouble(ACCOUNT_EQUITY);
+   if(g_dayStartEquity>0.0 && eqNow>0.0){ double ddPct=100.0*(g_dayStartEquity-eqNow)/g_dayStartEquity; if(ddPct>=g_effectiveMaxDailyLossPct){ reason="max_daily_loss_reached"; return false; } }
 
    double eq=AccountInfoDouble(ACCOUNT_EQUITY); if(eq>0.0){ double openRiskPct=100.0*g_tracker.SumOpenRiskAmount()/eq; if(openRiskPct>=g_risk.MaxOpenRiskPercent()){ reason="max_open_risk_reached"; return false; } }
    reason="ok"; return true;
@@ -508,7 +566,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      {
       TradeState active; if(!g_tracker.GetActiveTradeAt(i, active)) continue;
       if(active.symbol!=symbol || active.closed) continue;
-      TradeLifecycleState prev=active.lifecycle; g_lifecycle.UpdateDryRunTrade(active, ctx); g_tracker.UpdateTradeByTicket(active.ticket, active); if(active.closed) g_lastCloseTime=TimeCurrent();
+      TradeLifecycleState prev=active.lifecycle; bool wasClosed=active.closed; g_lifecycle.UpdateDryRunTrade(active, ctx); g_tracker.UpdateTradeByTicket(active.ticket, active); if(active.closed) g_lastCloseTime=TimeCurrent(); if(!wasClosed && active.closed){ int b=StrategyBucket(active.strategy); double pnl=active.realizedR*active.riskAmount; g_netPnl[b]+=pnl; g_sumR[b]+=active.realizedR; g_closedCount[b]++; if(active.realizedR>0){ if(b==0) g_winTrend++; else if(b==1) g_winPullback++; else if(b==2) g_winCompression++; else if(b==3) g_winExpansion++; else g_winMicro++; g_consecutiveLosses=0; } else { if(b==0) g_lossTrend++; else if(b==1) g_lossPullback++; else if(b==2) g_lossCompression++; else if(b==3) g_lossExpansion++; else g_lossMicro++; g_consecutiveLosses++; } }
       if(prev!=active.lifecycle) Print(StringFormat("[LIFECYCLE][PersonalEA] sym=%s ticket=%I64d %d->%d", symbol, active.ticket,(int)prev,(int)active.lifecycle));
       ManageActiveBrokerTrade(symbol, active, ctx);
      }
@@ -588,6 +646,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    RiskDecision risk; g_risk.Assess(riskArb, ctx, risk);
    Print(StringFormat("[RISK_OUT] ok=%s reason=%s rawLots=%.4f normalizedLots=%.4f riskAmount=%.2f",
                       (risk.approved?"true":"false"),risk.reason,risk.rawLots,risk.normalizedLots,risk.riskAmount));
+   if(risk.approved && executionMode==EXEC_MODE_TESTER_SIM && g_effectiveLotCap>0.0 && risk.approvedLots>g_effectiveLotCap) risk.approvedLots=g_effectiveLotCap;
    Print(StringFormat("[PIPE] risk ok=%s reason=%s lots=%.2f risk=%.2f",(risk.approved?"true":"false"),risk.reason,risk.approvedLots,risk.riskAmount));
    if(risk.approved){ g_lastRiskOkTime=TimeCurrent(); g_diagRiskApproved++; g_pipeRiskOk[sb]++; }
    else
@@ -632,7 +691,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      }
    else
      {
-      string breason=(!validPlan?"invalid_plan":(!risk.approved?"risk_not_approved":(!portfolioOK?"portfolio_not_approved":(!allowed?guard:(!scaleOK?scaleReason:(chosenScore < activeMinScore?"score_below_threshold":((scalperMode && !candidateGradeOK && !chosenFromFallback)?"scalper_grade_not_approved":"pre_submit_gate_rejected"))))))); g_pipeSubmitRej[sb]++; if(validPlan && risk.approved && portfolioOK && allowed && !scaleOK){} else g_pipeLifecycleRej[sb]++; Print("[ORDER_RESULT] ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=pre_submit line=620",breason)); Print("[LIFECYCLE_CREATE] ok=false reason=",breason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, breason); Print("[SCALE] rejected reason=",breason," sym=",symbol); g_lastCloseTime=TimeCurrent();
+      string breason=(!validPlan?"invalid_plan":(!risk.approved?"risk_not_approved":(!portfolioOK?"portfolio_not_approved":(!allowed?guard:(!scaleOK?scaleReason:(chosenScore < activeMinScore?"score_below_threshold":((scalperMode && !candidateGradeOK && !chosenFromFallback)?"scalper_grade_not_approved":"pre_submit_gate_rejected"))))))); g_pipeSubmitRej[sb]++; g_rejectTopReason[sb][RejectionReasonBucket(breason)]++; if(validPlan && risk.approved && portfolioOK && allowed && !scaleOK){} else g_pipeLifecycleRej[sb]++; Print("[ORDER_RESULT] ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=pre_submit line=620",breason)); Print("[LIFECYCLE_CREATE] ok=false reason=",breason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, breason); Print("[SCALE] rejected reason=",breason," sym=",symbol); g_lastCloseTime=TimeCurrent();
      }
    if(arb.hasWinner){ if(chosenFromFallback) g_winMicro++; else if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_winTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_winPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_winCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_winExpansion++; }
    if(ShouldLog(isNewBar))
@@ -710,7 +769,17 @@ bool RunDeterministicExecutionSelfTest()
    return reg;
   }
 
-int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_risk.Init(PROFILE_PERSONAL); g_order.Init(false); g_tracker.Init(); g_lifecycle.Init(); g_scanCount=ParseScannerSymbols();
+int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_risk.Init(PROFILE_PERSONAL);
+   bool aggressive=(personalProfile==PERSONAL_AGGRESSIVE_COMPOUND);
+   g_effectiveRiskPerTradePct=(personalRiskPerTradePct>0.0?personalRiskPerTradePct:(aggressive?1.10:0.60));
+   g_effectiveMaxOpenRiskPct=(aggressive?testerSimMaxOpenRiskPct:2.20);
+   g_effectiveMaxTradesPerDay=(personalMaxTradesPerDay>0?personalMaxTradesPerDay:(aggressive?18:9));
+   g_effectiveMaxActiveTrades=(personalMaxActiveTrades>0?personalMaxActiveTrades:(aggressive?12:7));
+   g_effectiveMaxDailyLossPct=(personalMaxDailyLossPct>0.0?personalMaxDailyLossPct:(aggressive?4.50:2.40));
+   g_effectiveLotCap=(testerSimMaxLotsCap>0.0?testerSimMaxLotsCap:(aggressive?0.80:0.30));
+   g_effectiveCompounding=personalEnableCompounding;
+   g_risk.ConfigurePersonalCaps(g_effectiveRiskPerTradePct,g_effectiveMaxOpenRiskPct,g_effectiveMaxTradesPerDay);
+   g_order.Init(false); g_tracker.Init(); g_lifecycle.Init(); g_scanCount=ParseScannerSymbols();
    if((executionMode==EXEC_MODE_LIVE || executionMode==EXEC_MODE_DEMO) && allowLiveExecution && manualExecutionArmed){ int recovered=g_tracker.SyncFromBroker(magicNumber, orderCommentPrefix); g_lastBrokerSyncTime=TimeCurrent(); Print("[RECOVERY][PersonalEA] recovered=", recovered); } else Print("[RECOVERY][PersonalEA] log_only_or_tester_clean_state");
    if(enableDeterministicExecutionSelfTest && selfTestForceOnceOnInit)
      {
@@ -728,4 +797,8 @@ void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    Print(StringFormat("[PHASE24B_DIAG][PersonalEA] invalidBeforeArb=[%d,%d,%d,%d,%d] noValidWinner=%d validDirCandidates=[%d,%d,%d,%d,%d] ambiguousDirRejects=[%d,%d,%d,%d,%d] winnersValidDir=[%d,%d,%d,%d,%d] winnerPlanInvalid=[%d,%d,%d,%d,%d]",g_diagInvalidBeforeArb[0],g_diagInvalidBeforeArb[1],g_diagInvalidBeforeArb[2],g_diagInvalidBeforeArb[3],g_diagInvalidBeforeArb[4],g_diagNoValidWinner,g_diagValidDirCandidates[0],g_diagValidDirCandidates[1],g_diagValidDirCandidates[2],g_diagValidDirCandidates[3],g_diagValidDirCandidates[4],g_diagAmbiguousDirRejects[0],g_diagAmbiguousDirRejects[1],g_diagAmbiguousDirRejects[2],g_diagAmbiguousDirRejects[3],g_diagAmbiguousDirRejects[4],g_diagWinnerValidDir[0],g_diagWinnerValidDir[1],g_diagWinnerValidDir[2],g_diagWinnerValidDir[3],g_diagWinnerValidDir[4],g_diagWinnerBlockedInvalidPlan[0],g_diagWinnerBlockedInvalidPlan[1],g_diagWinnerBlockedInvalidPlan[2],g_diagWinnerBlockedInvalidPlan[3],g_diagWinnerBlockedInvalidPlan[4]));
    Print(StringFormat("[PHASE24D_DIAG][PersonalEA] riskInValid=%d riskInInvalid=%d riskApproved=%d riskRejected=%d riskRejNoTrade=%d riskRejInvalidStop=%d riskRejInvalidTick=%d riskRejLotMin=%d riskRejRiskPct=%d riskRejOther=%d dryrunLifecycleCreated=%d",g_diagRiskInputValid,g_diagRiskInputInvalid,g_diagRiskApproved,g_diagRiskRejected,g_diagRiskRejectedNoTradeOrWinner,g_diagRiskRejectedInvalidStopDistance,g_diagRiskRejectedInvalidTick,g_diagRiskRejectedLotBelowMin,g_diagRiskRejectedInvalidRiskPct,g_diagRiskRejectedOther,g_diagDryRunLifecycleCreated));
    Print(StringFormat("[CALIB_THRESH][PersonalEA] minScore=%.2f minRegime=%.2f minMQ=%.2f maxChop=%.1f minAtrPct=%.5f maxSpread=%.1f cooldown=%d minBars=%d",(enableMicroScalperMode?scalperMinScore:minCandidateScore),(enableMicroScalperMode?scalperMinRegimeConfidence:minRegimeConfidence),(enableMicroScalperMode?scalperMinMarketQuality:minMarketQuality),(enableMicroScalperMode?scalperMaxChoppiness:maxChoppiness),(enableMicroScalperMode?scalperMinAtrPercent:minAtrPercent),maxSpreadPoints,(enableMicroScalperMode?scalperCooldownMinutes:cooldownMinutes),(enableMicroScalperMode?scalperMinBarsBetweenEntries:minBarsBetweenEntries)));
+   string sn[5]={"TrendContinuation","PullbackContinuation","CompressionBreakout","ExpansionMomentum","MicroScalper"};
+   for(int i=0;i<5;i++){ double avgR=(g_closedCount[i]>0?g_sumR[i]/(double)g_closedCount[i]:0.0); int top=0; long best=0; for(int r=0;r<8;r++){ if(g_rejectTopReason[i][r]>best){ best=g_rejectTopReason[i][r]; top=r; } } Print(StringFormat("[STRATEGY_SUMMARY] strategy=%s candidates=%d validPlans=%d winners=%d riskApproved=%d portfolioApproved=%d ordersSubmitted=%d wins=%d losses=%d netPnL=%.2f avgR=%.2f rejectTopReason=%d",sn[i],g_diagValidDirCandidates[i],g_pipePlanOk[i],g_pipeWinnerSel[i],g_pipeRiskOk[i],g_pipePortOk[i],g_pipeSubmitOk[i],(i==0?g_winTrend:(i==1?g_winPullback:(i==2?g_winCompression:(i==3?g_winExpansion:g_winMicro)))),(i==0?g_lossTrend:(i==1?g_lossPullback:(i==2?g_lossCompression:(i==3?g_lossExpansion:g_lossMicro)))),g_netPnl[i],avgR,top)); }
+   Print(StringFormat("[GOV_SUMMARY] profile=%d dayStartEq=%.2f eq=%.2f riskPct=%.2f maxOpenRiskPct=%.2f maxDailyLossPct=%.2f consecLosses=%d maxConsecLosses=%d maxTradesDay=%d maxActive=%d compounding=%s levCap=%.1f testerLotCap=%.2f",
+                      (int)personalProfile,g_dayStartEquity,AccountInfoDouble(ACCOUNT_EQUITY),g_effectiveRiskPerTradePct,g_effectiveMaxOpenRiskPct,g_effectiveMaxDailyLossPct,g_consecutiveLosses,personalMaxConsecutiveLosses,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,(g_effectiveCompounding?"on":"off"),personalEffectiveLeverageCap,g_effectiveLotCap));
 }

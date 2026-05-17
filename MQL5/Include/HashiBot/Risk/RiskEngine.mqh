@@ -57,9 +57,9 @@ public:
       else
         {
          m_profile = PROFILE_PERSONAL;
-         m_riskPerTrade = 1.0;
-         m_maxOpenRisk = 4.0;
-         m_maxTradesDay = 10;
+         m_riskPerTrade = 0.75;
+         m_maxOpenRisk = 3.0;
+         m_maxTradesDay = 8;
         }
       m_initialized = true;
       return true;
@@ -175,6 +175,14 @@ public:
       if(!ok) return false;
       if(!prop.CanOpenNewTrade(decision)) return false;
       return true;
+     }
+
+   void ConfigurePersonalCaps(const double riskPerTrade,const double maxOpenRisk,const int maxTradesDay)
+     {
+      if(m_profile!=PROFILE_PERSONAL) return;
+      if(riskPerTrade>0.0) m_riskPerTrade=riskPerTrade;
+      if(maxOpenRisk>0.0) m_maxOpenRisk=maxOpenRisk;
+      if(maxTradesDay>0) m_maxTradesDay=maxTradesDay;
      }
 
    int MaxTradesPerDay() const { return m_maxTradesDay; }
