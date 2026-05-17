@@ -195,7 +195,7 @@ public:
       candidate.score.scoreLTF = momentumScore;
       candidate.score.scoreVol = volatilityScore;
       candidate.score.scoreEntry = entryScore;
-      double planQuality = MathHelpers::Clamp(1.0 - MathHelpers::Normalize01(distEma, 0.0, 2.2*ctx.atr), 0.0, 1.0);
+      double planQuality = MathHelpers::Clamp(1.0 - MathHelpers::Normalize01(distEma, 0.0, 1.8*ctx.atr), 0.0, 1.0);
       candidate.score.scoreUnique = StrategyTypes::BuildUnifiedQualityScore(regimeScore, expansionScore, volatilityScore, entryScore, planQuality, MathHelpers::Clamp((regime.suppression.isSuppressed ? 0.6 : 0.0) + 0.4 * exhaustionPenalty, 0.0, 1.0));
       candidate.score.scoreSuppression = MathHelpers::Clamp((regime.suppression.isSuppressed ? 0.6 : 0.0) + 0.4 * exhaustionPenalty, 0.0, 1.0);
 

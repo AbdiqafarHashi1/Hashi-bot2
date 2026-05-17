@@ -69,6 +69,14 @@ private:
      }
 
    bool IsDirectionValid(const TradeDirection d) const { return (d == TRADE_DIR_LONG || d == TRADE_DIR_SHORT); }
+   double RRNetAfterSpread(const StrategyCandidate &c,const MarketContext &ctx) const
+     {
+      double risk=MathAbs(c.plan.entryPrice-c.plan.stopLoss); if(risk<=0.0) return 0.0;
+      double reward=MathAbs(c.plan.takeProfit1-c.plan.entryPrice);
+      double spreadCost=MathMax(0.0,ctx.spreadPoints*ctx.point*1.15);
+      return (reward-spreadCost)/risk;
+     }
+
 
    bool ValidateCandidate(const StrategyCandidate &c,string &reason) const
      {
@@ -267,25 +275,25 @@ public:
       m_trend.Analyze(ctx, regime, c);       ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
-         if(c.isValid && ValidateCandidate(c, vreason)) AddCandidateIfValid(c);
+         if(c.isValid && ValidateCandidate(c, vreason)) { double rr=RRNetAfterSpread(c,ctx); if(rr<0.95){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f",StrategyTypes::StrategyName(c.strategy),rr)); } else { c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.12,MathMax(0.0,rr-1.0)*0.10) - (ctx.choppiness>62.0?0.10:0.0),0.0,1.0); AddCandidateIfValid(c);} }
          else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
       }
       m_pullback.Analyze(ctx, regime, c);    ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
-         if(c.isValid && ValidateCandidate(c, vreason)) AddCandidateIfValid(c);
+         if(c.isValid && ValidateCandidate(c, vreason)) { double rr=RRNetAfterSpread(c,ctx); if(rr<0.95){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f",StrategyTypes::StrategyName(c.strategy),rr)); } else { c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.12,MathMax(0.0,rr-1.0)*0.10) - (ctx.choppiness>62.0?0.10:0.0),0.0,1.0); AddCandidateIfValid(c);} }
          else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
       }
       m_compression.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
-         if(c.isValid && ValidateCandidate(c, vreason)) AddCandidateIfValid(c);
+         if(c.isValid && ValidateCandidate(c, vreason)) { double rr=RRNetAfterSpread(c,ctx); if(rr<0.95){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f",StrategyTypes::StrategyName(c.strategy),rr)); } else { c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.12,MathMax(0.0,rr-1.0)*0.10) - (ctx.choppiness>62.0?0.10:0.0),0.0,1.0); AddCandidateIfValid(c);} }
          else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
       }
       m_expansion.Analyze(ctx, regime, c);   ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
-         if(c.isValid && ValidateCandidate(c, vreason)) AddCandidateIfValid(c);
+         if(c.isValid && ValidateCandidate(c, vreason)) { double rr=RRNetAfterSpread(c,ctx); if(rr<0.95){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f",StrategyTypes::StrategyName(c.strategy),rr)); } else { c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.12,MathMax(0.0,rr-1.0)*0.10) - (ctx.choppiness>62.0?0.10:0.0),0.0,1.0); AddCandidateIfValid(c);} }
          else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
       }
 
