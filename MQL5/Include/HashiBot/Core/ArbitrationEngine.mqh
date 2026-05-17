@@ -30,6 +30,12 @@ private:
    bool                          m_initialized;
    StrategyCandidate             m_candidates[HASHIBOT_MAX_CANDIDATES];
    int                           m_candidateCount;
+   int                           m_invalidByStrategy[HASHIBOT_MAX_CANDIDATES+1];
+   int                           m_validDirByStrategy[HASHIBOT_MAX_CANDIDATES+1];
+   int                           m_ambiguousDirByStrategy[HASHIBOT_MAX_CANDIDATES+1];
+   int                           m_winnerDirValidByStrategy[HASHIBOT_MAX_CANDIDATES+1];
+   int                           m_winnerPlanInvalidByStrategy[HASHIBOT_MAX_CANDIDATES+1];
+   int                           m_noValidWinnerCount;
    CTrendContinuationStrategy    m_trend;
    CCompressionBreakoutStrategy  m_compression;
    CPullbackContinuationStrategy m_pullback;
@@ -50,7 +56,46 @@ private:
       if(m_candidateCount >= HASHIBOT_MAX_CANDIDATES)
          return;
       m_candidates[m_candidateCount] = c;
-      m_candidateCount++;
+     m_candidateCount++;
+     }
+
+   int StrategyBucket(const StrategyType st) const
+     {
+      if(st == STRATEGY_TREND_CONTINUATION) return 0;
+      if(st == STRATEGY_PULLBACK_CONTINUATION) return 1;
+      if(st == STRATEGY_COMPRESSION_BREAKOUT) return 2;
+      if(st == STRATEGY_EXPANSION_MOMENTUM) return 3;
+      return 4;
+     }
+
+   bool IsDirectionValid(const TradeDirection d) const { return (d == TRADE_DIR_LONG || d == TRADE_DIR_SHORT); }
+
+   bool ValidateCandidate(const StrategyCandidate &c,string &reason) const
+     {
+      reason = "";
+      if(c.strategy == STRATEGY_NONE) { reason = "invalid_strategy"; return false; }
+      if(!IsDirectionValid(c.direction) || !IsDirectionValid(c.plan.direction)) { reason = "invalid_direction"; return false; }
+      if(c.score.totalScore <= 0.0) { reason = "invalid_score"; return false; }
+      if(c.grade == SIGNAL_GRADE_REJECT) { reason = "invalid_grade"; return false; }
+      if(c.plan.entryPrice <= 0.0 || c.plan.stopLoss <= 0.0 || c.plan.takeProfit1 <= 0.0 || c.plan.takeProfit2 <= 0.0) { reason = "invalid_price_levels"; return false; }
+
+      double riskDist = MathAbs(c.plan.entryPrice - c.plan.stopLoss);
+      if(riskDist <= 0.0) { reason = "invalid_stop_distance"; return false; }
+      double minDist = MathMax(2.0 * c.point, 1e-6);
+      if(riskDist < minDist) { reason = "stop_distance_too_small"; return false; }
+
+      if(c.plan.direction == TRADE_DIR_LONG)
+        {
+         if(c.plan.stopLoss >= c.plan.entryPrice || c.plan.takeProfit1 <= c.plan.entryPrice || c.plan.takeProfit2 <= c.plan.entryPrice) { reason = "invalid_long_sides"; return false; }
+        }
+      else
+        {
+         if(c.plan.stopLoss <= c.plan.entryPrice || c.plan.takeProfit1 >= c.plan.entryPrice || c.plan.takeProfit2 >= c.plan.entryPrice) { reason = "invalid_short_sides"; return false; }
+        }
+
+      double rewardDist = MathAbs(c.plan.takeProfit1 - c.plan.entryPrice);
+      if(rewardDist < minDist) { reason = "reward_distance_too_small"; return false; }
+      return true;
      }
 
    double ComputeCompositeScore(const StrategyCandidate &c) const
@@ -132,6 +177,15 @@ public:
    void Reset()
      {
       m_candidateCount = 0;
+      m_noValidWinnerCount = 0;
+      for(int j=0; j<=HASHIBOT_MAX_CANDIDATES; j++)
+        {
+         m_invalidByStrategy[j] = 0;
+         m_validDirByStrategy[j] = 0;
+         m_ambiguousDirByStrategy[j] = 0;
+         m_winnerDirValidByStrategy[j] = 0;
+         m_winnerPlanInvalidByStrategy[j] = 0;
+        }
       for(int i = 0; i < HASHIBOT_MAX_CANDIDATES; i++)
          m_candidates[i].Reset();
       m_trend.Reset();
@@ -210,17 +264,37 @@ public:
         { result.noTrade = true; result.reason = "extreme_spread"; }
 
       StrategyCandidate c;
-      m_trend.Analyze(ctx, regime, c);       ScoreCandidate(c); ApplyRegimePreference(regime, c); if(c.isValid) AddCandidateIfValid(c);
-      m_pullback.Analyze(ctx, regime, c);    ScoreCandidate(c); ApplyRegimePreference(regime, c); if(c.isValid) AddCandidateIfValid(c);
-      m_compression.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); if(c.isValid) AddCandidateIfValid(c);
-      m_expansion.Analyze(ctx, regime, c);   ScoreCandidate(c); ApplyRegimePreference(regime, c); if(c.isValid) AddCandidateIfValid(c);
+      m_trend.Analyze(ctx, regime, c);       ScoreCandidate(c); ApplyRegimePreference(regime, c); {
+         int b=StrategyBucket(c.strategy); string vreason="";
+         if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
+         if(c.isValid && ValidateCandidate(c, vreason)) AddCandidateIfValid(c);
+         else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
+      }
+      m_pullback.Analyze(ctx, regime, c);    ScoreCandidate(c); ApplyRegimePreference(regime, c); {
+         int b=StrategyBucket(c.strategy); string vreason="";
+         if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
+         if(c.isValid && ValidateCandidate(c, vreason)) AddCandidateIfValid(c);
+         else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
+      }
+      m_compression.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); {
+         int b=StrategyBucket(c.strategy); string vreason="";
+         if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
+         if(c.isValid && ValidateCandidate(c, vreason)) AddCandidateIfValid(c);
+         else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
+      }
+      m_expansion.Analyze(ctx, regime, c);   ScoreCandidate(c); ApplyRegimePreference(regime, c); {
+         int b=StrategyBucket(c.strategy); string vreason="";
+         if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
+         if(c.isValid && ValidateCandidate(c, vreason)) AddCandidateIfValid(c);
+         else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
+      }
 
       result.candidateCount = m_candidateCount;
       for(int i = 0; i < m_candidateCount && i < HASHIBOT_MAX_CANDIDATES; i++)
          result.candidates[i] = m_candidates[i];
 
       if(m_candidateCount == 0)
-        { result.noTrade = true; result.reason = "no_candidates"; return result; }
+        { result.noTrade = true; result.reason = "no_candidates"; Print("[ARB] no_valid_winner reason=no_valid_candidates"); return result; }
       if(regime.suppression.isSuppressed)
         { result.noTrade = true; if(result.reason == "") result.reason = "suppressed"; return result; }
 
@@ -249,13 +323,14 @@ public:
 
       int winner = SelectWinner();
       if(winner < 0)
-        { result.noTrade = true; result.reason = "no_valid_winner"; return result; }
+        { result.noTrade = true; result.reason = "no_valid_winner"; m_noValidWinnerCount++; Print("[ARB] no_valid_winner reason=winner_selection_failed"); return result; }
 
       if(m_candidates[winner].grade < minGrade)
         { result.noTrade = true; result.reason = "grade_below_profile_min"; return result; }
 
       if(!StrategyTypes::IsTradePlanComplete(m_candidates[winner].plan))
-        { result.noTrade = true; result.reason = "incomplete_trade_plan"; return result; }
+        { result.noTrade = true; result.reason = "incomplete_trade_plan"; m_winnerPlanInvalidByStrategy[StrategyBucket(m_candidates[winner].strategy)]++; Print("[ARB] no_valid_winner reason=incomplete_trade_plan"); return result; }
+      m_winnerDirValidByStrategy[StrategyBucket(m_candidates[winner].strategy)]++;
 
       // placeholder duplicate/cooldown/active-trade guards
       bool oneActiveTradePerSymbolPlaceholder = false;

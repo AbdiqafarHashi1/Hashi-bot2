@@ -102,6 +102,7 @@ long g_microEvaluated=0,g_microAccepted=0,g_microRejected=0,g_microSubmitted=0;
 long g_winTrend=0,g_winPullback=0,g_winCompression=0,g_winExpansion=0,g_winMicro=0;
 long g_scaleEvaluated=0,g_scaleAccepted=0,g_scaleRejected=0,g_scaleSubmitted=0;
 long g_pipeWinnerSel[5],g_pipePlanOk[5],g_pipePlanRej[5],g_pipeRiskOk[5],g_pipeRiskRej[5],g_pipePortOk[5],g_pipePortRej[5],g_pipeSubmitOk[5],g_pipeSubmitRej[5],g_pipeLifecycleOk[5],g_pipeLifecycleRej[5];
+long g_diagNoValidWinner=0,g_diagInvalidBeforeArb[5],g_diagValidDirCandidates[5],g_diagAmbiguousDirRejects[5],g_diagWinnerValidDir[5],g_diagWinnerBlockedInvalidPlan[5];
 
 
 string DirName(TradeDirection d){ if(d==TRADE_DIR_LONG) return "LONG"; if(d==TRADE_DIR_SHORT) return "SHORT"; return "NONE"; }
@@ -444,7 +445,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       Print("[ARB][PersonalEA] sym=",symbol," candidates=",arb.candidateCount," top=",DoubleToString(arb.topScore,2)," second=",DoubleToString(arb.secondScore,2)," margin=",DoubleToString(arb.scoreMargin,2)," reason=",arb.reason," scores=",scoreBoard);
      }
 
-   for(int ci=0;ci<arb.candidateCount;ci++){ StrategyType st=arb.candidates[ci].strategy; bool ok=arb.candidates[ci].isValid; if(st==STRATEGY_TREND_CONTINUATION){ if(ok) g_trendAccepted++; else g_trendRejected++; } else if(st==STRATEGY_PULLBACK_CONTINUATION){ if(ok) g_pullbackAccepted++; else g_pullbackRejected++; } else if(st==STRATEGY_COMPRESSION_BREAKOUT){ if(ok) g_compressionAccepted++; else g_compressionRejected++; } else if(st==STRATEGY_EXPANSION_MOMENTUM){ if(ok) g_expansionAccepted++; else g_expansionRejected++; } }
+   for(int ci=0;ci<arb.candidateCount;ci++){ StrategyType st=arb.candidates[ci].strategy; bool ok=arb.candidates[ci].isValid; int b=StrategyBucket(st); if(arb.candidates[ci].direction==TRADE_DIR_LONG || arb.candidates[ci].direction==TRADE_DIR_SHORT) g_diagValidDirCandidates[b]++; else g_diagAmbiguousDirRejects[b]++; if(st==STRATEGY_TREND_CONTINUATION){ if(ok) g_trendAccepted++; else g_trendRejected++; } else if(st==STRATEGY_PULLBACK_CONTINUATION){ if(ok) g_pullbackAccepted++; else g_pullbackRejected++; } else if(st==STRATEGY_COMPRESSION_BREAKOUT){ if(ok) g_compressionAccepted++; else g_compressionRejected++; } else if(st==STRATEGY_EXPANSION_MOMENTUM){ if(ok) g_expansionAccepted++; else g_expansionRejected++; } }
    bool candidateGradeOK=(!scalperMode || scalperAllowBGrade || arb.winningGrade>=SIGNAL_GRADE_A);
    TradePlan chosenPlan=arb.plan; double chosenScore=arb.topScore; bool chosenFromFallback=false;
    if(scalperMode) g_scalperCandidatesEvaluated++;
@@ -457,15 +458,22 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
         { chosenPlan=fb; chosenScore=fbScore; chosenFromFallback=true; g_microAccepted++; Print("[SCALPER] accepted sym=",symbol," source=fallback score=",DoubleToString(fbScore,2)); }
       else { g_microRejected++; Print("[SCALPER] rejected sym=",symbol," reason=",fbReason); }
      }
+   if(chosenPlan.direction==TRADE_DIR_NONE || chosenPlan.entryPrice<=0.0 || chosenPlan.stopLoss<=0.0 || chosenPlan.takeProfit1<=0.0 || chosenPlan.takeProfit2<=0.0)
+     {
+      g_diagNoValidWinner++;
+      Print("[ARB] no_valid_winner reason=invalid_or_missing_selected_plan");
+      return;
+     }
 
    SignalGrade chosenGrade=(chosenFromFallback?SIGNAL_GRADE_B:arb.winningGrade);
    int sb=StrategyBucket(chosenPlan.strategy);
+   if(!arb.hasWinner && StringFind(arb.reason,"no_valid_winner")>=0) g_diagNoValidWinner++;
    g_pipeWinnerSel[sb]++;
    Print(StringFormat("[PIPE] winner_selected strategy=%s score=%.2f grade=%d dir=%s",StrategyName(chosenPlan.strategy),chosenScore,(int)chosenGrade,DirName(chosenPlan.direction)));
 
    TradeState tstate; string vreason=""; bool validPlan=g_order.ValidateTradePlan(chosenPlan, ctx, vreason);
    Print(StringFormat("[PIPE] plan_valid ok=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",(validPlan?"true":"false"),vreason,chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2));
-   if(validPlan) g_pipePlanOk[sb]++; else { g_pipePlanRej[sb]++; g_r_incomplete++; }
+   if(validPlan) { g_pipePlanOk[sb]++; g_diagWinnerValidDir[sb]++; } else { g_pipePlanRej[sb]++; g_r_incomplete++; g_diagWinnerBlockedInvalidPlan[sb]++; }
 
    ArbitrationResult riskArb; BuildRiskArbFromPlan(chosenPlan, chosenScore, chosenGrade, riskArb);
    RiskDecision risk; g_risk.Assess(riskArb, ctx, risk);
@@ -514,5 +522,6 @@ void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    Print(StringFormat("[CALIB_STRAT][PersonalEA] trend=%d/%d pullback=%d/%d compression=%d/%d expansion=%d/%d micro=%d/%d/%d/%d scale=%d/%d/%d/%d winners=[%d,%d,%d,%d,micro=%d]",g_trendAccepted,g_trendRejected,g_pullbackAccepted,g_pullbackRejected,g_compressionAccepted,g_compressionRejected,g_expansionAccepted,g_expansionRejected,g_microEvaluated,g_microAccepted,g_microRejected,g_microSubmitted,g_scaleEvaluated,g_scaleAccepted,g_scaleRejected,g_scaleSubmitted,g_winTrend,g_winPullback,g_winCompression,g_winExpansion,g_winMicro));
    Print(StringFormat("[EXEC_STRAT][PersonalEA] dryrunSubmitted trend=%d pullback=%d compression=%d expansion=%d micro=%d",g_pipeSubmitOk[0],g_pipeSubmitOk[1],g_pipeSubmitOk[2],g_pipeSubmitOk[3],g_pipeSubmitOk[4]));
    Print(StringFormat("[PIPE_SUMMARY][PersonalEA] winner=[%d,%d,%d,%d,%d] planOk=[%d,%d,%d,%d,%d] planRej=[%d,%d,%d,%d,%d] riskOk=[%d,%d,%d,%d,%d] riskRej=[%d,%d,%d,%d,%d] portOk=[%d,%d,%d,%d,%d] portRej=[%d,%d,%d,%d,%d] submitOk=[%d,%d,%d,%d,%d] submitRej=[%d,%d,%d,%d,%d] lifeOk=[%d,%d,%d,%d,%d] lifeRej=[%d,%d,%d,%d,%d]",g_pipeWinnerSel[0],g_pipeWinnerSel[1],g_pipeWinnerSel[2],g_pipeWinnerSel[3],g_pipeWinnerSel[4],g_pipePlanOk[0],g_pipePlanOk[1],g_pipePlanOk[2],g_pipePlanOk[3],g_pipePlanOk[4],g_pipePlanRej[0],g_pipePlanRej[1],g_pipePlanRej[2],g_pipePlanRej[3],g_pipePlanRej[4],g_pipeRiskOk[0],g_pipeRiskOk[1],g_pipeRiskOk[2],g_pipeRiskOk[3],g_pipeRiskOk[4],g_pipeRiskRej[0],g_pipeRiskRej[1],g_pipeRiskRej[2],g_pipeRiskRej[3],g_pipeRiskRej[4],g_pipePortOk[0],g_pipePortOk[1],g_pipePortOk[2],g_pipePortOk[3],g_pipePortOk[4],g_pipePortRej[0],g_pipePortRej[1],g_pipePortRej[2],g_pipePortRej[3],g_pipePortRej[4],g_pipeSubmitOk[0],g_pipeSubmitOk[1],g_pipeSubmitOk[2],g_pipeSubmitOk[3],g_pipeSubmitOk[4],g_pipeSubmitRej[0],g_pipeSubmitRej[1],g_pipeSubmitRej[2],g_pipeSubmitRej[3],g_pipeSubmitRej[4],g_pipeLifecycleOk[0],g_pipeLifecycleOk[1],g_pipeLifecycleOk[2],g_pipeLifecycleOk[3],g_pipeLifecycleOk[4],g_pipeLifecycleRej[0],g_pipeLifecycleRej[1],g_pipeLifecycleRej[2],g_pipeLifecycleRej[3],g_pipeLifecycleRej[4]));
+   Print(StringFormat("[PHASE24B_DIAG][PersonalEA] invalidBeforeArb=[%d,%d,%d,%d,%d] noValidWinner=%d validDirCandidates=[%d,%d,%d,%d,%d] ambiguousDirRejects=[%d,%d,%d,%d,%d] winnersValidDir=[%d,%d,%d,%d,%d] winnerPlanInvalid=[%d,%d,%d,%d,%d]",g_diagInvalidBeforeArb[0],g_diagInvalidBeforeArb[1],g_diagInvalidBeforeArb[2],g_diagInvalidBeforeArb[3],g_diagInvalidBeforeArb[4],g_diagNoValidWinner,g_diagValidDirCandidates[0],g_diagValidDirCandidates[1],g_diagValidDirCandidates[2],g_diagValidDirCandidates[3],g_diagValidDirCandidates[4],g_diagAmbiguousDirRejects[0],g_diagAmbiguousDirRejects[1],g_diagAmbiguousDirRejects[2],g_diagAmbiguousDirRejects[3],g_diagAmbiguousDirRejects[4],g_diagWinnerValidDir[0],g_diagWinnerValidDir[1],g_diagWinnerValidDir[2],g_diagWinnerValidDir[3],g_diagWinnerValidDir[4],g_diagWinnerBlockedInvalidPlan[0],g_diagWinnerBlockedInvalidPlan[1],g_diagWinnerBlockedInvalidPlan[2],g_diagWinnerBlockedInvalidPlan[3],g_diagWinnerBlockedInvalidPlan[4]));
    Print(StringFormat("[CALIB_THRESH][PersonalEA] minScore=%.2f minRegime=%.2f minMQ=%.2f maxChop=%.1f minAtrPct=%.5f maxSpread=%.1f cooldown=%d minBars=%d",(enableMicroScalperMode?scalperMinScore:minCandidateScore),(enableMicroScalperMode?scalperMinRegimeConfidence:minRegimeConfidence),(enableMicroScalperMode?scalperMinMarketQuality:minMarketQuality),(enableMicroScalperMode?scalperMaxChoppiness:maxChoppiness),(enableMicroScalperMode?scalperMinAtrPercent:minAtrPercent),maxSpreadPoints,(enableMicroScalperMode?scalperCooldownMinutes:cooldownMinutes),(enableMicroScalperMode?scalperMinBarsBetweenEntries:minBarsBetweenEntries)));
 }

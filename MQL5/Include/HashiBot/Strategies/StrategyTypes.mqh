@@ -66,6 +66,13 @@ namespace StrategyTypes
       return TRADE_DIR_NONE;
      }
 
+   string DirectionName(const TradeDirection direction)
+     {
+      if(direction == TRADE_DIR_LONG) return "LONG";
+      if(direction == TRADE_DIR_SHORT) return "SHORT";
+      return "NONE";
+     }
+
    bool BuildBasicATRTradePlan(const StrategyType strategy,const TradeDirection direction,const MarketContext &ctx,const double atrMult,TradePlan &plan)
      {
       ResetTradePlan(plan, strategy);
