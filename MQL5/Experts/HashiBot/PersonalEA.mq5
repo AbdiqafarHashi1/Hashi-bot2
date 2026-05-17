@@ -23,7 +23,7 @@ input bool enableVerboseLogs = false;
 input bool logOnlyOnNewBar = true;
 input string scannerSymbols = "EURUSD,GBPUSD,USDJPY,XAUUSD";
 input bool enableMultiSymbolScanner = false;
-input ExecutionMode executionMode = EXEC_MODE_DRYRUN;
+input ExecutionMode executionMode = EXEC_MODE_LOG_ONLY;
 input bool allowLiveExecution = false;
 input bool allowDemoExecutionOnly = true;
 input bool requireManualExecutionArming = true;
@@ -617,22 +617,22 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      {
       string execReason="";
       bool submitted=false; for(int r=0;r<=maxRetryCount;r++){ submitted=g_order.Submit(chosenPlan, risk, ctx, executionMode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, magicNumber, maxSlippagePoints, orderCommentPrefix, tstate, execReason); if(submitted) break; if(r<maxRetryCount){ Print("[RETRY][PersonalEA] sym=",symbol," op=submit attempt=",(r+1)," reason=",execReason); Sleep(retryDelaySeconds*1000); } else Print("[RETRY][PersonalEA] sym=",symbol," op=submit exhausted reason=",execReason); }
-      Print(StringFormat("[LIFECYCLE_PRE] symbol=%s strategy=%s direction=%s entry=%.5f sl=%.5f tp=%.5f lots=%.2f score=%.2f grade=%d execution_mode=%d",symbol,StrategyName(chosenPlan.strategy),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,risk.approvedLots,chosenScore,(int)chosenGrade,(int)executionMode));
+      Print(StringFormat("[EXEC] symbol=%s strategy=%s direction=%s entry=%.5f sl=%.5f tp=%.5f lots=%.2f score=%.2f grade=%d execution_mode=%d",symbol,StrategyName(chosenPlan.strategy),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,risk.approvedLots,chosenScore,(int)chosenGrade,(int)executionMode));
       int regBefore=g_tracker.CountActiveTrades();
       string lifecycleReason="not_attempted";
-      bool lifecycleCreated=(submitted && g_tracker.RegisterDryRunTrade(tstate, lifecycleReason));
+      bool lifecycleCreated=submitted;
       int regAfter=g_tracker.CountActiveTrades();
       Print(StringFormat("[LIFECYCLE_REG] id=%I64d size_before=%d size_after=%d duplicate=%s active=%d insert_result=%s reason=%s",tstate.ticket,regBefore,regAfter,(lifecycleReason=="duplicate_trade"?"true":"false"),regAfter,(lifecycleCreated?"true":"false"),lifecycleReason));
       if(lifecycleCreated)
-        { g_tradesToday++; g_barsSinceEntry=0; g_diagDryRunSubmits++; g_diagDryRunLifecycleCreated++; if(chosenFromFallback) g_microSubmitted++; g_scaleSubmitted++; g_pipeSubmitOk[sb]++; g_pipeLifecycleOk[sb]++; Print(StringFormat("[LIFECYCLE][PersonalEA] sym=%s submitted ticket=%I64d lots=%.2f", symbol,tstate.ticket,tstate.approvedLots)); Print("[SCALE] submitted dryrun sym=",symbol," entries_now=",existingEntries+1); Print("[PIPE] dryrun_submit ok=true reason=none strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=true reason=registered strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_CREATE] ok=true reason=registered id=%I64d", tstate.ticket)); }
+        { g_tradesToday++; g_barsSinceEntry=0; g_diagDryRunSubmits++; g_diagDryRunLifecycleCreated++; if(chosenFromFallback) g_microSubmitted++; g_scaleSubmitted++; g_pipeSubmitOk[sb]++; g_pipeLifecycleOk[sb]++; Print(StringFormat("[LIFECYCLE][PersonalEA] sym=%s submitted ticket=%I64d lots=%.2f", symbol,tstate.ticket,tstate.approvedLots)); Print("[SCALE] submitted dryrun sym=",symbol," entries_now=",existingEntries+1); Print("[ORDER_RESULT] ok=true reason=none strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=true reason=registered strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_CREATE] ok=true reason=registered id=%I64d", tstate.ticket)); }
       else if(!submitted)
-        { g_pipeSubmitRej[sb]++; Print("[PIPE] dryrun_submit ok=false reason=",execReason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=submit line=614",execReason)); Print("[LIFECYCLE_CREATE] ok=false reason=",execReason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, execReason); g_lastCloseTime=TimeCurrent(); }
+        { g_pipeSubmitRej[sb]++; Print("[ORDER_RESULT] ok=false reason=",execReason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=submit line=614",execReason)); Print("[LIFECYCLE_CREATE] ok=false reason=",execReason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, execReason); g_lastCloseTime=TimeCurrent(); }
       else
-        { g_pipeSubmitOk[sb]++; g_pipeLifecycleRej[sb]++; Print("[PIPE] dryrun_submit ok=true reason=submitted_no_lifecycle strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",lifecycleReason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=registry line=616",lifecycleReason)); Print("[LIFECYCLE_CREATE] ok=false reason=",lifecycleReason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, lifecycleReason); g_lastCloseTime=TimeCurrent(); }
+        { g_pipeSubmitOk[sb]++; g_pipeLifecycleRej[sb]++; Print("[ORDER_RESULT] ok=true reason=submitted strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",lifecycleReason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=registry line=616",lifecycleReason)); Print("[LIFECYCLE_CREATE] ok=false reason=",lifecycleReason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, lifecycleReason); g_lastCloseTime=TimeCurrent(); }
      }
    else
      {
-      string breason=(!validPlan?"invalid_plan":(!risk.approved?"risk_not_approved":(!portfolioOK?"portfolio_not_approved":(!allowed?guard:(!scaleOK?scaleReason:(chosenScore < activeMinScore?"score_below_threshold":((scalperMode && !candidateGradeOK && !chosenFromFallback)?"scalper_grade_not_approved":"pre_submit_gate_rejected"))))))); g_pipeSubmitRej[sb]++; if(validPlan && risk.approved && portfolioOK && allowed && !scaleOK){} else g_pipeLifecycleRej[sb]++; Print("[PIPE] dryrun_submit ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=pre_submit line=620",breason)); Print("[LIFECYCLE_CREATE] ok=false reason=",breason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, breason); Print("[SCALE] rejected reason=",breason," sym=",symbol); g_lastCloseTime=TimeCurrent();
+      string breason=(!validPlan?"invalid_plan":(!risk.approved?"risk_not_approved":(!portfolioOK?"portfolio_not_approved":(!allowed?guard:(!scaleOK?scaleReason:(chosenScore < activeMinScore?"score_below_threshold":((scalperMode && !candidateGradeOK && !chosenFromFallback)?"scalper_grade_not_approved":"pre_submit_gate_rejected"))))))); g_pipeSubmitRej[sb]++; if(validPlan && risk.approved && portfolioOK && allowed && !scaleOK){} else g_pipeLifecycleRej[sb]++; Print("[ORDER_RESULT] ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",breason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=pre_submit line=620",breason)); Print("[LIFECYCLE_CREATE] ok=false reason=",breason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, breason); Print("[SCALE] rejected reason=",breason," sym=",symbol); g_lastCloseTime=TimeCurrent();
      }
    if(arb.hasWinner){ if(chosenFromFallback) g_winMicro++; else if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_winTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_winPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_winCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_winExpansion++; }
    if(ShouldLog(isNewBar))
@@ -710,8 +710,8 @@ bool RunDeterministicExecutionSelfTest()
    return reg;
   }
 
-int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_risk.Init(PROFILE_PERSONAL); g_order.Init(true); g_tracker.Init(); g_lifecycle.Init(); g_scanCount=ParseScannerSymbols();
-   if(executionMode==EXEC_MODE_LIVE && allowLiveExecution && manualExecutionArmed){ int recovered=g_tracker.SyncFromBroker(magicNumber, orderCommentPrefix); g_lastBrokerSyncTime=TimeCurrent(); Print("[RECOVERY][PersonalEA] recovered=", recovered); } else Print("[RECOVERY][PersonalEA] dryrun_or_unarmed_clean_state");
+int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_risk.Init(PROFILE_PERSONAL); g_order.Init(false); g_tracker.Init(); g_lifecycle.Init(); g_scanCount=ParseScannerSymbols();
+   if((executionMode==EXEC_MODE_LIVE || executionMode==EXEC_MODE_DEMO) && allowLiveExecution && manualExecutionArmed){ int recovered=g_tracker.SyncFromBroker(magicNumber, orderCommentPrefix); g_lastBrokerSyncTime=TimeCurrent(); Print("[RECOVERY][PersonalEA] recovered=", recovered); } else Print("[RECOVERY][PersonalEA] log_only_or_tester_clean_state");
    if(enableDeterministicExecutionSelfTest && selfTestForceOnceOnInit)
      {
       Print("[SELFTEST_START]");
