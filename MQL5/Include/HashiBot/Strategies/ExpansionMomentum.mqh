@@ -15,6 +15,7 @@
 class CExpansionMomentumStrategy
   {
 private:
+   ProfileType                   m_profile;
    void Reject(StrategyCandidate &candidate,const SuppressionReason reason)
      {
       candidate.suppression.isSuppressed = true;
@@ -72,11 +73,12 @@ private:
            }
         }
       persistScore = MathHelpers::SafeDivide((double)good, (double)checks, 0.0);
-      return (persistScore >= 0.55);
+      double minPersist=(m_profile==PROFILE_PROP_FIRM?0.55:0.42);
+      return (persistScore >= minPersist);
      }
 
 public:
-   bool Init() { return true; }
+   bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); return true; }
    void Reset() {}
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
@@ -86,7 +88,8 @@ public:
       bool expansionLike = (regime.regime == REGIME_EXPANSION || ((regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN) && regime.confidence >= 0.70));
       if(!expansionLike)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
-      if(ctx.marketQuality < EXP_MIN_MARKET_QUALITY)
+      double minMq=(m_profile==PROFILE_PROP_FIRM?EXP_MIN_MARKET_QUALITY:0.30);
+      if(ctx.marketQuality < minMq)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
       if(ctx.atr <= 0.0)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
@@ -120,7 +123,8 @@ public:
 
       // candle quality + exhaustion filters
       double bodyQ = MathHelpers::Clamp(MathHelpers::SafeDivide(curBody, curRange, 0.0), 0.0, 1.0);
-      if(bodyQ < 0.35)
+      double minBody=(m_profile==PROFILE_PROP_FIRM?0.35:0.24);
+      if(bodyQ < minBody)
         { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; } // weak/doji
 
       double upperWick = ctx.currentHigh - MathMax(ctx.currentOpen, ctx.currentClose);
@@ -128,15 +132,21 @@ public:
       if(MathMax(upperWick, lowerWick) > curBody * 2.5)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; } // blow-off
 
-      if(bodyExp > 3.5 || rangeExp > 3.0)
+      double maxBodyExp=(m_profile==PROFILE_PROP_FIRM?3.5:4.2);
+      double maxRangeExp=(m_profile==PROFILE_PROP_FIRM?3.0:3.8);
+      if(bodyExp > maxBodyExp || rangeExp > maxRangeExp)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; } // too extreme
 
       double distEma = MathAbs(ctx.currentClose - ctx.emaFast);
-      if(distEma > 2.5 * ctx.atr)
+      double maxDistEma=(m_profile==PROFILE_PROP_FIRM?2.5:3.2);
+      if(distEma > maxDistEma * ctx.atr)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; } // overextended
 
       // expansion quality baseline
-      if(rangeExp < 1.2 || bodyExp < 1.2 || emaSepAtr < 0.20)
+      double minRangeExp=(m_profile==PROFILE_PROP_FIRM?1.2:1.05);
+      double minBodyExp=(m_profile==PROFILE_PROP_FIRM?1.2:1.00);
+      double minEmaSep=(m_profile==PROFILE_PROP_FIRM?0.20:0.12);
+      if(rangeExp < minRangeExp || bodyExp < minBodyExp || emaSepAtr < minEmaSep)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
 
       // persistence + momentum acceleration proxy
@@ -147,12 +157,14 @@ public:
       int extCandles=0;
       for(int i=1;i<MathMin(ctx.barsLoaded,6);i++)
         if((ctx.recentHigh[i]-ctx.recentLow[i]) > 1.6*ctx.atr) extCandles++;
-      if(extCandles >= 4)
+      int maxExtCandles=(m_profile==PROFILE_PROP_FIRM?4:5);
+      if(extCandles >= maxExtCandles)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
 
       double prevRocAbs = MathAbs(MathHelpers::SafeDivide((ctx.previousClose - ctx.recentClose[2]), MathMax(MathAbs(ctx.recentClose[2]), 1e-6), 0.0) * 100.0);
       double rocAccel = MathAbs(ctx.roc) - prevRocAbs;
-      if(rocAccel < -0.20)
+      double minRocAccel=(m_profile==PROFILE_PROP_FIRM?-0.20:-0.35);
+      if(rocAccel < minRocAccel)
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; } // momentum mismatch
 
       // immediate entry or micro-pullback-resume placeholder
