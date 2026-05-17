@@ -113,6 +113,18 @@ public:
 
       if(!CheckBasicLimits(result, ctx, decision))
         { decision.approved = false; return false; }
+      double rr=0.0;
+      double riskDist=MathAbs(result.plan.entryPrice-result.plan.stopLoss);
+      if(riskDist>0.0) rr=MathAbs(result.plan.takeProfit1-result.plan.entryPrice)/riskDist;
+      double qMult=1.0;
+      if(result.winningScore<0.62) qMult*=0.65;
+      else if(result.winningScore>0.78) qMult*=1.10;
+      if(rr<1.25) qMult*=0.60;
+      else if(rr>1.8) qMult*=1.08;
+      if(ctx.choppiness>60.0) qMult*=0.70;
+      if(ctx.marketQuality<0.38) qMult*=0.72;
+      if(ctx.spreadPoints>55.0) qMult*=0.68;
+      decision.riskPercent=MathHelpers::Clamp(decision.riskPercent*qMult,0.05,m_riskPerTrade);
 
       double equity = AccountInfoDouble(ACCOUNT_EQUITY);
       double balance = AccountInfoDouble(ACCOUNT_BALANCE);

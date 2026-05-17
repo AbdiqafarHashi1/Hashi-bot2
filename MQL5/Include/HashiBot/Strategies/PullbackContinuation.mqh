@@ -178,9 +178,9 @@ public:
 
       if(!(regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN))
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
-      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MIN_REGIME_CONF:0.32);
-      double minMq=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MIN_MARKET_QUALITY:0.28);
-      double maxChop=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MAX_CHOPPINESS:64.0);
+      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MIN_REGIME_CONF:0.40);
+      double minMq=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MIN_MARKET_QUALITY:0.34);
+      double maxChop=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MAX_CHOPPINESS:58.0);
       if(regime.confidence < minRegimeConf)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
       if(ctx.marketQuality < minMq)
@@ -218,7 +218,7 @@ public:
 
       double entryQuality = 0.0;
       double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
-      if(bodyAtr>1.75){ Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+      if(bodyAtr>1.35){ Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
       if(!ReclaimAndMomentum(ctx, dir, entryQuality))
         { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 

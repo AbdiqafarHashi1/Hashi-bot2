@@ -4,7 +4,7 @@
 #include <HashiBot/Core/Types.mqh>
 #include <HashiBot/Execution/TrailingManager.mqh>
 
-#define HASHIBOT_MAX_BARS_IN_TRADE  48
+#define HASHIBOT_MAX_BARS_IN_TRADE  32
 #define HASHIBOT_TP1_BE_BUFFER_R    0.06
 
 class CTradeLifecycle
@@ -21,9 +21,9 @@ public:
      {
       m_nextTicket = 1000001;
       m_trailing.Init();
-      m_tp1MoveFrac = 0.55;
-      m_minTrailRR = 1.15;
-      m_momentumCollapseFrac = 0.25;
+      m_tp1MoveFrac = 0.50;
+      m_minTrailRR = 0.95;
+      m_momentumCollapseFrac = 0.32;
       return true;
      }
 
@@ -192,6 +192,7 @@ public:
 
       state.barsInTrade++;
 
+      double initRisk=MathAbs(state.entryPrice-state.stopLoss);
       if(CheckSL(state, ctx))
         {
          MarkClosedSL(state);
@@ -201,7 +202,7 @@ public:
       if(CheckTP1(state, ctx))
         {
          state.tp1Hit = true;
-         double lockRisk=MathAbs(state.entryPrice-state.stopLoss)*HASHIBOT_TP1_BE_BUFFER_R;
+         double lockRisk=initRisk*HASHIBOT_TP1_BE_BUFFER_R;
          if(state.direction==TRADE_DIR_LONG)
             state.stopLoss=MathMax(state.stopLoss,state.entryPrice+lockRisk);
          else
@@ -226,7 +227,10 @@ public:
          return;
         }
 
-      if(state.barsInTrade > (HASHIBOT_MAX_BARS_IN_TRADE/2) && !state.tp1Hit && IsMomentumCollapsed(state,ctx))
+      double curRR=CurrentRR(state,ctx);
+      bool stalled=(state.barsInTrade>8 && curRR<0.15 && !state.tp1Hit);
+      bool adverse=(state.barsInTrade>=4 && curRR<-0.45);
+      if((state.barsInTrade > (HASHIBOT_MAX_BARS_IN_TRADE/3) && !state.tp1Hit && IsMomentumCollapsed(state,ctx)) || stalled || adverse)
         {
          MarkClosedInvalidation(state);
          return;

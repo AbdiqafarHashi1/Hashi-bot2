@@ -19,7 +19,7 @@
 #define HASHIBOT_MIN_MARKET_QUALITY_PROP       0.42
 #define HASHIBOT_MAX_SPREAD_POINTS_PERSONAL    85.0
 #define HASHIBOT_MAX_SPREAD_POINTS_PROP        60.0
-#define HASHIBOT_MIN_SCORE_PERSONAL            0.48
+#define HASHIBOT_MIN_SCORE_PERSONAL            0.56
 #define HASHIBOT_MIN_SCORE_PROP                0.70
 #define HASHIBOT_MIN_GRADE_PERSONAL            SIGNAL_GRADE_B
 #define HASHIBOT_MIN_GRADE_PROP                SIGNAL_GRADE_A
@@ -74,7 +74,16 @@ private:
       double risk=MathAbs(c.plan.entryPrice-c.plan.stopLoss); if(risk<=0.0) return 0.0;
       double reward=MathAbs(c.plan.takeProfit1-c.plan.entryPrice);
       double spreadCost=MathMax(0.0,ctx.spreadPoints*ctx.point*1.15);
-      return (reward-spreadCost)/risk;
+     return (reward-spreadCost)/risk;
+     }
+   bool IsExhaustedCandle(const MarketContext &ctx) const
+     {
+      if(ctx.atr<=0.0) return false;
+      double body=MathAbs(ctx.currentClose-ctx.currentOpen);
+      double range=MathMax(ctx.currentHigh-ctx.currentLow,1e-6);
+      double bodyAtr=body/ctx.atr;
+      double wick=MathMax(ctx.currentHigh-MathMax(ctx.currentOpen,ctx.currentClose),MathMin(ctx.currentOpen,ctx.currentClose)-ctx.currentLow);
+      return (bodyAtr>1.9 || wick>body*2.6 || (body/range)<0.22);
      }
 
 
@@ -275,7 +284,7 @@ public:
       m_trend.Analyze(ctx, regime, c);       ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
-         if(c.isValid && ValidateCandidate(c, vreason)) { double rr=RRNetAfterSpread(c,ctx); if(rr<0.95){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f",StrategyTypes::StrategyName(c.strategy),rr)); } else { c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.12,MathMax(0.0,rr-1.0)*0.10) - (ctx.choppiness>62.0?0.10:0.0),0.0,1.0); AddCandidateIfValid(c);} }
+         if(c.isValid && ValidateCandidate(c, vreason)) { double rr=RRNetAfterSpread(c,ctx); double minRR=(c.strategy==STRATEGY_PULLBACK_CONTINUATION?1.20:(c.strategy==STRATEGY_TREND_CONTINUATION?1.15:1.30)); if(rr<minRR){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,minRR)); } else { double exPenalty=(IsExhaustedCandle(ctx)?0.14:0.0); double chopPenalty=(ctx.choppiness>58.0?0.12:0.0); double spreadPenalty=MathHelpers::Clamp(ctx.spreadPoints/90.0,0.0,0.16); c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.18,MathMax(0.0,rr-1.0)*0.12) - chopPenalty - exPenalty - spreadPenalty,0.0,1.0); AddCandidateIfValid(c);} }
          else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
       }
       m_pullback.Analyze(ctx, regime, c);    ScoreCandidate(c); ApplyRegimePreference(regime, c); {
@@ -324,8 +333,10 @@ public:
 
       if(result.topScore < minTopScore)
         { result.noTrade = true; result.reason = "top_score_below_profile_min"; return result; }
-      if(result.scoreMargin < 0.01 && result.topScore < (minTopScore + 0.05))
+      if(result.scoreMargin < 0.03 && result.topScore < (minTopScore + 0.06))
         { result.noTrade = true; result.reason = "weak_top_and_low_margin"; return result; }
+      if(ctx.choppiness>66.0 || IsExhaustedCandle(ctx))
+        { result.noTrade=true; result.reason="chop_or_exhaustion_block"; return result; }
       if(HasAmbiguity())
         { result.scoreMargin = MathMax(0.0, result.scoreMargin - 0.02); result.reason = "ambiguous_top_scores_soft"; }
 

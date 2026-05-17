@@ -88,7 +88,7 @@ public:
       bool expansionLike = (regime.regime == REGIME_EXPANSION || ((regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN) && regime.confidence >= 0.70));
       if(!expansionLike)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
-      double minMq=(m_profile==PROFILE_PROP_FIRM?EXP_MIN_MARKET_QUALITY:0.30);
+      double minMq=(m_profile==PROFILE_PROP_FIRM?EXP_MIN_MARKET_QUALITY:0.40);
       if(ctx.marketQuality < minMq)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
       if(ctx.atr <= 0.0)
@@ -132,13 +132,13 @@ public:
       if(MathMax(upperWick, lowerWick) > curBody * 2.5)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; } // blow-off
 
-      double maxBodyExp=(m_profile==PROFILE_PROP_FIRM?3.5:4.2);
-      double maxRangeExp=(m_profile==PROFILE_PROP_FIRM?3.0:3.8);
+      double maxBodyExp=(m_profile==PROFILE_PROP_FIRM?2.8:3.1);
+      double maxRangeExp=(m_profile==PROFILE_PROP_FIRM?2.6:3.0);
       if(bodyExp > maxBodyExp || rangeExp > maxRangeExp)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; } // too extreme
 
       double distEma = MathAbs(ctx.currentClose - ctx.emaFast);
-      double maxDistEma=(m_profile==PROFILE_PROP_FIRM?2.5:3.2);
+      double maxDistEma=(m_profile==PROFILE_PROP_FIRM?1.9:2.2);
       if(distEma > maxDistEma * ctx.atr)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; } // overextended
 
@@ -168,7 +168,7 @@ public:
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; } // momentum mismatch
 
       // immediate entry or micro-pullback-resume placeholder
-      bool immediateStrong = (bodyQ >= 0.50 && rangeExp >= 1.4);
+      bool immediateStrong = (bodyQ >= 0.56 && rangeExp >= 1.5);
       bool microPullbackResume = false;
       if(ctx.barsLoaded >= 3)
         {

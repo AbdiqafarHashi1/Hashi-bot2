@@ -139,8 +139,8 @@ public:
       bool regimeOK = (regime.regime == REGIME_COMPRESSION || regime.regime == REGIME_EXPANSION);
       if(!regimeOK)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
-      double minMq=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_MARKET_QUALITY:0.26);
-      double maxChop=(m_profile==PROFILE_PROP_FIRM?COMP_MAX_CHOPPINESS:82.0);
+      double minMq=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_MARKET_QUALITY:0.36);
+      double maxChop=(m_profile==PROFILE_PROP_FIRM?COMP_MAX_CHOPPINESS:70.0);
       int minBars=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_BARS:7);
       if(ctx.marketQuality < minMq)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
@@ -156,7 +156,7 @@ public:
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
         { gateBox=1; Reject(candidate, SUPPRESS_OTHER); return false; }
 
-      int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:6);
+      int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:9);
       if(boxAge < minBoxAge)
         { gateDuration=1; Reject(candidate, SUPPRESS_OTHER); return false; }
       double minInside=(m_profile==PROFILE_PROP_FIRM?0.60:0.46);
@@ -195,7 +195,7 @@ public:
 
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + entryQ) / 4.0, 0.0, 1.0);
 
-      if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, 1.2, candidate.plan))
+      if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, 1.0, candidate.plan))
         { gatePlan=1; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       // SL around opposite/inside box edge with ATR/spread buffer
