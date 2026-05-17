@@ -284,6 +284,9 @@ public:
         }
 
       double maeR=CalcMaeR(state,ctx), mfeR=CalcMfeR(state,ctx);
+      // Compile alias mapping for aggregate win/loss names used in diagnostics logic.
+      double avgWinAll=mfeR;
+      double avgLossAll=maeR;
       double qualityNow=MathMax(0.0,MathMin(1.0,0.55 + 0.20*curRR + 0.12*mfeR - 0.25*maeR - 0.02*state.barsInTrade + 0.15*ctx.marketQuality - 0.10*(ctx.choppiness/100.0)));
       string qAction=(qualityNow<0.28?"exit":(qualityNow<0.42?"tighten":"hold"));
       Print(StringFormat("[TRADE_QUALITY_DECAY] ticket=%I64d strategy=%d qualityNow=%.2f entryQuality=%.2f maeR=%.2f mfeR=%.2f action=%s reason=%s",state.ticket,(int)state.strategy,qualityNow,MathMax(0.0,MathMin(1.0,state.initialRiskR)),maeR,mfeR,qAction,(qualityNow<0.28?"quality_decay_exit":(qualityNow<0.42?"quality_decay_tighten":"stable"))));

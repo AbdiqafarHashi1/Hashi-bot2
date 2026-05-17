@@ -34,7 +34,7 @@ public:
       if(execMode == EXEC_MODE_LOG_ONLY)
         { reason="log_only_mode"; return true; }
       if(execMode == EXEC_MODE_TESTER_SIM)
-        { reason=(MQLInfoInteger(MQL_TESTER)?"tester_sim_mode":"tester_sim_outside_tester"); return MQLInfoInteger(MQL_TESTER); }
+        { reason=(MQLInfoInteger(MQL_TESTER)?"tester_sim_mode":"tester_sim_outside_tester"); return (MQLInfoInteger(MQL_TESTER) != 0); }
       if(execMode == EXEC_MODE_DEMO)
         {
          if(AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO){ reason="demo_mode_requires_demo_account"; return false; }
