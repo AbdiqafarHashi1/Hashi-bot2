@@ -88,8 +88,8 @@ private:
       if(ctx.currentClose <= boxHigh && ctx.currentClose >= boxLow)
          return false;
 
-      bool buyBreak = (ctx.currentClose > boxHigh + buffer);
-      bool sellBreak = (ctx.currentClose < boxLow - buffer);
+      bool buyBreak = (ctx.currentClose > boxHigh + buffer && ctx.currentHigh > boxHigh);
+      bool sellBreak = (ctx.currentClose < boxLow - buffer && ctx.currentLow < boxLow);
       if(!(buyBreak || sellBreak))
          return false;
 
@@ -99,7 +99,9 @@ private:
 
       // overextended breakout vs ATR
       double breakoutDist = (buyBreak ? (ctx.currentClose - boxHigh) : (boxLow - ctx.currentClose));
-      if(atr > 0.0 && breakoutDist > 1.5 * atr)
+      if(atr > 0.0 && breakoutDist > 1.8 * atr)
+         return false;
+      if(atr > 0.0 && breakoutDist < 0.12 * atr)
          return false;
 
       if(buyBreak)
@@ -153,11 +155,11 @@ public:
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
         { Reject(candidate, SUPPRESS_OTHER); return false; }
 
-      int minBoxAge=(m_profile==PROFILE_PROP_FIRM?12:7);
+      int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:6);
       if(boxAge < minBoxAge)
         { Reject(candidate, SUPPRESS_OTHER); return false; }
-      double minInside=(m_profile==PROFILE_PROP_FIRM?0.65:0.50);
-      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.30:0.18);
+      double minInside=(m_profile==PROFILE_PROP_FIRM?0.60:0.46);
+      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.28:0.14);
       if(insideRatio < minInside || touchScore < minTouch)
         { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 

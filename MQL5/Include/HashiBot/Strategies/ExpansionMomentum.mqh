@@ -143,8 +143,8 @@ public:
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; } // overextended
 
       // expansion quality baseline
-      double minRangeExp=(m_profile==PROFILE_PROP_FIRM?1.2:1.05);
-      double minBodyExp=(m_profile==PROFILE_PROP_FIRM?1.2:1.00);
+      double minRangeExp=(m_profile==PROFILE_PROP_FIRM?1.25:1.15);
+      double minBodyExp=(m_profile==PROFILE_PROP_FIRM?1.25:1.08);
       double minEmaSep=(m_profile==PROFILE_PROP_FIRM?0.20:0.12);
       if(rangeExp < minRangeExp || bodyExp < minBodyExp || emaSepAtr < minEmaSep)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
@@ -157,7 +157,7 @@ public:
       int extCandles=0;
       for(int i=1;i<MathMin(ctx.barsLoaded,6);i++)
         if((ctx.recentHigh[i]-ctx.recentLow[i]) > 1.6*ctx.atr) extCandles++;
-      int maxExtCandles=(m_profile==PROFILE_PROP_FIRM?4:5);
+      int maxExtCandles=(m_profile==PROFILE_PROP_FIRM?3:4);
       if(extCandles >= maxExtCandles)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
 
