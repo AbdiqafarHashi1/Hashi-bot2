@@ -107,13 +107,13 @@ private:
       else
          depthRatio = (pullbackExtreme - impulseLow) / impulseRange;
 
-      if(depthRatio < 0.20 || depthRatio > 0.82)
+      if(depthRatio < 0.24 || depthRatio > 0.74)
          return false;
 
       // ATR-normalized pullback band (roughly 0.8 - 2.2 ATR)
       double pullbackAbs = MathAbs((dir == TRADE_DIR_LONG ? impulseHigh - pullbackExtreme : pullbackExtreme - impulseLow));
       double atrN = MathHelpers::SafeDivide(pullbackAbs, ctx.atr, 0.0);
-      if(atrN < 0.8 || atrN > 2.2)
+      if(atrN < 0.7 || atrN > 1.9)
          return false;
 
       // EMA zone proximity

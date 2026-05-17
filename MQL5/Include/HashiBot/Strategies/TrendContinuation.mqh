@@ -134,8 +134,8 @@ public:
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE); // invalid regime
          return false;
         }
-      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:0.30);
-      double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:0.28);
+      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:0.26);
+      double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:0.24);
       double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:76.0);
       if(regime.confidence < minRegimeConf)
         {
@@ -170,7 +170,7 @@ public:
         }
 
       bool emaOk = (dir == TRADE_DIR_LONG ? (ctx.emaFast > ctx.emaSlow) : (ctx.emaFast < ctx.emaSlow));
-      bool rocOk = (dir == TRADE_DIR_LONG ? (ctx.roc > 0.0) : (ctx.roc < 0.0));
+      bool rocOk = (dir == TRADE_DIR_LONG ? (ctx.roc > -0.03) : (ctx.roc < 0.03));
       bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast) : (ctx.currentClose <= ctx.emaFast));
       if(!(emaOk && rocOk && priceVsEma))
         {
