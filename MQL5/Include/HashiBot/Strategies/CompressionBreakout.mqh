@@ -16,6 +16,7 @@
 class CCompressionBreakoutStrategy
   {
 private:
+   ProfileType                   m_profile;
    void Reject(StrategyCandidate &candidate,const SuppressionReason reason)
      {
       candidate.suppression.isSuppressed = true;
@@ -73,7 +74,8 @@ private:
          return false;
 
       double bodyQ = MathHelpers::Clamp(body / range, 0.0, 1.0);
-      if(bodyQ < 0.30)
+      double minBody=(m_profile==PROFILE_PROP_FIRM?0.30:0.22);
+      if(bodyQ < minBody)
          return false; // weak/doji
 
       double upperWick = ctx.currentHigh - MathMax(ctx.currentOpen, ctx.currentClose);
@@ -104,7 +106,8 @@ private:
         {
          dir = TRADE_DIR_LONG;
          double closeLoc = MathHelpers::Clamp(MathHelpers::SafeDivide(ctx.currentClose - ctx.currentLow, range, 0.0), 0.0, 1.0);
-         if(closeLoc < 0.65)
+         double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.65:0.55);
+         if(closeLoc < minCloseLoc)
             return false;
          breakoutQ = MathHelpers::Clamp(0.5 * bodyQ + 0.5 * closeLoc, 0.0, 1.0);
         }
@@ -112,7 +115,8 @@ private:
         {
          dir = TRADE_DIR_SHORT;
          double closeLoc = MathHelpers::Clamp(MathHelpers::SafeDivide(ctx.currentHigh - ctx.currentClose, range, 0.0), 0.0, 1.0);
-         if(closeLoc < 0.65)
+         double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.65:0.55);
+         if(closeLoc < minCloseLoc)
             return false;
          breakoutQ = MathHelpers::Clamp(0.5 * bodyQ + 0.5 * closeLoc, 0.0, 1.0);
         }
@@ -122,7 +126,7 @@ private:
      }
 
 public:
-   bool Init() { return true; }
+   bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); return true; }
    void Reset() {}
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
@@ -132,13 +136,16 @@ public:
       bool regimeOK = (regime.regime == REGIME_COMPRESSION || regime.regime == REGIME_EXPANSION);
       if(!regimeOK)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
-      if(ctx.marketQuality < COMP_MIN_MARKET_QUALITY)
+      double minMq=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_MARKET_QUALITY:0.26);
+      double maxChop=(m_profile==PROFILE_PROP_FIRM?COMP_MAX_CHOPPINESS:82.0);
+      int minBars=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_BARS:7);
+      if(ctx.marketQuality < minMq)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
       if(ctx.atr <= 0.0)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
-      if(ctx.choppiness > COMP_MAX_CHOPPINESS)
+      if(ctx.choppiness > maxChop)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
-      if(ctx.barsLoaded < COMP_MIN_BARS)
+      if(ctx.barsLoaded < minBars)
         { Reject(candidate, SUPPRESS_OTHER); return false; }
 
       double boxHigh=0.0, boxLow=0.0, boxWidth=0.0, insideRatio=0.0, touchScore=0.0;
@@ -146,9 +153,12 @@ public:
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
         { Reject(candidate, SUPPRESS_OTHER); return false; }
 
-      if(boxAge < 12)
+      int minBoxAge=(m_profile==PROFILE_PROP_FIRM?12:7);
+      if(boxAge < minBoxAge)
         { Reject(candidate, SUPPRESS_OTHER); return false; }
-      if(insideRatio < 0.65 || touchScore < 0.30)
+      double minInside=(m_profile==PROFILE_PROP_FIRM?0.65:0.50);
+      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.30:0.18);
+      if(insideRatio < minInside || touchScore < minTouch)
         { Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 
       if(boxWidth < MathMax(ctx.atr * 0.35, ctx.spreadPoints * ctx.point * 3.0))

@@ -16,6 +16,7 @@
 class CPullbackContinuationStrategy
   {
 private:
+   ProfileType                   m_profile;
    void Reject(StrategyCandidate &candidate,const SuppressionReason reason)
      {
       candidate.suppression.isSuppressed = true;
@@ -46,7 +47,8 @@ private:
          if(ctx.recentLow[i] < swingLow) swingLow = ctx.recentLow[i];
         }
       score = MathHelpers::SafeDivide((double)good, (double)checks, 0.0);
-      return (score >= 0.55 && ctx.currentClose > swingLow);
+      double minStruct=(m_profile==PROFILE_PROP_FIRM?0.55:0.42);
+      return (score >= minStruct && ctx.currentClose > swingLow);
      }
 
    bool BearStructureHold(const MarketContext &ctx,double &score,double &swingHigh)
@@ -71,7 +73,8 @@ private:
          if(ctx.recentHigh[i] > swingHigh) swingHigh = ctx.recentHigh[i];
         }
       score = MathHelpers::SafeDivide((double)good, (double)checks, 0.0);
-      return (score >= 0.55 && ctx.currentClose < swingHigh);
+      double minStruct=(m_profile==PROFILE_PROP_FIRM?0.55:0.42);
+      return (score >= minStruct && ctx.currentClose < swingHigh);
      }
 
    bool PullbackQuality(const MarketContext &ctx,const TradeDirection dir,double &depthRatio,double &quality)
@@ -166,7 +169,7 @@ private:
      }
 
 public:
-   bool Init() { return true; }
+   bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); return true; }
    void Reset() {}
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
@@ -175,11 +178,14 @@ public:
 
       if(!(regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN))
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
-      if(regime.confidence < PULLBACK_MIN_REGIME_CONF)
+      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MIN_REGIME_CONF:0.32);
+      double minMq=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MIN_MARKET_QUALITY:0.28);
+      double maxChop=(m_profile==PROFILE_PROP_FIRM?PULLBACK_MAX_CHOPPINESS:78.0);
+      if(regime.confidence < minRegimeConf)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
-      if(ctx.marketQuality < PULLBACK_MIN_MARKET_QUALITY)
+      if(ctx.marketQuality < minMq)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
-      if(ctx.choppiness > PULLBACK_MAX_CHOPPINESS)
+      if(ctx.choppiness > maxChop)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
       if(ctx.atr <= 0.0)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }

@@ -121,10 +121,10 @@ public:
      {
       m_profile = (profile == PROFILE_PROP_FIRM ? PROFILE_PROP_FIRM : PROFILE_PERSONAL);
       m_initialized = true;
-      m_trend.Init();
-      m_compression.Init();
-      m_pullback.Init();
-      m_expansion.Init();
+      m_trend.Init(m_profile);
+      m_compression.Init(m_profile);
+      m_pullback.Init(m_profile);
+      m_expansion.Init(m_profile);
       Reset();
       return true;
      }

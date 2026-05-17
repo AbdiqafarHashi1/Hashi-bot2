@@ -16,6 +16,7 @@
 class CTrendContinuationStrategy
   {
 private:
+   ProfileType                   m_profile;
    void Reject(StrategyCandidate &candidate,const SuppressionReason reason)
      {
       candidate.suppression.isSuppressed = true;
@@ -55,7 +56,8 @@ private:
         }
 
       score = MathHelpers::SafeDivide((double)bullishPoints, (double)checks, 0.0);
-      return (score >= 0.55);
+      double minStructure=(m_profile==PROFILE_PROP_FIRM?0.55:0.42);
+      return (score >= minStructure);
      }
 
    bool HasBearStructure(const MarketContext &ctx,double &score)
@@ -79,7 +81,8 @@ private:
         }
 
       score = MathHelpers::SafeDivide((double)bearishPoints, (double)checks, 0.0);
-      return (score >= 0.55);
+      double minStructure=(m_profile==PROFILE_PROP_FIRM?0.55:0.42);
+      return (score >= minStructure);
      }
 
    bool HasReclaimTrigger(const MarketContext &ctx,const TradeDirection dir,double &entryQuality)
@@ -89,7 +92,8 @@ private:
          return false;
 
       double bodyQ = CandleBodyQuality(ctx);
-      if(bodyQ < 0.30)
+      double minBody=(m_profile==PROFILE_PROP_FIRM?0.30:0.22);
+      if(bodyQ < minBody)
          return false;
 
       bool pullbackTouched = false;
@@ -118,7 +122,7 @@ private:
      }
 
 public:
-   bool Init() { return true; }
+   bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); return true; }
    void Reset() {}
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
@@ -130,17 +134,20 @@ public:
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE); // invalid regime
          return false;
         }
-      if(regime.confidence < TREND_MIN_REGIME_CONF)
+      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:0.30);
+      double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:0.28);
+      double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:76.0);
+      if(regime.confidence < minRegimeConf)
         {
          Reject(candidate, SUPPRESS_MARKET_QUALITY); // low confidence
          return false;
         }
-      if(ctx.marketQuality < TREND_MIN_MARKET_QUALITY)
+      if(ctx.marketQuality < minMq)
         {
          Reject(candidate, SUPPRESS_MARKET_QUALITY); // low market quality
          return false;
         }
-      if(ctx.choppiness > TREND_MAX_CHOPPINESS)
+      if(ctx.choppiness > maxChop)
         {
          Reject(candidate, SUPPRESS_MARKET_QUALITY); // high choppiness
          return false;
@@ -179,7 +186,8 @@ public:
         }
 
       double emaSlopeAtr = MathHelpers::SafeDivide(MathAbs(ctx.emaFast - ctx.emaSlow), MathMax(ctx.atr, 1e-6), 0.0);
-      if(emaSlopeAtr < 0.12)
+      double minSlope=(m_profile==PROFILE_PROP_FIRM?0.12:0.07);
+      if(emaSlopeAtr < minSlope)
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
 
       double momentumScore = MathHelpers::Clamp(0.6 * MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.5) + 0.4 * MathHelpers::Normalize01(emaSlopeAtr, 0.08, 0.9), 0.0, 1.0);
