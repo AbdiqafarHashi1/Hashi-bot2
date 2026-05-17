@@ -73,6 +73,64 @@ public:
      }
 
 
+
+
+   bool GetActiveTradeAt(const int index,TradeState &state)
+     {
+      if(index < 0 || index >= m_count)
+         return false;
+      if(m_active[index].closed)
+         return false;
+      state = m_active[index];
+      return true;
+     }
+
+   bool UpdateTradeByTicket(const long ticket,const TradeState &state)
+     {
+      for(int i=0;i<m_count;i++)
+        {
+         if(m_active[i].ticket==ticket)
+           {
+            m_active[i]=state;
+            return true;
+           }
+        }
+      return false;
+     }
+
+   int CountActiveTrades()
+     {
+      int c=0;
+      for(int i=0;i<m_count;i++) if(!m_active[i].closed) c++;
+      return c;
+     }
+
+   double SumOpenRiskAmountForSymbol(const string symbol)
+     {
+      double total=0.0;
+      for(int i=0;i<m_count;i++)
+        if(m_active[i].symbol==symbol && !m_active[i].closed) total += m_active[i].riskAmount;
+      return total;
+     }
+
+   bool GetSymbolBasketSummary(const string symbol,int &entries,TradeDirection &dir,double &totalRisk,double &avgEntry,datetime &newestTime)
+     {
+      entries=0; dir=TRADE_DIR_NONE; totalRisk=0.0; avgEntry=0.0; newestTime=0;
+      double weighted=0.0; double vol=0.0;
+      for(int i=0;i<m_count;i++)
+        {
+         if(m_active[i].symbol!=symbol || m_active[i].closed) continue;
+         entries++;
+         totalRisk += m_active[i].riskAmount;
+         if(m_active[i].openTime>newestTime) newestTime=m_active[i].openTime;
+         weighted += m_active[i].entryPrice*MathMax(m_active[i].approvedLots,0.0);
+         vol += MathMax(m_active[i].approvedLots,0.0);
+         if(dir==TRADE_DIR_NONE) dir=m_active[i].direction;
+         else if(dir!=m_active[i].direction) dir=TRADE_DIR_NONE;
+        }
+      if(vol>0.0) avgEntry=weighted/vol;
+      return entries>0;
+     }
    int CountActiveTradesForSymbol(const string symbol)
      {
       int c=0;
