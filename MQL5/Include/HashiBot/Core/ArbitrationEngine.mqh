@@ -41,6 +41,8 @@ private:
    CPullbackContinuationStrategy m_pullback;
    CExpansionMomentumStrategy    m_expansion;
    ProfileType                   m_profile;
+   bool                          m_enableSecondaryStrategy;
+   bool                          m_enableArbitrator;
 
 private:
    SignalGrade GradeFromScore(const double score) const
@@ -183,12 +185,20 @@ public:
      {
       m_profile = (profile == PROFILE_PROP_FIRM ? PROFILE_PROP_FIRM : PROFILE_PERSONAL);
       m_initialized = true;
+      m_enableSecondaryStrategy = true;
+      m_enableArbitrator = true;
       m_trend.Init(m_profile);
       m_compression.Init(m_profile);
       m_pullback.Init(m_profile);
       m_expansion.Init(m_profile);
       Reset();
       return true;
+     }
+
+   void Configure(const bool enableSecondary,const bool enableArbitrator)
+     {
+      m_enableSecondaryStrategy = enableSecondary;
+      m_enableArbitrator = enableArbitrator;
      }
 
    void Reset()
@@ -287,28 +297,45 @@ public:
          if(c.isValid && ValidateCandidate(c, vreason)) { double rr=RRNetAfterSpread(c,ctx); double minRR=(c.strategy==STRATEGY_PULLBACK_CONTINUATION?1.20:(c.strategy==STRATEGY_TREND_CONTINUATION?1.15:1.30)); if(rr<minRR){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,minRR)); } else { double exPenalty=(IsExhaustedCandle(ctx)?0.14:0.0); double chopPenalty=(ctx.choppiness>58.0?0.12:0.0); double spreadPenalty=MathHelpers::Clamp(ctx.spreadPoints/90.0,0.0,0.16); c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.18,MathMax(0.0,rr-1.0)*0.12) - chopPenalty - exPenalty - spreadPenalty,0.0,1.0); AddCandidateIfValid(c);} }
          else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
       }
-      m_pullback.Analyze(ctx, regime, c);    ScoreCandidate(c); ApplyRegimePreference(regime, c); {
-         int b=StrategyBucket(c.strategy); string vreason="";
-         if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
-         if(c.isValid && ValidateCandidate(c, vreason)) { double rr=RRNetAfterSpread(c,ctx); if(rr<0.95){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f",StrategyTypes::StrategyName(c.strategy),rr)); } else { c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.12,MathMax(0.0,rr-1.0)*0.10) - (ctx.choppiness>62.0?0.10:0.0),0.0,1.0); AddCandidateIfValid(c);} }
-         else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
-      }
+      Print("[ARB_DISABLED] strategy=PullbackContinuation reason=forex_two_strategy_rebuild");
       m_compression.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
          if(c.isValid && ValidateCandidate(c, vreason)) { double rr=RRNetAfterSpread(c,ctx); if(rr<0.95){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f",StrategyTypes::StrategyName(c.strategy),rr)); } else { c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.12,MathMax(0.0,rr-1.0)*0.10) - (ctx.choppiness>62.0?0.10:0.0),0.0,1.0); AddCandidateIfValid(c);} }
          else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
       }
-      m_expansion.Analyze(ctx, regime, c);   ScoreCandidate(c); ApplyRegimePreference(regime, c); {
-         int b=StrategyBucket(c.strategy); string vreason="";
-         if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
-         if(c.isValid && ValidateCandidate(c, vreason)) { double rr=RRNetAfterSpread(c,ctx); if(rr<0.95){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f",StrategyTypes::StrategyName(c.strategy),rr)); } else { c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.12,MathMax(0.0,rr-1.0)*0.10) - (ctx.choppiness>62.0?0.10:0.0),0.0,1.0); AddCandidateIfValid(c);} }
-         else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
-      }
+      Print("[ARB_DISABLED] strategy=ExpansionMomentum reason=forex_two_strategy_rebuild");
+
+      if(!m_enableSecondaryStrategy)
+        {
+         int kept=0;
+         for(int ci=0;ci<m_candidateCount;ci++)
+           {
+            if(m_candidates[ci].strategy==STRATEGY_TREND_CONTINUATION)
+              {
+               m_candidates[kept]=m_candidates[ci];
+               kept++;
+              }
+           }
+         m_candidateCount=kept;
+        }
 
       result.candidateCount = m_candidateCount;
       for(int i = 0; i < m_candidateCount && i < HASHIBOT_MAX_CANDIDATES; i++)
          result.candidates[i] = m_candidates[i];
+
+      if(!m_enableArbitrator && m_candidateCount > 1)
+        {
+         int pri = -1;
+         for(int pi=0;pi<m_candidateCount;pi++)
+            if(m_candidates[pi].strategy == STRATEGY_TREND_CONTINUATION) { pri = pi; break; }
+         if(pri >= 0)
+           {
+            StrategyCandidate primary = m_candidates[pri];
+            m_candidateCount = 1;
+            m_candidates[0] = primary;
+           }
+        }
 
       if(m_candidateCount == 0)
         { result.noTrade = true; result.reason = "no_candidates"; Print("[ARB] no_valid_winner reason=no_valid_candidates"); return result; }
