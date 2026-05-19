@@ -264,7 +264,18 @@ public:
          if(m_candidates[i].score.totalScore > best)
            { best = m_candidates[i].score.totalScore; idx = i; }
         }
-      return idx;
+     return idx;
+    }
+   string SuppressionReasonName(const SuppressionReason reason) const
+     {
+      if(reason==SUPPRESS_SPREAD) return "spread";
+      if(reason==SUPPRESS_MARKET_QUALITY) return "market_quality";
+      if(reason==SUPPRESS_INVALID_STRUCTURE) return "invalid_structure";
+      if(reason==SUPPRESS_VOLATILITY) return "volatility";
+      if(reason==SUPPRESS_AMBIGUOUS) return "ambiguous";
+      if(reason==SUPPRESS_SESSION) return "session";
+      if(reason==SUPPRESS_OTHER) return "other";
+      return "none";
      }
 
    ArbitrationResult Evaluate(const MarketContext &ctx,const RegimeState &regime)
@@ -301,12 +312,16 @@ public:
       bool trendSpreadOk=(ctx.spreadPoints>0.0 && ctx.spreadPoints<=maxSpread); if(trendSpreadOk) m_trendSpreadOk++;
       bool trendIndicatorsReady=(ctx.atr>0.0 && ctx.emaFast>0.0 && ctx.emaSlow>0.0); if(trendIndicatorsReady) m_trendIndicatorsReady++;
       bool trendRegimeOk=(regime.regime==REGIME_TREND_UP || regime.regime==REGIME_TREND_DOWN || ((MQLInfoInteger(MQL_TESTER)>0) && regime.confidence>=0.40 && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow))); if(trendRegimeOk) m_trendRegimeOk++;
-      m_trend.Analyze(ctx, regime, c);       ScoreCandidate(c); ApplyRegimePreference(regime, c); {
+      bool trendAnalyzed=m_trend.Analyze(ctx, regime, c);       ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
          if(c.isValid && ValidateCandidate(c, vreason)) { m_trendTriggerFound++; double rr=RRNetAfterSpread(c,ctx); double minRR=(c.strategy==STRATEGY_PULLBACK_CONTINUATION?1.20:(c.strategy==STRATEGY_TREND_CONTINUATION?1.15:1.30)); if(MQLInfoInteger(MQL_TESTER)>0 && c.strategy==STRATEGY_TREND_CONTINUATION) minRR=1.00; if(rr<minRR){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,minRR)); } else { double exPenalty=(IsExhaustedCandle(ctx)?0.14:0.0); double chopPenalty=(ctx.choppiness>58.0?0.12:0.0); double spreadPenalty=MathHelpers::Clamp(ctx.spreadPoints/90.0,0.0,0.16); c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.18,MathMax(0.0,rr-1.0)*0.12) - chopPenalty - exPenalty - spreadPenalty,0.0,1.0); AddCandidateIfValid(c); m_trendRawCreated++;} }
          else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
       }
+      Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=TrendContinuation moduleCalled=%s enoughBars=%s indicatorsReady=%s regimePass=%s triggerPass=%s rawCandidateCreated=%s candidateValid=%s reason=%s",
+                         "true",(trendEnoughBars?"true":"false"),(trendIndicatorsReady?"true":"false"),(trendRegimeOk?"true":"false"),
+                         (trendAnalyzed?"true":"false"),(m_trendRawCreated>0?"true":"false"),(c.isValid?"true":"false"),
+                         (c.suppression.reasonCount>0?SuppressionReasonName(c.suppression.reasons[0]):"ok")));
       Print("[ARB_DISABLED] strategy=PullbackContinuation reason=forex_two_strategy_rebuild");
       m_compModuleCalled++;
       bool compEnoughBars=(ctx.barsLoaded>=7); if(compEnoughBars) m_compEnoughBars++;
@@ -315,12 +330,16 @@ public:
       bool compAtrReady=(ctx.atr>0.0); if(compAtrReady) m_compAtrReady++;
       bool compBoxReady=(ctx.barsLoaded>=10); if(compBoxReady) m_compBoxReady++;
       bool compCompressionDetected=(regime.regime==REGIME_COMPRESSION || regime.regime==REGIME_EXPANSION || ((MQLInfoInteger(MQL_TESTER)>0) && regime.confidence>=0.35)); if(compCompressionDetected) m_compCompressionDetected++;
-      m_compression.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); {
+      bool compAnalyzed=m_compression.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
          if(c.isValid && ValidateCandidate(c, vreason)) { m_compBreakoutDetected++; double rr=RRNetAfterSpread(c,ctx); double compMinRR=(MQLInfoInteger(MQL_TESTER)>0?0.85:0.95); if(rr<compMinRR){ m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=rr_after_spread_low rr=%.2f",StrategyTypes::StrategyName(c.strategy),rr)); } else { c.score.totalScore=MathHelpers::Clamp(c.score.totalScore + MathMin(0.12,MathMax(0.0,rr-1.0)*0.10) - (ctx.choppiness>62.0?0.10:0.0),0.0,1.0); AddCandidateIfValid(c); m_compRawCreated++;} }
          else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=invalid_candidate:%s dir=%s score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.plan.direction),c.score.totalScore,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); }
       }
+      Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=CompressionBreakout moduleCalled=%s enoughBars=%s atrReady=%s boxReady=%s compressionDetected=%s breakoutDetected=%s rawCandidateCreated=%s candidateValid=%s reason=%s",
+                         "true",(compEnoughBars?"true":"false"),(compAtrReady?"true":"false"),(compBoxReady?"true":"false"),
+                         (compCompressionDetected?"true":"false"),(compAnalyzed?"true":"false"),(m_compRawCreated>0?"true":"false"),
+                         (c.isValid?"true":"false"),(c.suppression.reasonCount>0?SuppressionReasonName(c.suppression.reasons[0]):"ok")));
       Print("[ARB_DISABLED] strategy=ExpansionMomentum reason=forex_two_strategy_rebuild");
 
       if(!m_enableSecondaryStrategy)

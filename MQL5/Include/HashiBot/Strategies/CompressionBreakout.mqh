@@ -137,11 +137,11 @@ public:
 
       int gateBox=0,gateDuration=0,gateAtrContraction=0,gateBreakoutClose=0,gateVolExpansion=0,gateSwingWall=0,gatePlan=0;
       bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
-      bool regimeOK = (regime.regime == REGIME_COMPRESSION || regime.regime == REGIME_EXPANSION || (testerMode && regime.confidence>=0.35));
+      bool regimeOK = (regime.regime == REGIME_COMPRESSION || regime.regime == REGIME_EXPANSION || (testerMode && regime.confidence>=0.30));
       if(!regimeOK)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
-      double minMq=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_MARKET_QUALITY:0.36);
-      double maxChop=(m_profile==PROFILE_PROP_FIRM?COMP_MAX_CHOPPINESS:70.0);
+      double minMq=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_MARKET_QUALITY:(testerMode?0.30:0.34));
+      double maxChop=(m_profile==PROFILE_PROP_FIRM?COMP_MAX_CHOPPINESS:(testerMode?74.0:70.0));
       int minBars=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_BARS:7);
       if(ctx.marketQuality < minMq)
         { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
@@ -160,14 +160,14 @@ public:
       int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:(testerMode?7:9));
       if(boxAge < minBoxAge)
         { gateDuration=1; Reject(candidate, SUPPRESS_OTHER); return false; }
-      double minInside=(m_profile==PROFILE_PROP_FIRM?0.60:(testerMode?0.38:0.46));
-      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.28:(testerMode?0.10:0.14));
+      double minInside=(m_profile==PROFILE_PROP_FIRM?0.60:(testerMode?0.30:0.42));
+      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.28:(testerMode?0.08:0.12));
       if(insideRatio < minInside || touchScore < minTouch)
         { gateAtrContraction=1; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 
-      if(boxWidth < MathMax(ctx.atr * 0.35, ctx.spreadPoints * ctx.point * 3.0))
+      if(boxWidth < MathMax(ctx.atr * (testerMode?0.28:0.35), ctx.spreadPoints * ctx.point * 2.5))
         { Reject(candidate, SUPPRESS_SPREAD); return false; } // too narrow
-      if(boxWidth > ctx.atr * 2.5)
+      if(boxWidth > ctx.atr * (testerMode?3.0:2.5))
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; } // too wide
 
       TradeDirection dir = TRADE_DIR_NONE;
@@ -196,7 +196,7 @@ public:
 
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + entryQ) / 4.0, 0.0, 1.0);
 
-      if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, 1.0, candidate.plan))
+      if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, (testerMode?0.90:1.0), candidate.plan))
         { gatePlan=1; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       // SL around opposite/inside box edge with ATR/spread buffer
