@@ -131,15 +131,15 @@ public:
 
       bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
       bool regimeTrend=(regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN);
-      bool pseudoTrend=(testerMode && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow) && regime.confidence>=0.40);
+      bool pseudoTrend=(testerMode && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow) && regime.confidence>=0.33);
       if(!(regimeTrend || pseudoTrend))
         {
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE);
          return false;
         }
-      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:0.38);
-      double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:0.34);
-      double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:56.0);
+      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:(testerMode?0.33:0.36));
+      double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:(testerMode?0.28:0.32));
+      double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:(testerMode?62.0:58.0));
       if(regime.confidence < minRegimeConf)
         {
          Reject(candidate, SUPPRESS_MARKET_QUALITY); // low confidence
@@ -161,7 +161,10 @@ public:
          return false;
         }
 
-      TradeDirection dir = (regime.regime == REGIME_TREND_UP ? TRADE_DIR_LONG : TRADE_DIR_SHORT);
+      TradeDirection dir = TRADE_DIR_NONE;
+      if(regime.regime == REGIME_TREND_UP) dir = TRADE_DIR_LONG;
+      else if(regime.regime == REGIME_TREND_DOWN) dir = TRADE_DIR_SHORT;
+      else dir = (ctx.emaFast >= ctx.emaSlow ? TRADE_DIR_LONG : TRADE_DIR_SHORT);
       candidate.direction = dir;
 
       double structureScore = 0.0;
@@ -173,7 +176,7 @@ public:
         }
 
       bool emaOk = (dir == TRADE_DIR_LONG ? (ctx.emaFast > ctx.emaSlow) : (ctx.emaFast < ctx.emaSlow));
-      double minRoc=(testerMode?0.0:0.03);
+      double minRoc=(testerMode?0.0:0.015);
       bool rocOk = (dir == TRADE_DIR_LONG ? (ctx.roc > minRoc) : (ctx.roc < -minRoc));
       bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast) : (ctx.currentClose <= ctx.emaFast));
       if(!(emaOk && rocOk && priceVsEma))
@@ -184,7 +187,7 @@ public:
 
       double entryQuality = 0.0;
       double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
-      if(bodyAtr>1.45){ Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+      if(bodyAtr>(testerMode?1.70:1.45)){ Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
       if(!HasReclaimTrigger(ctx, dir, entryQuality))
         {
          Reject(candidate, SUPPRESS_AMBIGUOUS); // no reclaim trigger
@@ -192,7 +195,7 @@ public:
         }
 
       double emaSlopeAtr = MathHelpers::SafeDivide(MathAbs(ctx.emaFast - ctx.emaSlow), MathMax(ctx.atr, 1e-6), 0.0);
-      double minSlope=(m_profile==PROFILE_PROP_FIRM?0.14:0.11);
+      double minSlope=(m_profile==PROFILE_PROP_FIRM?0.14:(testerMode?0.08:0.10));
       if(emaSlopeAtr < minSlope)
         { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
 
@@ -212,7 +215,8 @@ public:
       // deterministic confidence blend
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + structureScore + momentumScore + entryQuality) / 4.0, 0.0, 1.0);
 
-      if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_TREND_CONTINUATION, dir, ctx, 1.6, candidate.plan))
+      double atrMult=(testerMode?1.35:1.55);
+      if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_TREND_CONTINUATION, dir, ctx, atrMult, candidate.plan))
         {
          Reject(candidate, SUPPRESS_OTHER); // invalid trade plan
          return false;
@@ -237,15 +241,17 @@ public:
          Reject(candidate, SUPPRESS_OTHER);
          return false;
         }
+      double rr1=(testerMode?0.95:1.05);
+      double rr2=(testerMode?1.80:2.00);
       if(dir == TRADE_DIR_LONG)
         {
-         candidate.plan.takeProfit1 = candidate.plan.entryPrice + risk;
-         candidate.plan.takeProfit2 = candidate.plan.entryPrice + 2.0 * risk;
+         candidate.plan.takeProfit1 = candidate.plan.entryPrice + rr1 * risk;
+         candidate.plan.takeProfit2 = candidate.plan.entryPrice + rr2 * risk;
         }
       else
         {
-         candidate.plan.takeProfit1 = candidate.plan.entryPrice - risk;
-         candidate.plan.takeProfit2 = candidate.plan.entryPrice - 2.0 * risk;
+         candidate.plan.takeProfit1 = candidate.plan.entryPrice - rr1 * risk;
+         candidate.plan.takeProfit2 = candidate.plan.entryPrice - rr2 * risk;
         }
 
       candidate.plan.strategy = STRATEGY_TREND_CONTINUATION;
