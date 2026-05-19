@@ -605,7 +605,8 @@ bool ExecuteSelectedPlan(const TradePlan &plan,const MarketContext &ctx,const Ri
   {
    bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
    if(!selectedPlanExists){ reason="selected_plan_missing"; Print("[FINAL_SUBMIT_BLOCKER] step=selected_plan_exists reason=selected_plan_missing values=selected=false"); return false; }
-   if(!plan.valid){ reason="plan_not_marked_valid"; Print(StringFormat("[FINAL_SUBMIT_BLOCKER] step=plan_valid reason=plan_not_marked_valid values=plan.valid=%s",(plan.valid?"true":"false"))); return false; }
+   bool planValid=IsPlanExecutable(plan);
+   if(!planValid){ reason="plan_not_marked_valid"; Print(StringFormat("[FINAL_SUBMIT_BLOCKER] step=plan_valid reason=plan_not_marked_valid values=planValid=%s",(planValid?"true":"false"))); return false; }
    if(plan.strategy==STRATEGY_NONE || StringLen(StrategyName(plan.strategy))==0){ reason="strategy_missing"; Print(StringFormat("[FINAL_SUBMIT_BLOCKER] step=strategy_name reason=strategy_missing values=strategy=%d",(int)plan.strategy)); return false; }
    if(plan.direction!=TRADE_DIR_LONG && plan.direction!=TRADE_DIR_SHORT){ reason="direction_invalid"; Print(StringFormat("[FINAL_SUBMIT_BLOCKER] step=direction reason=direction_invalid values=direction=%d",(int)plan.direction)); return false; }
    if(plan.entryPrice<=0.0 || plan.stopLoss<=0.0 || plan.takeProfit1<=0.0){ reason="entry_sl_tp_invalid"; Print(StringFormat("[FINAL_SUBMIT_BLOCKER] step=entry_sl_tp_presence reason=entry_sl_tp_invalid values=entry=%.5f sl=%.5f tp=%.5f",plan.entryPrice,plan.stopLoss,plan.takeProfit1)); return false; }
