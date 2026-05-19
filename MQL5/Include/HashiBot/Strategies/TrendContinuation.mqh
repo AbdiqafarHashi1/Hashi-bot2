@@ -16,7 +16,13 @@
 class CTrendContinuationStrategy
   {
 private:
+   struct TrendAuditCounters
+     {
+      long rejectTrend,rejectMomentum,rejectTrigger,rejectAtr,rejectSpread,rejectSlTp,rawCreated;
+      void Reset(){ rejectTrend=rejectMomentum=rejectTrigger=rejectAtr=rejectSpread=rejectSlTp=rawCreated=0; }
+     };
    ProfileType                   m_profile;
+   TrendAuditCounters            m_audit;
    void Reject(StrategyCandidate &candidate,const SuppressionReason reason)
      {
       candidate.suppression.isSuppressed = true;
@@ -111,10 +117,11 @@ private:
            }
         }
 
-      bool directionalClose = (dir == TRADE_DIR_LONG ? ctx.currentClose > ctx.currentOpen : ctx.currentClose < ctx.currentOpen);
-      bool reclaim = (dir == TRADE_DIR_LONG ? ctx.currentClose >= ctx.emaFast : ctx.currentClose <= ctx.emaFast);
+      bool directionalClose = (dir == TRADE_DIR_LONG ? ctx.currentClose >= ctx.currentOpen : ctx.currentClose <= ctx.currentOpen);
+      bool reclaim = (dir == TRADE_DIR_LONG ? ctx.currentClose >= (ctx.emaFast - 0.10*ctx.atr) : ctx.currentClose <= (ctx.emaFast + 0.10*ctx.atr));
+      bool breakMinor = (dir == TRADE_DIR_LONG ? ctx.currentClose > ctx.previousHigh : ctx.currentClose < ctx.previousLow);
 
-      if(!(pullbackTouched && directionalClose && reclaim))
+      if(!(pullbackTouched && (directionalClose || breakMinor) && reclaim))
          return false;
 
       entryQuality = MathHelpers::Clamp(0.5 * bodyQ + 0.5, 0.0, 1.0);
@@ -122,8 +129,15 @@ private:
      }
 
 public:
-   bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); return true; }
-   void Reset() {}
+   bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); m_audit.Reset(); return true; }
+   void Reset() { m_audit.Reset(); }
+   long RejectTrend() const { return m_audit.rejectTrend; }
+   long RejectMomentum() const { return m_audit.rejectMomentum; }
+   long RejectTrigger() const { return m_audit.rejectTrigger; }
+   long RejectAtr() const { return m_audit.rejectAtr; }
+   long RejectSpread() const { return m_audit.rejectSpread; }
+   long RejectSlTp() const { return m_audit.rejectSlTp; }
+   long RawCreated() const { return m_audit.rawCreated; }
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
@@ -134,6 +148,7 @@ public:
       bool pseudoTrend=(testerMode && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow) && regime.confidence>=0.33);
       if(!(regimeTrend || pseudoTrend))
         {
+         m_audit.rejectTrend++;
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE);
          return false;
         }
@@ -142,21 +157,25 @@ public:
       double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:(testerMode?62.0:58.0));
       if(regime.confidence < minRegimeConf)
         {
+         m_audit.rejectTrend++;
          Reject(candidate, SUPPRESS_MARKET_QUALITY); // low confidence
          return false;
         }
       if(ctx.marketQuality < minMq)
         {
+         m_audit.rejectTrend++;
          Reject(candidate, SUPPRESS_MARKET_QUALITY); // low market quality
          return false;
         }
       if(ctx.choppiness > maxChop)
         {
+         m_audit.rejectTrend++;
          Reject(candidate, SUPPRESS_MARKET_QUALITY); // high choppiness
          return false;
         }
       if(ctx.atr <= 0.0)
         {
+         m_audit.rejectAtr++;
          Reject(candidate, SUPPRESS_VOLATILITY); // invalid ATR
          return false;
         }
@@ -171,33 +190,36 @@ public:
       bool structureOK = (dir == TRADE_DIR_LONG ? HasBullStructure(ctx, structureScore) : HasBearStructure(ctx, structureScore));
       if(!structureOK)
         {
+         m_audit.rejectTrend++;
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE);
          return false;
         }
 
       bool emaOk = (dir == TRADE_DIR_LONG ? (ctx.emaFast > ctx.emaSlow) : (ctx.emaFast < ctx.emaSlow));
-      double minRoc=(testerMode?0.0:0.015);
+      double minRoc=(testerMode?0.0:0.008);
       bool rocOk = (dir == TRADE_DIR_LONG ? (ctx.roc > minRoc) : (ctx.roc < -minRoc));
-      bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast) : (ctx.currentClose <= ctx.emaFast));
+      bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast - 0.15*ctx.atr) : (ctx.currentClose <= ctx.emaFast + 0.15*ctx.atr));
       if(!(emaOk && rocOk && priceVsEma))
         {
+         m_audit.rejectMomentum++;
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE); // momentum mismatch
          return false;
         }
 
       double entryQuality = 0.0;
       double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
-      if(bodyAtr>(testerMode?1.70:1.45)){ Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+      if(bodyAtr>(testerMode?1.70:1.45)){ m_audit.rejectTrigger++; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
       if(!HasReclaimTrigger(ctx, dir, entryQuality))
         {
+         m_audit.rejectTrigger++;
          Reject(candidate, SUPPRESS_AMBIGUOUS); // no reclaim trigger
          return false;
         }
 
       double emaSlopeAtr = MathHelpers::SafeDivide(MathAbs(ctx.emaFast - ctx.emaSlow), MathMax(ctx.atr, 1e-6), 0.0);
-      double minSlope=(m_profile==PROFILE_PROP_FIRM?0.14:(testerMode?0.08:0.10));
+      double minSlope=(m_profile==PROFILE_PROP_FIRM?0.12:(testerMode?0.06:0.08));
       if(emaSlopeAtr < minSlope)
-        { Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
+        { m_audit.rejectMomentum++; Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
 
       double momentumScore = MathHelpers::Clamp(0.6 * MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.5) + 0.4 * MathHelpers::Normalize01(emaSlopeAtr, 0.08, 0.9), 0.0, 1.0);
       double volScore = MathHelpers::Normalize01(ctx.atr, 0.0, MathMax(ctx.currentClose * 0.01, 1e-6));
@@ -218,6 +240,7 @@ public:
       double atrMult=(testerMode?1.35:1.55);
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_TREND_CONTINUATION, dir, ctx, atrMult, candidate.plan))
         {
+         m_audit.rejectSlTp++;
          Reject(candidate, SUPPRESS_OTHER); // invalid trade plan
          return false;
         }
@@ -238,6 +261,7 @@ public:
       double risk = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
       if(risk <= 0.0)
         {
+         m_audit.rejectSlTp++;
          Reject(candidate, SUPPRESS_OTHER);
          return false;
         }
@@ -257,6 +281,7 @@ public:
       candidate.plan.strategy = STRATEGY_TREND_CONTINUATION;
       candidate.plan.direction = dir;
       candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
+      if(candidate.isValid) m_audit.rawCreated++; else m_audit.rejectSlTp++;
       return candidate.isValid;
      }
 
