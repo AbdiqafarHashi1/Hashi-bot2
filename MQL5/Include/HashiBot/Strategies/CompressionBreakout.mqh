@@ -16,7 +16,13 @@
 class CCompressionBreakoutStrategy
   {
 private:
+   struct CompressionAuditCounters
+     {
+      long rejectBox,rejectBoxWidth,rejectCompression,rejectBreakout,rejectAtr,rejectSpread,rejectSlTp,rawCreated;
+      void Reset(){ rejectBox=rejectBoxWidth=rejectCompression=rejectBreakout=rejectAtr=rejectSpread=rejectSlTp=rawCreated=0; }
+     };
    ProfileType                   m_profile;
+   CompressionAuditCounters      m_audit;
    void Reject(StrategyCandidate &candidate,const SuppressionReason reason)
      {
       candidate.suppression.isSuppressed = true;
@@ -67,7 +73,7 @@ private:
       entryQ = 0.0;
 
       double atr = ctx.atr;
-      double buffer = MathMax(ctx.point * 2.0, (MQLInfoInteger(MQL_TESTER)>0?0.05:0.10) * atr);
+      double buffer = MathMax(ctx.point * 1.5, (MQLInfoInteger(MQL_TESTER)>0?0.03:0.08) * atr);
       double body = MathAbs(ctx.currentClose - ctx.currentOpen);
       double range = ctx.currentHigh - ctx.currentLow;
       if(range <= 0.0)
@@ -101,7 +107,7 @@ private:
       double breakoutDist = (buyBreak ? (ctx.currentClose - boxHigh) : (boxLow - ctx.currentClose));
       if(atr > 0.0 && breakoutDist > 1.8 * atr)
          return false;
-      if(atr > 0.0 && breakoutDist < (MQLInfoInteger(MQL_TESTER)>0?0.06:0.12) * atr)
+      if(atr > 0.0 && breakoutDist < (MQLInfoInteger(MQL_TESTER)>0?0.03:0.08) * atr)
          return false;
 
       if(buyBreak)
@@ -128,8 +134,16 @@ private:
      }
 
 public:
-   bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); return true; }
-   void Reset() {}
+   bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); m_audit.Reset(); return true; }
+   void Reset() { m_audit.Reset(); }
+   long RejectBox() const { return m_audit.rejectBox; }
+   long RejectBoxWidth() const { return m_audit.rejectBoxWidth; }
+   long RejectCompression() const { return m_audit.rejectCompression; }
+   long RejectBreakout() const { return m_audit.rejectBreakout; }
+   long RejectAtr() const { return m_audit.rejectAtr; }
+   long RejectSpread() const { return m_audit.rejectSpread; }
+   long RejectSlTp() const { return m_audit.rejectSlTp; }
+   long RawCreated() const { return m_audit.rawCreated; }
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
@@ -139,41 +153,41 @@ public:
       bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
       bool regimeOK = (regime.regime == REGIME_COMPRESSION || regime.regime == REGIME_EXPANSION || (testerMode && regime.confidence>=0.30));
       if(!regimeOK)
-        { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
+        { m_audit.rejectCompression++; Reject(candidate, SUPPRESS_VOLATILITY); return false; }
       double minMq=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_MARKET_QUALITY:(testerMode?0.30:0.34));
       double maxChop=(m_profile==PROFILE_PROP_FIRM?COMP_MAX_CHOPPINESS:(testerMode?74.0:70.0));
       int minBars=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_BARS:7);
       if(ctx.marketQuality < minMq)
-        { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
+        { m_audit.rejectCompression++; Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
       if(ctx.atr <= 0.0)
-        { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
+        { m_audit.rejectAtr++; Reject(candidate, SUPPRESS_VOLATILITY); return false; }
       if(ctx.choppiness > maxChop)
-        { Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
+        { m_audit.rejectCompression++; Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
       if(ctx.barsLoaded < minBars)
-        { Reject(candidate, SUPPRESS_OTHER); return false; }
+        { m_audit.rejectBox++; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       double boxHigh=0.0, boxLow=0.0, boxWidth=0.0, insideRatio=0.0, touchScore=0.0;
       int boxAge=0;
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
-        { gateBox=1; Reject(candidate, SUPPRESS_OTHER); return false; }
+        { gateBox=1; m_audit.rejectBox++; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:(testerMode?7:9));
       if(boxAge < minBoxAge)
-        { gateDuration=1; Reject(candidate, SUPPRESS_OTHER); return false; }
-      double minInside=(m_profile==PROFILE_PROP_FIRM?0.60:(testerMode?0.30:0.42));
-      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.28:(testerMode?0.08:0.12));
+        { gateDuration=1; m_audit.rejectBox++; Reject(candidate, SUPPRESS_OTHER); return false; }
+      double minInside=(m_profile==PROFILE_PROP_FIRM?0.55:(testerMode?0.22:0.35));
+      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.24:(testerMode?0.06:0.10));
       if(insideRatio < minInside || touchScore < minTouch)
-        { gateAtrContraction=1; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+        { gateAtrContraction=1; m_audit.rejectCompression++; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 
-      if(boxWidth < MathMax(ctx.atr * (testerMode?0.28:0.35), ctx.spreadPoints * ctx.point * 2.5))
-        { Reject(candidate, SUPPRESS_SPREAD); return false; } // too narrow
+      if(boxWidth < MathMax(ctx.atr * (testerMode?0.20:0.30), ctx.spreadPoints * ctx.point * 2.2))
+        { m_audit.rejectBoxWidth++; m_audit.rejectSpread++; Reject(candidate, SUPPRESS_SPREAD); return false; } // too narrow
       if(boxWidth > ctx.atr * (testerMode?3.0:2.5))
-        { Reject(candidate, SUPPRESS_VOLATILITY); return false; } // too wide
+        { m_audit.rejectBoxWidth++; Reject(candidate, SUPPRESS_VOLATILITY); return false; } // too wide
 
       TradeDirection dir = TRADE_DIR_NONE;
       double breakoutQ = 0.0, entryQ = 0.0;
       if(!BreakoutSignal(ctx, boxHigh, boxLow, boxWidth, dir, breakoutQ, entryQ))
-        { gateBreakoutClose=1; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+        { gateBreakoutClose=1; m_audit.rejectBreakout++; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 
       candidate.direction = dir;
 
@@ -197,7 +211,7 @@ public:
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + entryQ) / 4.0, 0.0, 1.0);
 
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, (testerMode?0.90:1.0), candidate.plan))
-        { gatePlan=1; Reject(candidate, SUPPRESS_OTHER); return false; }
+        { gatePlan=1; m_audit.rejectSlTp++; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       // SL around opposite/inside box edge with ATR/spread buffer
       double buffer = MathMax(0.20 * ctx.atr, ctx.spreadPoints * ctx.point * 1.5);
@@ -208,7 +222,7 @@ public:
 
       double risk = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
       if(risk <= 0.0)
-        { Reject(candidate, SUPPRESS_OTHER); return false; }
+        { m_audit.rejectSlTp++; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       // TP1 = box height or 1R, TP2 = 2R/measured move
       double tp1ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + risk : candidate.plan.entryPrice - risk);
@@ -224,7 +238,9 @@ public:
       candidate.plan.direction = dir;
       candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
       if(!candidate.isValid)
-        { Reject(candidate, SUPPRESS_OTHER); return false; }
+        { m_audit.rejectSlTp++; Reject(candidate, SUPPRESS_OTHER); return false; }
+
+      m_audit.rawCreated++;
 
       return true;
      }
