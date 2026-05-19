@@ -157,6 +157,7 @@ long g_diagBarsProcessed=0,g_diagCandidates=0,g_diagRegimeAccepted=0,g_diagRegim
 long g_diagRiskInputValid=0,g_diagRiskInputInvalid=0,g_diagDryRunLifecycleCreated=0;
 long g_diagRiskRejectedNoTradeOrWinner=0,g_diagRiskRejectedInvalidStopDistance=0,g_diagRiskRejectedInvalidTick=0,g_diagRiskRejectedLotBelowMin=0,g_diagRiskRejectedInvalidRiskPct=0,g_diagRiskRejectedOther=0;
 long g_r_regime_conf=0,g_r_market_quality=0,g_r_score=0,g_r_chop=0,g_r_atr=0,g_r_spread=0,g_r_cooldown=0,g_r_minbars=0,g_r_portfolio=0,g_r_risk=0,g_r_incomplete=0,g_r_no_candidate=0;
+long g_globalHardRejects=0,g_globalWeakRegimeAllowed=0,g_globalWeakQualityAllowed=0,g_strategiesReachedAfterWeakRegime=0;
 long g_fallbackEval=0,g_fallbackAccepted=0,g_fallbackRejected=0,g_symbolsScanned=0,g_symbolsSkipped=0; string g_fallbackLastReject="none";
 long g_scalperCandidatesEvaluated=0,g_scalperCandidatesAccepted=0,g_scalperFallbackAccepted=0,g_scalperFallbackRejected=0;
 long g_trendAccepted=0,g_trendRejected=0,g_pullbackAccepted=0,g_pullbackRejected=0,g_compressionAccepted=0,g_compressionRejected=0,g_expansionAccepted=0,g_expansionRejected=0;
@@ -854,11 +855,29 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    if(regime.trendUp || regime.trendDown)
       ctx.trendStrength=MathMax(ctx.trendStrength,regime.confidence);
    if(g_symCooldown[symIdx]>0){ g_noTradeTotal++; Print(StringFormat("[NO_TRADE_DECISION] reason=symbol_cooldown bestStrategy=none bestScore=0.00 dominantRegime=%d rrAfterSpread=0.00",(int)regime.regime)); return; }
-   if(regime.confidence < activeMinRegime){ if(ShouldLog(isNewBar)) g_r_regime_conf++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=regime_conf_too_low"); return; }
-   if(ctx.marketQuality < activeMinMarketQuality){ if(ShouldLog(isNewBar)) g_r_market_quality++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=market_quality_too_low"); return; }
+   bool weakRegime=(regime.confidence < activeMinRegime);
+   bool weakMarketQuality=(ctx.marketQuality < activeMinMarketQuality);
+   if(weakRegime)
+     {
+      if(ShouldLog(isNewBar)) g_r_regime_conf++;
+      g_globalWeakRegimeAllowed++;
+      if(g_isTester && regime.regime!=REGIME_UNKNOWN)
+         regime.regime=REGIME_UNKNOWN;
+      if(ShouldLog(isNewBar))
+         Print(StringFormat("[GLOBAL_GATE] symbol=%s regime=%.2f marketQuality=%.2f action=allow_with_penalty reason=weak_regime_not_hard_blocked",symbol,regime.confidence,ctx.marketQuality));
+     }
+   if(weakMarketQuality)
+     {
+      if(ShouldLog(isNewBar)) g_r_market_quality++;
+      g_globalWeakQualityAllowed++;
+      if(ShouldLog(isNewBar))
+         Print(StringFormat("[GLOBAL_GATE] symbol=%s regime=%.2f marketQuality=%.2f action=allow_with_penalty reason=weak_market_quality_not_hard_blocked",symbol,regime.confidence,ctx.marketQuality));
+     }
    if(ctx.choppiness > activeMaxChop){ if(ShouldLog(isNewBar)) g_r_chop++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=choppiness_too_high"); return; }
    if(ctx.atr <= activeMinAtrPct*ctx.currentClose){ if(ShouldLog(isNewBar)) g_r_atr++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=atr_too_low"); return; }
-   double effectiveSpreadLimit=(g_isTester?g_testerSpreadLimitPoints:MaxSpreadPoints); if(ctx.spreadPoints > effectiveSpreadLimit){ if(ShouldLog(isNewBar)) g_r_spread++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=spread_too_high"); return; }
+   double effectiveSpreadLimit=(g_isTester?g_testerSpreadLimitPoints:MaxSpreadPoints); if(ctx.spreadPoints > effectiveSpreadLimit){ if(ShouldLog(isNewBar)) g_r_spread++; g_diagRegimeRejected++; g_globalHardRejects++; Print("[REJECT][PersonalEA] sym=",symbol," reason=spread_extreme"); return; }
+   if(weakRegime || weakMarketQuality)
+      g_strategiesReachedAfterWeakRegime++;
 
    ArbitrationResult arb=g_arb.Evaluate(ctx, regime); g_diagCandidates++; g_testerArbDecisions++; g_starveRawCandidates+=arb.candidateCount; if(arb.hasWinner) g_diagWinners++; else { g_r_no_candidate++; g_testerArbNoTrades++; } g_lastArbTime=TimeCurrent();
    double wTrend=RegimeCompatibilityWeight(STRATEGY_TREND_CONTINUATION,regime),wPull=RegimeCompatibilityWeight(STRATEGY_PULLBACK_CONTINUATION,regime),wComp=RegimeCompatibilityWeight(STRATEGY_COMPRESSION_BREAKOUT,regime),wExp=RegimeCompatibilityWeight(STRATEGY_EXPANSION_MOMENTUM,regime),wMicro=RegimeCompatibilityWeight(STRATEGY_NONE,regime);
@@ -871,7 +890,9 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       double rr=RRNetAfterSpread(c.plan,ctx);
       double lossPenalty=MathMin(0.22,0.04*g_strategyLossStreak[b]);
       double clusterPenalty=(g_barsSinceEntry<2?0.08:0.0);
-      double adj=MathMax(0.0,c.score.totalScore*rw + MathMin(0.20,MathMax(0.0,rr-0.8)*0.10) - lossPenalty - clusterPenalty - g_strategyScorePenalty[b]);
+      double weakRegimePenalty=(weakRegime?0.16:0.0);
+      double weakMarketPenalty=(weakMarketQuality?0.10:0.0);
+      double adj=MathMax(0.0,c.score.totalScore*rw + MathMin(0.20,MathMax(0.0,rr-0.8)*0.10) - lossPenalty - clusterPenalty - g_strategyScorePenalty[b] - weakRegimePenalty - weakMarketPenalty);
       string edgeAction="allow",edgeReason=""; double edgeMult=1.0;
       bool edgeOK=StrategyEdgeGate(b,edgeAction,edgeReason,edgeMult);
       double minRR=StrategyMinRR(b);
@@ -1251,6 +1272,7 @@ void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    Print(StringFormat("[STARVATION_AUDIT] rawCandidates=%d validPlans=%d selected=%d submitted=%d successful=%d orderManagerReached=%d rejectedBeforePlan=%d rejectedByRR=%d rejectedByScore=%d rejectedBySpread=%d rejectedByRegime=%d rejectedByPortfolio=%d rejectedByArbitrator=%d rejectedByRisk=%d topBlockingGate=%s",g_starveRawCandidates,g_starveValidPlans,g_starveSelected,g_testerOrdersAttempted,g_testerOrdersSuccessful,g_starveOrderManagerReached,g_starveRejectedBeforePlan,g_starveRejectedByRR,g_starveRejectedByScore,g_starveRejectedBySpread,g_starveRejectedByRegime,g_starveRejectedByPortfolio,g_starveRejectedByArbitrator,g_starveRejectedByRisk,starveGate));
    Print(StringFormat("[CALIB_SUMMARY][PersonalEA] bars=%d candidates=%d regime_ok=%d regime_rej=%d winners=%d dryrun=%d risk_ok=%d risk_rej=%d port_ok=%d port_rej=%d",g_diagBarsProcessed,g_diagCandidates,g_diagRegimeAccepted,g_diagRegimeRejected,g_diagWinners,g_diagDryRunSubmits,g_diagRiskApproved,g_diagRiskRejected,g_diagPortApproved,g_diagPortRejected));
    Print(StringFormat("[CALIB_REJECTS][PersonalEA] regime_conf=%d market_q=%d score=%d chop=%d atr=%d spread=%d cooldown=%d minbars=%d portfolio=%d risk=%d incomplete=%d no_candidate=%d fallbackEval=%d fallbackOk=%d fallbackRej=%d scalperEval=%d scalperOk=%d scalperFbOk=%d scalperFbRej=%d symbols=%d skipped=%d lastFbRej=%s",g_r_regime_conf,g_r_market_quality,g_r_score,g_r_chop,g_r_atr,g_r_spread,g_r_cooldown,g_r_minbars,g_r_portfolio,g_r_risk,g_r_incomplete,g_r_no_candidate,g_fallbackEval,g_fallbackAccepted,g_fallbackRejected,g_scalperCandidatesEvaluated,g_scalperCandidatesAccepted,g_scalperFallbackAccepted,g_scalperFallbackRejected,g_symbolsScanned,g_symbolsSkipped,g_fallbackLastReject));
+   Print(StringFormat("[GLOBAL_GATE_SUMMARY] globalHardRejects=%d globalWeakRegimeAllowed=%d globalWeakQualityAllowed=%d strategiesReachedAfterWeakRegime=%d",g_globalHardRejects,g_globalWeakRegimeAllowed,g_globalWeakQualityAllowed,g_strategiesReachedAfterWeakRegime));
    Print(StringFormat("[CALIB_STRAT][PersonalEA] trend=%d/%d pullback=%d/%d compression=%d/%d expansion=%d/%d micro=%d/%d/%d/%d scale=%d/%d/%d/%d winners=[%d,%d,%d,%d,micro=%d]",g_trendAccepted,g_trendRejected,g_pullbackAccepted,g_pullbackRejected,g_compressionAccepted,g_compressionRejected,g_expansionAccepted,g_expansionRejected,g_microEvaluated,g_microAccepted,g_microRejected,g_microSubmitted,g_scaleEvaluated,g_scaleAccepted,g_scaleRejected,g_scaleSubmitted,g_winTrend,g_winPullback,g_winCompression,g_winExpansion,g_winMicro));
    Print(StringFormat("[EXEC_STRAT][PersonalEA] dryrunSubmitted trend=%d pullback=%d compression=%d expansion=%d micro=%d",g_pipeSubmitOk[0],g_pipeSubmitOk[1],g_pipeSubmitOk[2],g_pipeSubmitOk[3],g_pipeSubmitOk[4]));
    Print(StringFormat("[PIPE_SUMMARY][PersonalEA] winner=[%d,%d,%d,%d,%d] planOk=[%d,%d,%d,%d,%d] planRej=[%d,%d,%d,%d,%d] riskOk=[%d,%d,%d,%d,%d] riskRej=[%d,%d,%d,%d,%d] portOk=[%d,%d,%d,%d,%d] portRej=[%d,%d,%d,%d,%d] submitOk=[%d,%d,%d,%d,%d] submitRej=[%d,%d,%d,%d,%d] lifeOk=[%d,%d,%d,%d,%d] lifeRej=[%d,%d,%d,%d,%d]",g_pipeWinnerSel[0],g_pipeWinnerSel[1],g_pipeWinnerSel[2],g_pipeWinnerSel[3],g_pipeWinnerSel[4],g_pipePlanOk[0],g_pipePlanOk[1],g_pipePlanOk[2],g_pipePlanOk[3],g_pipePlanOk[4],g_pipePlanRej[0],g_pipePlanRej[1],g_pipePlanRej[2],g_pipePlanRej[3],g_pipePlanRej[4],g_pipeRiskOk[0],g_pipeRiskOk[1],g_pipeRiskOk[2],g_pipeRiskOk[3],g_pipeRiskOk[4],g_pipeRiskRej[0],g_pipeRiskRej[1],g_pipeRiskRej[2],g_pipeRiskRej[3],g_pipeRiskRej[4],g_pipePortOk[0],g_pipePortOk[1],g_pipePortOk[2],g_pipePortOk[3],g_pipePortOk[4],g_pipePortRej[0],g_pipePortRej[1],g_pipePortRej[2],g_pipePortRej[3],g_pipePortRej[4],g_pipeSubmitOk[0],g_pipeSubmitOk[1],g_pipeSubmitOk[2],g_pipeSubmitOk[3],g_pipeSubmitOk[4],g_pipeSubmitRej[0],g_pipeSubmitRej[1],g_pipeSubmitRej[2],g_pipeSubmitRej[3],g_pipeSubmitRej[4],g_pipeLifecycleOk[0],g_pipeLifecycleOk[1],g_pipeLifecycleOk[2],g_pipeLifecycleOk[3],g_pipeLifecycleOk[4],g_pipeLifecycleRej[0],g_pipeLifecycleRej[1],g_pipeLifecycleRej[2],g_pipeLifecycleRej[3],g_pipeLifecycleRej[4]));
