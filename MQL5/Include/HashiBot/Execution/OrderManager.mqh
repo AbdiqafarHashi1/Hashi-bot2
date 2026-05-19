@@ -12,10 +12,14 @@ private:
    bool            m_dryRun;
    CTradeLifecycle m_lifecycle;
    string          m_lastAction;
+   long            m_lastRetcode;
+   string          m_lastRetcodeDescription;
+   long            m_lastOrder;
+   long            m_lastDeal;
 
 public:
-   bool Init(bool dryRun=true){ m_dryRun=dryRun; m_initialized=true; m_lifecycle.Init(); m_lastAction="init"; return true; }
-   void Reset(){ m_lifecycle.Reset(); m_lastAction="reset"; }
+   bool Init(bool dryRun=true){ m_dryRun=dryRun; m_initialized=true; m_lifecycle.Init(); m_lastAction="init"; m_lastRetcode=0; m_lastRetcodeDescription=""; m_lastOrder=0; m_lastDeal=0; return true; }
+   void Reset(){ m_lifecycle.Reset(); m_lastAction="reset"; m_lastRetcode=0; m_lastRetcodeDescription=""; m_lastOrder=0; m_lastDeal=0; }
 
    bool ValidateTradePlan(const TradePlan &plan,const MarketContext &ctx,string &reason)
      {
@@ -115,10 +119,18 @@ public:
          ok = trade.Sell(risk.approvedLots, ctx.symbol, 0.0, plan.stopLoss, plan.takeProfit1, comment);
       if(!ok)
         {
+         m_lastRetcode=(long)trade.ResultRetcode();
+         m_lastRetcodeDescription=trade.ResultRetcodeDescription();
+         m_lastOrder=(long)trade.ResultOrder();
+         m_lastDeal=(long)trade.ResultDeal();
          reason = "broker_send_failed_retcode_" + IntegerToString((int)trade.ResultRetcode()) + "_" + trade.ResultRetcodeDescription();
          m_lastAction = reason;
          return false;
         }
+      m_lastRetcode=(long)trade.ResultRetcode();
+      m_lastRetcodeDescription=trade.ResultRetcodeDescription();
+      m_lastOrder=(long)trade.ResultOrder();
+      m_lastDeal=(long)trade.ResultDeal();
       m_lifecycle.CreateSubmittedState(plan, risk, ctx.symbol, state);
       state.ticket = (long)trade.ResultOrder();
       state.reason = "broker_submitted";
@@ -145,6 +157,10 @@ public:
 
    void MarkBlocked(const TradePlan &plan,const RiskDecision &risk,const string inSymbol,TradeState &state,const string reason){ m_lifecycle.MarkBlocked(plan, risk, inSymbol, state, reason); m_lastAction=m_lifecycle.Describe(state); }
    string DescribeLastAction(){ return m_lastAction; }
+   long LastRetcode() const { return m_lastRetcode; }
+   string LastRetcodeDescription() const { return m_lastRetcodeDescription; }
+   long LastOrder() const { return m_lastOrder; }
+   long LastDeal() const { return m_lastDeal; }
   };
 
 #endif
