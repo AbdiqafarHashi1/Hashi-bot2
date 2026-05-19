@@ -176,6 +176,14 @@ private:
      }
 
 public:
+   void PrintStrategyTriggerAudit() const
+     {
+      Print(StringFormat("[STRATEGY_TRIGGER_AUDIT] strategy=TrendContinuation called=%d enoughBarsPass=%d indicatorReadyPass=%d trendPass=%d structurePass=%d momentumPass=%d triggerPass=%d atrPass=%d spreadPass=%d slTpPass=%d rawCreated=%d lastRejectReason=%s",
+                         m_trend.Called(),m_trend.EnoughBarsPass(),m_trend.IndicatorReadyPass(),m_trend.TrendPass(),m_trend.StructurePass(),m_trend.MomentumPass(),m_trend.TriggerPass(),m_trend.AtrPass(),m_trend.SpreadPass(),m_trend.SlTpPass(),m_trend.RawCreated(),m_trend.LastRejectReason()));
+      Print(StringFormat("[STRATEGY_TRIGGER_AUDIT] strategy=CompressionBreakout called=%d enoughBarsPass=%d atrReadyPass=%d boxReadyPass=%d boxWidthPass=%d compressionPass=%d breakoutPass=%d spreadPass=%d slTpPass=%d rawCreated=%d lastRejectReason=%s",
+                         m_compression.Called(),m_compression.EnoughBarsPass(),m_compression.AtrReadyPass(),m_compression.BoxReadyPass(),m_compression.BoxWidthPass(),m_compression.CompressionPass(),m_compression.BreakoutPass(),m_compression.SpreadPass(),m_compression.SlTpPass(),m_compression.RawCreated(),m_compression.LastRejectReason()));
+     }
+
    CArbitrationEngine(void)
      {
       m_initialized = false;
@@ -372,10 +380,7 @@ public:
 
       Print(StringFormat("[PRE_CANDIDATE_DIAG][TrendContinuation] moduleCalled=%d enoughBars=%d sessionOk=%d spreadOk=%d indicatorsReady=%d trendRegimeOk=%d triggerFound=%d rawCandidateCreated=%d",m_trendModuleCalled,m_trendEnoughBars,m_trendSessionOk,m_trendSpreadOk,m_trendIndicatorsReady,m_trendRegimeOk,m_trendTriggerFound,m_trendRawCreated));
       Print(StringFormat("[PRE_CANDIDATE_DIAG][CompressionBreakout] moduleCalled=%d enoughBars=%d sessionOk=%d spreadOk=%d atrReady=%d boxReady=%d compressionDetected=%d breakoutDetected=%d rawCandidateCreated=%d",m_compModuleCalled,m_compEnoughBars,m_compSessionOk,m_compSpreadOk,m_compAtrReady,m_compBoxReady,m_compCompressionDetected,m_compBreakoutDetected,m_compRawCreated));
-      Print(StringFormat("[STRATEGY_TRIGGER_AUDIT] strategy=TrendContinuation called=%d rejectTrend=%d rejectMomentum=%d rejectTrigger=%d rejectAtr=%d rejectSpread=%d rejectSlTp=%d rawCreated=%d",
-                         m_trendModuleCalled,m_trend.RejectTrend(),m_trend.RejectMomentum(),m_trend.RejectTrigger(),m_trend.RejectAtr(),m_trend.RejectSpread(),m_trend.RejectSlTp(),m_trend.RawCreated()));
-      Print(StringFormat("[STRATEGY_TRIGGER_AUDIT] strategy=CompressionBreakout called=%d rejectBox=%d rejectBoxWidth=%d rejectCompression=%d rejectBreakout=%d rejectAtr=%d rejectSpread=%d rejectSlTp=%d rawCreated=%d",
-                         m_compModuleCalled,m_compression.RejectBox(),m_compression.RejectBoxWidth(),m_compression.RejectCompression(),m_compression.RejectBreakout(),m_compression.RejectAtr(),m_compression.RejectSpread(),m_compression.RejectSlTp(),m_compression.RawCreated()));
+      PrintStrategyTriggerAudit();
       if(m_candidateCount == 0)
         { result.noTrade = true; result.reason = "no_candidates"; Print("[ARB] no_valid_winner reason=no_valid_candidates"); return result; }
       if(regime.suppression.isSuppressed)

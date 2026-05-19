@@ -18,8 +18,9 @@ class CCompressionBreakoutStrategy
 private:
    struct CompressionAuditCounters
      {
-      long rejectBox,rejectBoxWidth,rejectCompression,rejectBreakout,rejectAtr,rejectSpread,rejectSlTp,rawCreated;
-      void Reset(){ rejectBox=rejectBoxWidth=rejectCompression=rejectBreakout=rejectAtr=rejectSpread=rejectSlTp=rawCreated=0; }
+      long called,enoughBarsPass,atrReadyPass,boxReadyPass,boxWidthPass,compressionPass,breakoutPass,spreadPass,slTpPass,rawCreated;
+      string lastRejectReason;
+      void Reset(){ called=enoughBarsPass=atrReadyPass=boxReadyPass=boxWidthPass=compressionPass=breakoutPass=spreadPass=slTpPass=rawCreated=0; lastRejectReason="none"; }
      };
    ProfileType                   m_profile;
    CompressionAuditCounters      m_audit;
@@ -136,58 +137,72 @@ private:
 public:
    bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); m_audit.Reset(); return true; }
    void Reset() { m_audit.Reset(); }
-   long RejectBox() const { return m_audit.rejectBox; }
-   long RejectBoxWidth() const { return m_audit.rejectBoxWidth; }
-   long RejectCompression() const { return m_audit.rejectCompression; }
-   long RejectBreakout() const { return m_audit.rejectBreakout; }
-   long RejectAtr() const { return m_audit.rejectAtr; }
-   long RejectSpread() const { return m_audit.rejectSpread; }
-   long RejectSlTp() const { return m_audit.rejectSlTp; }
+   long Called() const { return m_audit.called; }
+   long EnoughBarsPass() const { return m_audit.enoughBarsPass; }
+   long AtrReadyPass() const { return m_audit.atrReadyPass; }
+   long BoxReadyPass() const { return m_audit.boxReadyPass; }
+   long BoxWidthPass() const { return m_audit.boxWidthPass; }
+   long CompressionPass() const { return m_audit.compressionPass; }
+   long BreakoutPass() const { return m_audit.breakoutPass; }
+   long SpreadPass() const { return m_audit.spreadPass; }
+   long SlTpPass() const { return m_audit.slTpPass; }
    long RawCreated() const { return m_audit.rawCreated; }
+   string LastRejectReason() const { return m_audit.lastRejectReason; }
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_COMPRESSION_BREAKOUT);
+      m_audit.called++;
+      m_audit.lastRejectReason="none";
+      if(ctx.barsLoaded < 7){ m_audit.lastRejectReason="enoughBars"; Reject(candidate, SUPPRESS_OTHER); return false; }
+      m_audit.enoughBarsPass++;
+      if(ctx.spreadPoints <= 0.0){ m_audit.lastRejectReason="spread"; Reject(candidate, SUPPRESS_SPREAD); return false; }
+      m_audit.spreadPass++;
 
       int gateBox=0,gateDuration=0,gateAtrContraction=0,gateBreakoutClose=0,gateVolExpansion=0,gateSwingWall=0,gatePlan=0;
       bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
       bool regimeOK = (regime.regime == REGIME_COMPRESSION || regime.regime == REGIME_EXPANSION || (testerMode && regime.confidence>=0.30));
       if(!regimeOK)
-        { m_audit.rejectCompression++; Reject(candidate, SUPPRESS_VOLATILITY); return false; }
+        { m_audit.lastRejectReason="compression"; Reject(candidate, SUPPRESS_VOLATILITY); return false; }
       double minMq=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_MARKET_QUALITY:(testerMode?0.30:0.34));
       double maxChop=(m_profile==PROFILE_PROP_FIRM?COMP_MAX_CHOPPINESS:(testerMode?74.0:70.0));
       int minBars=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_BARS:7);
       if(ctx.marketQuality < minMq)
-        { m_audit.rejectCompression++; Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
+        { m_audit.lastRejectReason="compression"; Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
       if(ctx.atr <= 0.0)
-        { m_audit.rejectAtr++; Reject(candidate, SUPPRESS_VOLATILITY); return false; }
+        { m_audit.lastRejectReason="atrReady"; Reject(candidate, SUPPRESS_VOLATILITY); return false; }
       if(ctx.choppiness > maxChop)
-        { m_audit.rejectCompression++; Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
+        { m_audit.lastRejectReason="compression"; Reject(candidate, SUPPRESS_MARKET_QUALITY); return false; }
       if(ctx.barsLoaded < minBars)
-        { m_audit.rejectBox++; Reject(candidate, SUPPRESS_OTHER); return false; }
+        { m_audit.lastRejectReason="boxReady"; Reject(candidate, SUPPRESS_OTHER); return false; }
+      m_audit.atrReadyPass++;
+      m_audit.compressionPass++;
 
       double boxHigh=0.0, boxLow=0.0, boxWidth=0.0, insideRatio=0.0, touchScore=0.0;
       int boxAge=0;
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
-        { gateBox=1; m_audit.rejectBox++; Reject(candidate, SUPPRESS_OTHER); return false; }
+        { gateBox=1; m_audit.lastRejectReason="boxReady"; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:(testerMode?7:9));
       if(boxAge < minBoxAge)
-        { gateDuration=1; m_audit.rejectBox++; Reject(candidate, SUPPRESS_OTHER); return false; }
+        { gateDuration=1; m_audit.lastRejectReason="boxReady"; Reject(candidate, SUPPRESS_OTHER); return false; }
       double minInside=(m_profile==PROFILE_PROP_FIRM?0.55:(testerMode?0.22:0.35));
       double minTouch=(m_profile==PROFILE_PROP_FIRM?0.24:(testerMode?0.06:0.10));
       if(insideRatio < minInside || touchScore < minTouch)
-        { gateAtrContraction=1; m_audit.rejectCompression++; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+        { gateAtrContraction=1; m_audit.lastRejectReason="compression"; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+      m_audit.boxReadyPass++;
 
       if(boxWidth < MathMax(ctx.atr * (testerMode?0.20:0.30), ctx.spreadPoints * ctx.point * 2.2))
-        { m_audit.rejectBoxWidth++; m_audit.rejectSpread++; Reject(candidate, SUPPRESS_SPREAD); return false; } // too narrow
+        { m_audit.lastRejectReason="boxWidth"; Reject(candidate, SUPPRESS_SPREAD); return false; } // too narrow
       if(boxWidth > ctx.atr * (testerMode?3.0:2.5))
-        { m_audit.rejectBoxWidth++; Reject(candidate, SUPPRESS_VOLATILITY); return false; } // too wide
+        { m_audit.lastRejectReason="boxWidth"; Reject(candidate, SUPPRESS_VOLATILITY); return false; } // too wide
+      m_audit.boxWidthPass++;
 
       TradeDirection dir = TRADE_DIR_NONE;
       double breakoutQ = 0.0, entryQ = 0.0;
       if(!BreakoutSignal(ctx, boxHigh, boxLow, boxWidth, dir, breakoutQ, entryQ))
-        { gateBreakoutClose=1; m_audit.rejectBreakout++; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+        { gateBreakoutClose=1; m_audit.lastRejectReason="breakout"; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+      m_audit.breakoutPass++;
 
       candidate.direction = dir;
 
@@ -211,7 +226,7 @@ public:
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + entryQ) / 4.0, 0.0, 1.0);
 
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, (testerMode?0.90:1.0), candidate.plan))
-        { gatePlan=1; m_audit.rejectSlTp++; Reject(candidate, SUPPRESS_OTHER); return false; }
+        { gatePlan=1; m_audit.lastRejectReason="slTp"; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       // SL around opposite/inside box edge with ATR/spread buffer
       double buffer = MathMax(0.20 * ctx.atr, ctx.spreadPoints * ctx.point * 1.5);
@@ -222,7 +237,7 @@ public:
 
       double risk = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
       if(risk <= 0.0)
-        { m_audit.rejectSlTp++; Reject(candidate, SUPPRESS_OTHER); return false; }
+        { m_audit.lastRejectReason="slTp"; Reject(candidate, SUPPRESS_OTHER); return false; }
 
       // TP1 = box height or 1R, TP2 = 2R/measured move
       double tp1ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + risk : candidate.plan.entryPrice - risk);
@@ -238,8 +253,9 @@ public:
       candidate.plan.direction = dir;
       candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
       if(!candidate.isValid)
-        { m_audit.rejectSlTp++; Reject(candidate, SUPPRESS_OTHER); return false; }
+        { m_audit.lastRejectReason="slTp"; Reject(candidate, SUPPRESS_OTHER); return false; }
 
+      m_audit.slTpPass++;
       m_audit.rawCreated++;
 
       return true;
