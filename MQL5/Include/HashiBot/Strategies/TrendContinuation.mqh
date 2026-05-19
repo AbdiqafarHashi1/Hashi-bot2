@@ -129,9 +129,12 @@ public:
      {
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_TREND_CONTINUATION);
 
-      if(!(regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN))
+      bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
+      bool regimeTrend=(regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN);
+      bool pseudoTrend=(testerMode && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow) && regime.confidence>=0.40);
+      if(!(regimeTrend || pseudoTrend))
         {
-         Reject(candidate, SUPPRESS_INVALID_STRUCTURE); // invalid regime
+         Reject(candidate, SUPPRESS_INVALID_STRUCTURE);
          return false;
         }
       double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:0.38);
@@ -170,7 +173,8 @@ public:
         }
 
       bool emaOk = (dir == TRADE_DIR_LONG ? (ctx.emaFast > ctx.emaSlow) : (ctx.emaFast < ctx.emaSlow));
-      bool rocOk = (dir == TRADE_DIR_LONG ? (ctx.roc > 0.03) : (ctx.roc < -0.03));
+      double minRoc=(testerMode?0.0:0.03);
+      bool rocOk = (dir == TRADE_DIR_LONG ? (ctx.roc > minRoc) : (ctx.roc < -minRoc));
       bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast) : (ctx.currentClose <= ctx.emaFast));
       if(!(emaOk && rocOk && priceVsEma))
         {

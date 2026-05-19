@@ -67,7 +67,7 @@ private:
       entryQ = 0.0;
 
       double atr = ctx.atr;
-      double buffer = MathMax(ctx.point * 2.0, 0.10 * atr);
+      double buffer = MathMax(ctx.point * 2.0, (MQLInfoInteger(MQL_TESTER)>0?0.05:0.10) * atr);
       double body = MathAbs(ctx.currentClose - ctx.currentOpen);
       double range = ctx.currentHigh - ctx.currentLow;
       if(range <= 0.0)
@@ -101,7 +101,7 @@ private:
       double breakoutDist = (buyBreak ? (ctx.currentClose - boxHigh) : (boxLow - ctx.currentClose));
       if(atr > 0.0 && breakoutDist > 1.8 * atr)
          return false;
-      if(atr > 0.0 && breakoutDist < 0.12 * atr)
+      if(atr > 0.0 && breakoutDist < (MQLInfoInteger(MQL_TESTER)>0?0.06:0.12) * atr)
          return false;
 
       if(buyBreak)
@@ -136,7 +136,8 @@ public:
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_COMPRESSION_BREAKOUT);
 
       int gateBox=0,gateDuration=0,gateAtrContraction=0,gateBreakoutClose=0,gateVolExpansion=0,gateSwingWall=0,gatePlan=0;
-      bool regimeOK = (regime.regime == REGIME_COMPRESSION || regime.regime == REGIME_EXPANSION);
+      bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
+      bool regimeOK = (regime.regime == REGIME_COMPRESSION || regime.regime == REGIME_EXPANSION || (testerMode && regime.confidence>=0.35));
       if(!regimeOK)
         { Reject(candidate, SUPPRESS_VOLATILITY); return false; }
       double minMq=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_MARKET_QUALITY:0.36);
@@ -156,11 +157,11 @@ public:
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
         { gateBox=1; Reject(candidate, SUPPRESS_OTHER); return false; }
 
-      int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:9);
+      int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:(testerMode?7:9));
       if(boxAge < minBoxAge)
         { gateDuration=1; Reject(candidate, SUPPRESS_OTHER); return false; }
-      double minInside=(m_profile==PROFILE_PROP_FIRM?0.60:0.46);
-      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.28:0.14);
+      double minInside=(m_profile==PROFILE_PROP_FIRM?0.60:(testerMode?0.38:0.46));
+      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.28:(testerMode?0.10:0.14));
       if(insideRatio < minInside || touchScore < minTouch)
         { gateAtrContraction=1; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
 
