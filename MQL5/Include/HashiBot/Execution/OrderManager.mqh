@@ -16,10 +16,11 @@ private:
    string          m_lastRetcodeDescription;
    long            m_lastOrder;
    long            m_lastDeal;
+   bool            m_lastAttempted;
 
 public:
-   bool Init(bool dryRun=true){ m_dryRun=dryRun; m_initialized=true; m_lifecycle.Init(); m_lastAction="init"; m_lastRetcode=0; m_lastRetcodeDescription=""; m_lastOrder=0; m_lastDeal=0; return true; }
-   void Reset(){ m_lifecycle.Reset(); m_lastAction="reset"; m_lastRetcode=0; m_lastRetcodeDescription=""; m_lastOrder=0; m_lastDeal=0; }
+   bool Init(bool dryRun=true){ m_dryRun=dryRun; m_initialized=true; m_lifecycle.Init(); m_lastAction="init"; m_lastRetcode=0; m_lastRetcodeDescription=""; m_lastOrder=0; m_lastDeal=0; m_lastAttempted=false; return true; }
+   void Reset(){ m_lifecycle.Reset(); m_lastAction="reset"; m_lastRetcode=0; m_lastRetcodeDescription=""; m_lastOrder=0; m_lastDeal=0; m_lastAttempted=false; }
 
    bool ValidateTradePlan(const TradePlan &plan,const MarketContext &ctx,string &reason)
      {
@@ -141,6 +142,7 @@ public:
 
    bool Submit(const TradePlan &plan,const RiskDecision &risk,const MarketContext &ctx,const ExecutionMode execMode,const bool inAllowLiveExecution,const bool inAllowDemoExecutionOnly,const bool inRequireManualExecutionArming,const bool inManualExecutionArmed,const long inMagicNumber,const int inMaxSlippagePoints,const string inOrderCommentPrefix,TradeState &state,string &reason)
      {
+      m_lastAttempted=false;
       const bool logOnlyMode=(execMode == EXEC_MODE_LOG_ONLY);
       string gate="broker_mode";
       bool brokerAllowed=ValidateExecutionAllowed(execMode, inAllowLiveExecution, inAllowDemoExecutionOnly, inRequireManualExecutionArming, inManualExecutionArmed, gate);
@@ -152,6 +154,7 @@ public:
       string brokerReason="";
       if(!ValidateBrokerOrderScaffold(plan, risk, ctx, brokerReason))
         { reason = brokerReason; m_lastAction = brokerReason; return false; }
+      m_lastAttempted=true;
       return SubmitBrokerOrder(plan, risk, ctx, state, reason, inMagicNumber, inMaxSlippagePoints, inOrderCommentPrefix);
      }
 
@@ -161,6 +164,7 @@ public:
    string LastRetcodeDescription() const { return m_lastRetcodeDescription; }
    long LastOrder() const { return m_lastOrder; }
    long LastDeal() const { return m_lastDeal; }
+   bool LastAttempted() const { return m_lastAttempted; }
   };
 
 #endif
