@@ -34,13 +34,25 @@ input bool allowLiveExecution = false;
 input bool allowDemoExecutionOnly = false;
 input bool requireManualExecutionArming = true;
 input bool manualExecutionArmed = false;
-input long magicNumber = 130013;
 input int maxSlippagePoints = 20;
-input string orderCommentPrefix = "HashiBot";
-input bool enableBreakeven = true;
 input double breakevenAtR = 1.2;
 input int breakevenBufferPoints = 5;
-input bool enableTrailingStop = true;
+input bool EnableSecondaryStrategy = true;
+input bool EnableArbitrator = true;
+input double RiskPercentPerTrade = 0.30;
+input int MaxTradesPerDay = 18;
+input int MaxOpenPositions = 3;
+input int MaxPositionsPerSymbol = 1;
+input double MaxDailyLossPercent = 2.00;
+input int MaxConsecutiveLosses = 4;
+input int CooldownMinutesAfterLoss = 15;
+input double MaxSpreadPoints = 20.0;
+input bool UseSessionFilter = true;
+input bool AllowMinLotWhenRiskTooSmall = false;
+input bool EnableBreakeven = true;
+input bool EnableTrailing = true;
+input long MagicNumber = 130013;
+input string TradeCommentPrefix = "HashiBotFX";
 input double trailingAtrMultiplier = 1.8;
 input bool enablePartialClose = true;
 input double partialClosePercent = 35.0;
@@ -59,8 +71,6 @@ input double minRegimeConfidence = 0.33;
 input double minMarketQuality = 0.3;
 input double maxChoppiness = 68.0;
 input double minAtrPercent = 0.00015;
-input double maxSpreadPoints = 20.0;
-input bool enableSessionFilter = true;
 input int sessionStartHourUtc = 6;
 input int sessionEndHourUtc = 20;
 input double maxExhaustionBodyAtr = 1.8;
@@ -82,11 +92,6 @@ input double scaleInLotMultiplier = 1.0;
 input bool scaleInOnlySameDirection = true;
 input bool personalCompoundingMode = true;
 input PersonalCalibrationProfile personalProfile = PERSONAL_AGGRESSIVE_COMPOUND;
-input int personalMaxTradesPerDay = 18;
-input int personalMaxActiveTrades = 3;
-input double personalRiskPerTradePct = 0.30;
-input double personalMaxDailyLossPct = 2.00;
-input int personalMaxConsecutiveLosses = 4;
 input bool personalEnableCompounding = false;
 input double personalEffectiveLeverageCap = 30.0;
 input double testerSimMaxLotsCap = 0.30;
@@ -121,7 +126,6 @@ input string buildCommitTag = "phase28h-survival-first-edge-engine";
 input bool enablePersonalMultiSymbolScanner = false;
 input string personalScannerSymbols = "EURUSD,GBPUSD,USDJPY,XAUUSD";
 input int maxSymbolsActive = 4;
-input int maxTradesPerSymbol = 2;
 input int maxCorrelatedSymbolExposure = 3;
 input int symbolCooldownAfterLoss = 12;
 input double symbolMinRegimeScore = 0.28;
@@ -513,7 +517,7 @@ bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &s
    plan.takeProfit2=(d==TRADE_DIR_LONG?e+microTp2R*risk:e-microTp2R*risk);
    g_microCandCreated++;
 
-   double spreadDenom=(maxSpreadPoints>1.0?(double)maxSpreadPoints:1.0);
+   double spreadDenom=(MaxSpreadPoints>1.0?(double)MaxSpreadPoints:1.0);
    double spreadPenaltyRaw=((double)ctx.spreadPoints/spreadDenom)*0.25;
    double spreadPenalty=(spreadPenaltyRaw<0.25?spreadPenaltyRaw:0.25);
    double rocNorm=MathAbs(ctx.roc); if(rocNorm>1.0) rocNorm=1.0;
@@ -547,7 +551,7 @@ int RejectionReasonBucket(const string reason)
 
 bool PassSessionFilter(const datetime t,const string symbol,string &reason)
   {
-   if(!enableSessionFilter){ reason="session_filter_off"; return true; }
+   if(!UseSessionFilter){ reason="session_filter_off"; return true; }
    MqlDateTime ts; TimeToStruct(t, ts);
    if(sessionStartHourUtc<=sessionEndHourUtc)
      { if(ts.hour<sessionStartHourUtc || ts.hour>=sessionEndHourUtc){ reason="session_out_of_window"; return false; } }
@@ -567,7 +571,7 @@ bool RuntimeRiskGuard(const string symbol,const int cooldownMins,const int minBa
    if(dayCapReached && !bypassDailyCapForDryRunProof){ reason="max_trades_day_reached"; return false; }
    if(g_lastCloseTime>0 && (now-g_lastCloseTime)<(cooldownMins*60)){ reason="cooldown_active"; return false; }
    if(g_barsSinceEntry < minBarsReq){ reason="too_soon_after_last_entry"; return false; }
-   if(personalMaxConsecutiveLosses>0 && g_consecutiveLosses>=personalMaxConsecutiveLosses){ reason="max_consecutive_losses_reached"; return false; }
+   if(MaxConsecutiveLosses>0 && g_consecutiveLosses>=MaxConsecutiveLosses){ reason="max_consecutive_losses_reached"; return false; }
    double eqNow=AccountInfoDouble(ACCOUNT_EQUITY);
    if(g_dayStartEquity>0.0 && eqNow>0.0){ double ddPct=100.0*(g_dayStartEquity-eqNow)/g_dayStartEquity; if(ddPct>=g_effectiveMaxDailyLossPct){ reason="max_daily_loss_reached"; return false; } }
 
@@ -597,13 +601,13 @@ void ManageActiveBrokerTrade(const string symbol,TradeState &active,const Market
       return;
    if(!PositionSelect(symbol))
       return;
-   CTrade tr; tr.SetExpertMagicNumber(magicNumber); tr.SetDeviationInPoints(maxSlippagePoints);
+   CTrade tr; tr.SetExpertMagicNumber(MagicNumber); tr.SetDeviationInPoints(maxSlippagePoints);
    double point=SymbolInfoDouble(symbol, SYMBOL_POINT); if(point<=0.0) point=0.00001;
    double price=(active.direction==TRADE_DIR_LONG?ctx.bid:ctx.ask);
    double risk=MathAbs(active.entryPrice-active.stopLoss); if(risk<=0.0) risk=MathMax(ctx.atr,point*10.0);
    double profitR=(active.direction==TRADE_DIR_LONG?(price-active.entryPrice):(active.entryPrice-price))/MathMax(risk,point);
 
-   if(enableBreakeven && !active.breakevenMoved && profitR>=breakevenAtR)
+   if(EnableBreakeven && !active.breakevenMoved && profitR>=breakevenAtR)
      {
       double be=(active.direction==TRADE_DIR_LONG?active.entryPrice+breakevenBufferPoints*point:active.entryPrice-breakevenBufferPoints*point);
       bool ok=tr.PositionModify(symbol, be, PositionGetDouble(POSITION_TP));
@@ -624,7 +628,7 @@ void ManageActiveBrokerTrade(const string symbol,TradeState &active,const Market
       else Print("[MGMT][PersonalEA] sym=",symbol," partial_close_not_possible");
      }
 
-   if(enableTrailingStop && profitR>1.0)
+   if(EnableTrailing && profitR>1.0)
      {
       double trailDist=MathMax(ctx.atr*trailingAtrMultiplier, point*20.0);
       double newSL=(active.direction==TRADE_DIR_LONG?price-trailDist:price+trailDist);
@@ -799,7 +803,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    if(ctx.marketQuality < activeMinMarketQuality){ if(ShouldLog(isNewBar)) g_r_market_quality++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=market_quality_too_low"); return; }
    if(ctx.choppiness > activeMaxChop){ if(ShouldLog(isNewBar)) g_r_chop++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=choppiness_too_high"); return; }
    if(ctx.atr <= activeMinAtrPct*ctx.currentClose){ if(ShouldLog(isNewBar)) g_r_atr++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=atr_too_low"); return; }
-   if(ctx.spreadPoints > maxSpreadPoints){ if(ShouldLog(isNewBar)) g_r_spread++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=spread_too_high"); return; }
+   if(ctx.spreadPoints > MaxSpreadPoints){ if(ShouldLog(isNewBar)) g_r_spread++; g_diagRegimeRejected++; Print("[REJECT][PersonalEA] sym=",symbol," reason=spread_too_high"); return; }
 
    ArbitrationResult arb=g_arb.Evaluate(ctx, regime); g_diagCandidates++; if(arb.hasWinner) g_diagWinners++; else g_r_no_candidate++; g_lastArbTime=TimeCurrent();
    double wTrend=RegimeCompatibilityWeight(STRATEGY_TREND_CONTINUATION,regime),wPull=RegimeCompatibilityWeight(STRATEGY_PULLBACK_CONTINUATION,regime),wComp=RegimeCompatibilityWeight(STRATEGY_COMPRESSION_BREAKOUT,regime),wExp=RegimeCompatibilityWeight(STRATEGY_EXPANSION_MOMENTUM,regime),wMicro=RegimeCompatibilityWeight(STRATEGY_NONE,regime);
@@ -995,10 +999,11 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
                       (int)executionMode,symbol,StrategyName(chosenPlan.strategy),DirName(chosenPlan.direction),(int)tstate.lifecycle,(int)tstate.lifecycle,(int)tstate.lifecycle,tstate.ticket,tstate.ticket,chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,risk.approvedLots,(validPlan?"true":"false"),(risk.approved?"true":"false")));
 
    double effectiveMinScore=activeMinScore+g_strategyThresholdBoost[sb];
+   if(existingEntries >= MaxPositionsPerSymbol){ Print(StringFormat("[ORDER_RESULT] ok=false reason=max_positions_per_symbol_reached strategy=%s symbol=%s existing=%d cap=%d",StrategyName(chosenPlan.strategy),symbol,existingEntries,MaxPositionsPerSymbol)); return; }
    if(risk.approved && validPlan && allowed && portfolioOK && scaleOK && chosenScore >= effectiveMinScore && (!scalperMode || candidateGradeOK || chosenFromFallback))
      {
       string execReason="";
-      bool submitted=false; for(int r=0;r<=maxRetryCount;r++){ submitted=g_order.Submit(chosenPlan, risk, ctx, executionMode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, magicNumber, maxSlippagePoints, orderCommentPrefix, tstate, execReason); if(submitted) break; if(r<maxRetryCount){ Print("[RETRY][PersonalEA] sym=",symbol," op=submit attempt=",(r+1)," reason=",execReason); Sleep(retryDelaySeconds*1000); } else Print("[RETRY][PersonalEA] sym=",symbol," op=submit exhausted reason=",execReason); }
+      bool submitted=false; for(int r=0;r<=maxRetryCount;r++){ submitted=g_order.Submit(chosenPlan, risk, ctx, executionMode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, MagicNumber, maxSlippagePoints, TradeCommentPrefix, tstate, execReason); if(submitted) break; if(r<maxRetryCount){ Print("[RETRY][PersonalEA] sym=",symbol," op=submit attempt=",(r+1)," reason=",execReason); Sleep(retryDelaySeconds*1000); } else Print("[RETRY][PersonalEA] sym=",symbol," op=submit exhausted reason=",execReason); }
       Print(StringFormat("[EXEC] symbol=%s strategy=%s direction=%s entry=%.5f sl=%.5f tp=%.5f lots=%.2f score=%.2f grade=%d execution_mode=%d",symbol,StrategyName(chosenPlan.strategy),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,risk.approvedLots,chosenScore,(int)chosenGrade,(int)executionMode));
       int regBefore=g_tracker.CountActiveTrades();
       string lifecycleReason="not_attempted";
@@ -1075,7 +1080,7 @@ bool RunDeterministicExecutionSelfTest()
      { Print("[SELFTEST] fail reason=gate_blocked"); return false; }
 
    TradeState tstate; string execReason="";
-   bool submitted=g_order.Submit(plan, risk, ctx, executionMode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, magicNumber, maxSlippagePoints, orderCommentPrefix, tstate, execReason);
+   bool submitted=g_order.Submit(plan, risk, ctx, executionMode, allowLiveExecution, allowDemoExecutionOnly, requireManualExecutionArming, manualExecutionArmed, MagicNumber, maxSlippagePoints, TradeCommentPrefix, tstate, execReason);
    Print(StringFormat("[SELFTEST_SUBMIT] ok=%s reason=%s ticket=%I64d lifecycle=%d lots=%.2f",(submitted?"true":"false"),execReason,tstate.ticket,(int)tstate.lifecycle,tstate.approvedLots));
    if(!submitted) return false;
 
@@ -1092,12 +1097,12 @@ bool RunDeterministicExecutionSelfTest()
    return reg;
   }
 
-int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_risk.Init(PROFILE_PERSONAL);
-   g_effectiveRiskPerTradePct=(personalRiskPerTradePct>0.0?personalRiskPerTradePct:0.20);
+int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_arb.Configure(EnableSecondaryStrategy,EnableArbitrator); g_risk.Init(PROFILE_PERSONAL);
+   g_effectiveRiskPerTradePct=(RiskPercentPerTrade>0.0?RiskPercentPerTrade:0.20);
    g_effectiveMaxOpenRiskPct=(testerSimMaxOpenRiskPct>0.0?testerSimMaxOpenRiskPct:0.75);
-   g_effectiveMaxTradesPerDay=(personalMaxTradesPerDay>0?personalMaxTradesPerDay:14);
-   g_effectiveMaxActiveTrades=(personalMaxActiveTrades>0?personalMaxActiveTrades:2);
-   g_effectiveMaxDailyLossPct=(personalMaxDailyLossPct>0.0?personalMaxDailyLossPct:3.25);
+   g_effectiveMaxTradesPerDay=(MaxTradesPerDay>0?MaxTradesPerDay:14);
+   g_effectiveMaxActiveTrades=(MaxOpenPositions>0?MaxOpenPositions:2);
+   g_effectiveMaxDailyLossPct=(MaxDailyLossPercent>0.0?MaxDailyLossPercent:3.25);
    g_effectiveLotCap=(testerSimMaxLotsCap>0.0?testerSimMaxLotsCap:0.30);
    g_effectiveCompounding=personalEnableCompounding;
    g_startEquity=AccountInfoDouble(ACCOUNT_EQUITY); if(g_startEquity<=0.0) g_startEquity=AccountInfoDouble(ACCOUNT_BALANCE); g_peakEquity=g_startEquity;
@@ -1113,12 +1118,13 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
    string profileLabel="adaptive_core_compat";
    Print(StringFormat("[BUILD] ea=PersonalEA phase=28H commit=%s buildTime=%s executionMode=%s personalProfile=%s",buildCommitTag,__DATETIME__,modeLabel,profileLabel));
    Print(StringFormat("[BUILD] risk effectiveRiskPct=%.2f effectiveMaxOpenRiskPct=%.2f effectiveMaxTradesDay=%d effectiveMaxActive=%d effectiveMaxDailyLossPct=%.2f effectiveLotCap=%.2f compounding=%s",g_effectiveRiskPerTradePct,g_effectiveMaxOpenRiskPct,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,g_effectiveMaxDailyLossPct,g_effectiveLotCap,(g_effectiveCompounding?"true":"false")));
-   Print(StringFormat("[BUILD] strategies trend=true pullback=true compression=true expansion=true micro=%s lifecycleFlags be=%s trailing=%s partial=%s", "true",(enableBreakeven?"true":"false"),(enableTrailingStop?"true":"false"),(enablePartialClose?"true":"false")));
-   Print(StringFormat("[INPUTS_EFFECTIVE] executionMode=%s symbol=%s timeframe=%s riskPct=%.2f maxDailyLossPct=%.2f maxActiveTrades=%d maxTradesPerDay=%d sessionFilter=%s spreadLimit=%.1f partialClosePercent=%.1f breakeven=%s/atr=%.2f trailing=%s/atr=%.2f multiSymbol=%s symbols=%s",modeLabel,_Symbol,TfName(),g_effectiveRiskPerTradePct,g_effectiveMaxDailyLossPct,g_effectiveMaxActiveTrades,g_effectiveMaxTradesPerDay,(enableSessionFilter?"true":"false"),maxSpreadPoints,partialClosePercent,(enableBreakeven?"true":"false"),breakevenAtR,(enableTrailingStop?"true":"false"),trailingAtrMultiplier,(g_enableMultiSymbolScannerEffective?"true":"false"),g_scannerSymbolsEffective));
+   Print(StringFormat("[BUILD] strategies trend=true pullback=false compression=true expansion=false micro=%s lifecycleFlags be=%s trailing=%s partial=%s", "true",(EnableBreakeven?"true":"false"),(EnableTrailing?"true":"false"),(enablePartialClose?"true":"false")));
+   Print(StringFormat("[INPUTS_EFFECTIVE] executionMode=%s symbol=%s timeframe=%s riskPct=%.2f maxDailyLossPct=%.2f maxActiveTrades=%d maxTradesPerDay=%d sessionFilter=%s spreadLimit=%.1f partialClosePercent=%.1f breakeven=%s/atr=%.2f trailing=%s/atr=%.2f multiSymbol=%s symbols=%s",modeLabel,_Symbol,TfName(),g_effectiveRiskPerTradePct,g_effectiveMaxDailyLossPct,g_effectiveMaxActiveTrades,g_effectiveMaxTradesPerDay,(UseSessionFilter?"true":"false"),MaxSpreadPoints,partialClosePercent,(EnableBreakeven?"true":"false"),breakevenAtR,(EnableTrailing?"true":"false"),trailingAtrMultiplier,(g_enableMultiSymbolScannerEffective?"true":"false"),g_scannerSymbolsEffective));
+   Print(StringFormat("[STARTUP_FOREX] primary=TrendContinuation secondary=CompressionBreakout secondaryEnabled=%s arbitratorEnabled=%s disabled=[PullbackContinuation,ExpansionMomentum,Micro] riskPct=%.2f maxSpread=%.1f maxTradesDay=%d maxOpen=%d maxPerSymbol=%d",(EnableSecondaryStrategy?"true":"false"),(EnableArbitrator?"true":"false"),g_effectiveRiskPerTradePct,MaxSpreadPoints,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,MaxPositionsPerSymbol));
    Print("[PERSONAL_ENGINE_MODE] mode=ADAPTIVE_CORE");
    Print("[TEST_INSTRUCTIONS] reset_inputs=true run=EURUSD_M5_2024.05.01_to_2024.05.03_open_prices_first");
    if(g_lifecycleIntrabarLimited) Print("[LIFECYCLE_NOTICE] modelling=open_prices lifecycle_intrabar_limited=true");
-   if((executionMode==EXEC_MODE_LIVE || executionMode==EXEC_MODE_DEMO) && allowLiveExecution && manualExecutionArmed){ int recovered=g_tracker.SyncFromBroker(magicNumber, orderCommentPrefix); g_lastBrokerSyncTime=TimeCurrent(); Print("[RECOVERY][PersonalEA] recovered=", recovered); } else Print("[RECOVERY][PersonalEA] log_only_or_tester_clean_state");
+   if((executionMode==EXEC_MODE_LIVE || executionMode==EXEC_MODE_DEMO) && allowLiveExecution && manualExecutionArmed){ int recovered=g_tracker.SyncFromBroker(MagicNumber, TradeCommentPrefix); g_lastBrokerSyncTime=TimeCurrent(); Print("[RECOVERY][PersonalEA] recovered=", recovered); } else Print("[RECOVERY][PersonalEA] log_only_or_tester_clean_state");
    if(enableDeterministicExecutionSelfTest && selfTestForceOnceOnInit)
      {
       Print("[SELFTEST_START]");
@@ -1135,7 +1141,7 @@ void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    Print(StringFormat("[PIPE_SUMMARY][PersonalEA] winner=[%d,%d,%d,%d,%d] planOk=[%d,%d,%d,%d,%d] planRej=[%d,%d,%d,%d,%d] riskOk=[%d,%d,%d,%d,%d] riskRej=[%d,%d,%d,%d,%d] portOk=[%d,%d,%d,%d,%d] portRej=[%d,%d,%d,%d,%d] submitOk=[%d,%d,%d,%d,%d] submitRej=[%d,%d,%d,%d,%d] lifeOk=[%d,%d,%d,%d,%d] lifeRej=[%d,%d,%d,%d,%d]",g_pipeWinnerSel[0],g_pipeWinnerSel[1],g_pipeWinnerSel[2],g_pipeWinnerSel[3],g_pipeWinnerSel[4],g_pipePlanOk[0],g_pipePlanOk[1],g_pipePlanOk[2],g_pipePlanOk[3],g_pipePlanOk[4],g_pipePlanRej[0],g_pipePlanRej[1],g_pipePlanRej[2],g_pipePlanRej[3],g_pipePlanRej[4],g_pipeRiskOk[0],g_pipeRiskOk[1],g_pipeRiskOk[2],g_pipeRiskOk[3],g_pipeRiskOk[4],g_pipeRiskRej[0],g_pipeRiskRej[1],g_pipeRiskRej[2],g_pipeRiskRej[3],g_pipeRiskRej[4],g_pipePortOk[0],g_pipePortOk[1],g_pipePortOk[2],g_pipePortOk[3],g_pipePortOk[4],g_pipePortRej[0],g_pipePortRej[1],g_pipePortRej[2],g_pipePortRej[3],g_pipePortRej[4],g_pipeSubmitOk[0],g_pipeSubmitOk[1],g_pipeSubmitOk[2],g_pipeSubmitOk[3],g_pipeSubmitOk[4],g_pipeSubmitRej[0],g_pipeSubmitRej[1],g_pipeSubmitRej[2],g_pipeSubmitRej[3],g_pipeSubmitRej[4],g_pipeLifecycleOk[0],g_pipeLifecycleOk[1],g_pipeLifecycleOk[2],g_pipeLifecycleOk[3],g_pipeLifecycleOk[4],g_pipeLifecycleRej[0],g_pipeLifecycleRej[1],g_pipeLifecycleRej[2],g_pipeLifecycleRej[3],g_pipeLifecycleRej[4]));
    Print(StringFormat("[PHASE24B_DIAG][PersonalEA] invalidBeforeArb=[%d,%d,%d,%d,%d] noValidWinner=%d validDirCandidates=[%d,%d,%d,%d,%d] ambiguousDirRejects=[%d,%d,%d,%d,%d] winnersValidDir=[%d,%d,%d,%d,%d] winnerPlanInvalid=[%d,%d,%d,%d,%d]",g_diagInvalidBeforeArb[0],g_diagInvalidBeforeArb[1],g_diagInvalidBeforeArb[2],g_diagInvalidBeforeArb[3],g_diagInvalidBeforeArb[4],g_diagNoValidWinner,g_diagValidDirCandidates[0],g_diagValidDirCandidates[1],g_diagValidDirCandidates[2],g_diagValidDirCandidates[3],g_diagValidDirCandidates[4],g_diagAmbiguousDirRejects[0],g_diagAmbiguousDirRejects[1],g_diagAmbiguousDirRejects[2],g_diagAmbiguousDirRejects[3],g_diagAmbiguousDirRejects[4],g_diagWinnerValidDir[0],g_diagWinnerValidDir[1],g_diagWinnerValidDir[2],g_diagWinnerValidDir[3],g_diagWinnerValidDir[4],g_diagWinnerBlockedInvalidPlan[0],g_diagWinnerBlockedInvalidPlan[1],g_diagWinnerBlockedInvalidPlan[2],g_diagWinnerBlockedInvalidPlan[3],g_diagWinnerBlockedInvalidPlan[4]));
    Print(StringFormat("[PHASE24D_DIAG][PersonalEA] riskInValid=%d riskInInvalid=%d riskApproved=%d riskRejected=%d riskRejNoTrade=%d riskRejInvalidStop=%d riskRejInvalidTick=%d riskRejLotMin=%d riskRejRiskPct=%d riskRejOther=%d dryrunLifecycleCreated=%d",g_diagRiskInputValid,g_diagRiskInputInvalid,g_diagRiskApproved,g_diagRiskRejected,g_diagRiskRejectedNoTradeOrWinner,g_diagRiskRejectedInvalidStopDistance,g_diagRiskRejectedInvalidTick,g_diagRiskRejectedLotBelowMin,g_diagRiskRejectedInvalidRiskPct,g_diagRiskRejectedOther,g_diagDryRunLifecycleCreated));
-   Print(StringFormat("[CALIB_THRESH][PersonalEA] minScore=%.2f minRegime=%.2f minMQ=%.2f maxChop=%.1f minAtrPct=%.5f maxSpread=%.1f cooldown=%d minBars=%d",(enableMicroScalperMode?scalperMinScore:minCandidateScore),(enableMicroScalperMode?scalperMinRegimeConfidence:minRegimeConfidence),(enableMicroScalperMode?scalperMinMarketQuality:minMarketQuality),(enableMicroScalperMode?scalperMaxChoppiness:maxChoppiness),(enableMicroScalperMode?scalperMinAtrPercent:minAtrPercent),maxSpreadPoints,(enableMicroScalperMode?scalperCooldownMinutes:cooldownMinutes),(enableMicroScalperMode?scalperMinBarsBetweenEntries:minBarsBetweenEntries)));
+   Print(StringFormat("[CALIB_THRESH][PersonalEA] minScore=%.2f minRegime=%.2f minMQ=%.2f maxChop=%.1f minAtrPct=%.5f maxSpread=%.1f cooldown=%d minBars=%d",(enableMicroScalperMode?scalperMinScore:minCandidateScore),(enableMicroScalperMode?scalperMinRegimeConfidence:minRegimeConfidence),(enableMicroScalperMode?scalperMinMarketQuality:minMarketQuality),(enableMicroScalperMode?scalperMaxChoppiness:maxChoppiness),(enableMicroScalperMode?scalperMinAtrPercent:minAtrPercent),MaxSpreadPoints,(enableMicroScalperMode?scalperCooldownMinutes:cooldownMinutes),(enableMicroScalperMode?scalperMinBarsBetweenEntries:minBarsBetweenEntries)));
    string sn[5]={"TrendContinuation","PullbackContinuation","CompressionBreakout","ExpansionMomentum","MicroScalper"};
    for(int i=0;i<5;i++){ double avgR=(g_closedCount[i]>0?g_sumR[i]/(double)g_closedCount[i]:0.0); double avgHold=(g_closedCount[i]>0?g_strategyHoldBarsSum[i]/(double)g_closedCount[i]:0.0); int top=0; long best=0; for(int r=0;r<8;r++){ if(g_rejectTopReason[i][r]>best){ best=g_rejectTopReason[i][r]; top=r; } } long wins=(i==0?g_winTrend:(i==1?g_winPullback:(i==2?g_winCompression:(i==3?g_winExpansion:g_winMicro)))); long losses=(i==0?g_lossTrend:(i==1?g_lossPullback:(i==2?g_lossCompression:(i==3?g_lossExpansion:g_lossMicro)))); long moduleCalled=(i==4?g_microModuleCalled:g_diagCandidates); if(g_diagValidDirCandidates[i]==0 && (g_pipePlanOk[i]>0 || g_pipeWinnerSel[i]>0)){ g_bucketIntegrityFailed[i]=true; Print(StringFormat("[STRATEGY_BUCKET_ERROR] strategy=%s candidates=%d validPlans=%d winners=%d submitted=%d rejectTopReason=%d sourceCounter=g_pipePlanOk expectedStrategy=%s actualBucket=%s",sn[i],g_diagValidDirCandidates[i],g_pipePlanOk[i],g_pipeWinnerSel[i],g_pipeSubmitOk[i],top,sn[i],sn[i])); } Print(StringFormat("[STRATEGY_ACTIVATION_AUDIT] strategy=%s moduleCalled=%d rawCandidates=%d candidateRejectedByInternalGate=%d candidateRejectedByRegime=%d candidateRejectedByRR=%d candidateRejectedBySpread=%d candidateRejectedByChop=%d candidateRejectedByExhaustion=%d candidateRejectedByArbitration=%d validPlans=%d selected=%d submitted=%d wins=%d losses=%d netPnL=%.2f avgWin=%.2f avgLoss=%.2f avgR=%.2f profitFactor=%.2f mainBlockReason=%s",sn[i],moduleCalled,g_r_cooldown+g_r_minbars,g_noTradeRegime,g_noTradeRR,g_r_spread,g_noTradeChop,g_noTradeExhaustion,g_noTradeBucket,g_pipePlanOk[i],g_pipeWinnerSel[i],g_pipeSubmitOk[i],wins,losses,g_netPnl[i],(wins>0?MathMax(0.0,g_sumR[i])/(double)wins:0.0),(losses>0?MathAbs(MathMin(0.0,g_sumR[i]))/(double)losses:0.0),avgR,(losses>0?(double)wins/(double)losses:(wins>0?2.0:0.0)),(g_strategyCooldownBars[i]>0?"cooldown_or_pruned":"active"))); Print(StringFormat("[STRATEGY_SUMMARY] strategy=%s candidates=%d validPlans=%d winners=%d riskApproved=%d portfolioApproved=%d ordersSubmitted=%d wins=%d losses=%d netPnL=%.2f avgR=%.2f rejectTopReason=%d",sn[i],g_diagValidDirCandidates[i],g_pipePlanOk[i],g_pipeWinnerSel[i],g_pipeRiskOk[i],g_pipePortOk[i],g_pipeSubmitOk[i],wins,losses,g_netPnl[i],avgR,top)); }
    Print(StringFormat("[TRADE_EXIT_SUMMARY] tp1=%d tp2=%d be=%d time=%d earlyInvalidation=%d trailing=%d failedFollowThrough=%d structureBroken=%d momentumFailed=%d adverseGuard=%d runnerTrail=%d qualityDecay=%d defensiveScratch=%d avgHoldBars=%.2f avgMAE=%.2f avgMFE=%.2f",g_exitTp1,g_exitTp2,g_exitBE,g_exitTime,g_exitInvalidation,g_exitTrailing,g_exitFailedFollowThrough,g_exitStructureBroken,g_exitMomentumFailed,g_exitAdverseGuard,g_exitRunnerTrail,g_exitQualityDecay,g_exitDefensiveScratch,(g_exitTotal>0?g_exitHoldBarsSum/g_exitTotal:0.0),(g_exitTotal>0?g_exitMaeSum/g_exitTotal:0.0),(g_exitTotal>0?g_exitMfeSum/g_exitTotal:0.0)));
@@ -1174,7 +1180,7 @@ void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    Print(StringFormat("[COMPOUNDING_SUMMARY] enabled=%s baseEquity=%.2f currentEquity=%.2f riskPctEffective=%.2f lotCap=%.2f effectiveLeverage=%.1f scaleAllowed=%s reason=%s",(g_effectiveCompounding?"true":"false"),g_startEquity,AccountInfoDouble(ACCOUNT_EQUITY),g_effectiveRiskPerTradePct*g_accountRiskMultiplier,g_effectiveLotCap,personalEffectiveLeverageCap,((g_effectiveCompounding && AccountInfoDouble(ACCOUNT_EQUITY)>=g_startEquity)?"true":"false"),((g_effectiveCompounding && AccountInfoDouble(ACCOUNT_EQUITY)>=g_startEquity)?"equity_above_base":"equity_below_base")));
    Print(StringFormat("[PORTFOLIO_ARBITRATION_SUMMARY] bestSymbol=%s bestStrategy=%s bestScore=%.2f rejectedSymbols=%d rejectedStrategies=%d topRejectReason=%s attackMode=%s defenseMode=%s recoveryMode=%s",_Symbol,"mixed",0.0,0,0,"dynamic_filters",(g_accountMode==1?"true":"false"),(g_accountMode==2?"true":"false"),(g_accountMode==3?"true":"false")));
    Print(StringFormat("[GOV_SUMMARY] profile=%d dayStartEq=%.2f eq=%.2f riskPct=%.2f maxOpenRiskPct=%.2f maxDailyLossPct=%.2f consecLosses=%d maxConsecLosses=%d maxTradesDay=%d maxActive=%d compounding=%s levCap=%.1f testerLotCap=%.2f",
-                      0,g_dayStartEquity,AccountInfoDouble(ACCOUNT_EQUITY),g_effectiveRiskPerTradePct,g_effectiveMaxOpenRiskPct,g_effectiveMaxDailyLossPct,g_consecutiveLosses,personalMaxConsecutiveLosses,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,(g_effectiveCompounding?"on":"off"),personalEffectiveLeverageCap,g_effectiveLotCap));
+                     0,g_dayStartEquity,AccountInfoDouble(ACCOUNT_EQUITY),g_effectiveRiskPerTradePct,g_effectiveMaxOpenRiskPct,g_effectiveMaxDailyLossPct,g_consecutiveLosses,MaxConsecutiveLosses,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,(g_effectiveCompounding?"on":"off"),personalEffectiveLeverageCap,g_effectiveLotCap));
    double avgRAll=(g_exitTotal>0?sumRAll/(double)g_exitTotal:0.0);
    double winRateAll=(winsAll2+lossesAll2>0?(double)winsAll2/(double)(winsAll2+lossesAll2):0.0);
    double payoff=(avgLossAll>0?avgWinAll/avgLossAll:0.0); double reqWr=(payoff>0?1.0/(1.0+payoff):1.0);
