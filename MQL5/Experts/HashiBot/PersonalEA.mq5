@@ -419,6 +419,34 @@ bool IsPlanExecutable(const TradePlan &plan)
    return (plan.direction!=TRADE_DIR_NONE && plan.entryPrice>0.0 && plan.stopLoss>0.0 && plan.takeProfit1>0.0 && plan.takeProfit2>0.0);
   }
 
+bool CandidateToTradePlan(const StrategyCandidate &candidate,TradePlan &plan,string &reason)
+  {
+   reason="";
+   if(candidate.strategy!=STRATEGY_TREND_CONTINUATION &&
+      candidate.strategy!=STRATEGY_COMPRESSION_BREAKOUT &&
+      candidate.strategy!=STRATEGY_MICRO_SCALPER)
+     { reason="unsupported_strategy"; return false; }
+   if(candidate.direction!=TRADE_DIR_LONG && candidate.direction!=TRADE_DIR_SHORT)
+     { reason="invalid_direction"; return false; }
+   if(candidate.plan.entryPrice<=0.0 || candidate.plan.stopLoss<=0.0 || candidate.plan.takeProfit1<=0.0)
+     { reason="invalid_core_prices"; return false; }
+
+   plan = candidate.plan;
+   plan.strategy = candidate.strategy;
+   plan.direction = (candidate.plan.direction==TRADE_DIR_NONE?candidate.direction:candidate.plan.direction);
+   if(plan.takeProfit2<=0.0)
+      plan.takeProfit2 = (plan.direction==TRADE_DIR_LONG
+                          ?(plan.entryPrice + 2.0*MathAbs(plan.entryPrice-plan.stopLoss))
+                          :(plan.entryPrice - 2.0*MathAbs(plan.entryPrice-plan.stopLoss)));
+   plan.confidence = (candidate.score.totalScore>0.0?candidate.score.totalScore:plan.confidence);
+   plan.grade = candidate.grade;
+   if(plan.riskR<=0.0)
+      plan.riskR=MathAbs(plan.takeProfit1-plan.entryPrice)/MathMax(MathAbs(plan.entryPrice-plan.stopLoss),1e-6);
+   if(!IsPlanExecutable(plan))
+     { reason="mapped_plan_not_executable"; return false; }
+   return true;
+  }
+
 bool BuildSelectedPlanFallback(const MarketContext &ctx,const StrategyType strategy,const TradeDirection direction,const double stopAtrMult,const double tp1R,const double tp2R,TradePlan &plan,string &reason)
   {
    reason="";
@@ -464,12 +492,19 @@ bool ResolveSelectedPlan(const MarketContext &ctx,const ArbitrationResult &arb,T
          const StrategyCandidate c=arb.candidates[i];
          if(c.strategy!=arb.winningStrategy) continue;
          if(c.score.totalScore+1e-9<arb.winningScore) continue;
-         selected=c.plan;
-         selectedScore=c.score.totalScore;
-         selectedGrade=c.grade;
-         copied=true;
-         Print(StringFormat("[PLAN_COPY] strategy=%s ok=true",StrategyName(selected.strategy)));
-         break;
+         string mapReason="";
+         TradePlan mapped;
+         bool mappedOk=CandidateToTradePlan(c,mapped,mapReason);
+         if(mappedOk)
+           {
+            selected=mapped;
+            selectedScore=c.score.totalScore;
+            selectedGrade=c.grade;
+            copied=true;
+            Print(StringFormat("[PLAN_COPY] strategy=%s ok=true",StrategyName(selected.strategy)));
+            break;
+           }
+         Print(StringFormat("[PLAN_COPY] strategy=%s ok=false reason=%s",StrategyName(c.strategy),mapReason));
         }
       if(!copied)
          Print(StringFormat("[PLAN_COPY] strategy=%s ok=false",StrategyName(arb.winningStrategy)));
