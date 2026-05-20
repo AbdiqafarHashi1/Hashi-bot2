@@ -30,7 +30,15 @@ input int MaxOpenPositions = 3;
 input int MaxPositionsPerSymbol = 1;
 input bool EnableBreakeven = true;
 input bool EnableTrailing = true;
-input bool InpEmergencyTesterMicroHarness = true;
+input bool InpEmergencyTesterMicroHarness = false;
+enum StrategyDebugMode
+  {
+   TREND_COMPRESSION=0,
+   MICRO_ONLY=1,
+   TREND_ONLY=2,
+   COMPRESSION_ONLY=3
+  };
+input StrategyDebugMode InpStrategyDebugMode = TREND_COMPRESSION;
 
 // Internal locked architecture/state (not user-tuned)
 ExecutionMode executionMode = EXEC_MODE_TESTER_SIM;
@@ -400,7 +408,10 @@ bool BuildFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &score,st
 
 bool IsStrategyAllowed(const StrategyType strategy)
   {
-   return (strategy==STRATEGY_TREND_CONTINUATION || strategy==STRATEGY_COMPRESSION_BREAKOUT);
+   if(InpStrategyDebugMode==MICRO_ONLY) return (strategy==STRATEGY_MICRO_SCALPER);
+   if(InpStrategyDebugMode==TREND_ONLY) return (strategy==STRATEGY_TREND_CONTINUATION);
+   if(InpStrategyDebugMode==COMPRESSION_ONLY) return (strategy==STRATEGY_COMPRESSION_BREAKOUT);
+   return (strategy==STRATEGY_TREND_CONTINUATION || strategy==STRATEGY_COMPRESSION_BREAKOUT || strategy==STRATEGY_MICRO_SCALPER);
   }
 
 bool IsPlanExecutable(const TradePlan &plan)
@@ -967,6 +978,39 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       g_strategiesReachedAfterWeakRegime++;
 
    ArbitrationResult arb=g_arb.Evaluate(ctx, regime); g_diagCandidates++; g_testerArbDecisions++; g_starveRawCandidates+=arb.candidateCount; if(arb.hasWinner) g_diagWinners++; else { g_r_no_candidate++; g_testerArbNoTrades++; g_phaseANoCandidate++; decision.rejectStage="ARBITRATION"; decision.rejectReason="NO_STRATEGY_CANDIDATE"; EmitDecisionTrace(decision,ctx.barTime,"ARBITRATION",decision.rejectReason,false); } g_lastArbTime=TimeCurrent();
+   string modeName=(InpStrategyDebugMode==MICRO_ONLY?"MICRO_ONLY":(InpStrategyDebugMode==TREND_ONLY?"TREND_ONLY":(InpStrategyDebugMode==COMPRESSION_ONLY?"COMPRESSION_ONLY":"TREND_COMPRESSION")));
+   if(InpStrategyDebugMode!=TREND_COMPRESSION)
+     {
+      int kept=0;
+      for(int fi=0; fi<arb.candidateCount; fi++)
+        {
+         StrategyType st=arb.candidates[fi].strategy;
+         bool keep=((InpStrategyDebugMode==MICRO_ONLY && st==STRATEGY_MICRO_SCALPER) ||
+                    (InpStrategyDebugMode==TREND_ONLY && st==STRATEGY_TREND_CONTINUATION) ||
+                    (InpStrategyDebugMode==COMPRESSION_ONLY && st==STRATEGY_COMPRESSION_BREAKOUT));
+         if(keep){ arb.candidates[kept]=arb.candidates[fi]; kept++; }
+        }
+      arb.candidateCount=kept;
+      arb.hasWinner=false;
+      if(kept>0)
+        {
+         int best=0;
+         for(int bi=1;bi<kept;bi++) if(arb.candidates[bi].score.totalScore>arb.candidates[best].score.totalScore) best=bi;
+         arb.hasWinner=true;
+         arb.winningStrategy=arb.candidates[best].strategy;
+         arb.winningScore=arb.candidates[best].score.totalScore;
+         arb.winningGrade=arb.candidates[best].grade;
+         arb.plan=arb.candidates[best].plan;
+         arb.reason="mode_filtered";
+        }
+      else
+        {
+         arb.noTrade=true;
+         arb.reason="mode_filtered_no_candidates";
+         g_r_no_candidate++;
+         g_testerArbNoTrades++;
+        }
+     }
    double wTrend=RegimeCompatibilityWeight(STRATEGY_TREND_CONTINUATION,regime),wPull=RegimeCompatibilityWeight(STRATEGY_PULLBACK_CONTINUATION,regime),wComp=RegimeCompatibilityWeight(STRATEGY_COMPRESSION_BREAKOUT,regime),wExp=RegimeCompatibilityWeight(STRATEGY_EXPANSION_MOMENTUM,regime),wMicro=RegimeCompatibilityWeight(STRATEGY_NONE,regime);
    int bestIdx=-1; double bestAdj=-1.0; string topRejectReason="none";
    g_acceptCandidates += arb.candidateCount;
@@ -1086,11 +1130,14 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       if(g_strategyLossStreak[4]>=2) { g_strategyCooldownBars[4]=MathMax(g_strategyCooldownBars[4],microLossCooldownBars); Print("[NO_TRADE_DECISION] reason=micro_block_loss_cooldown"); return; }
      }
    int sb=StrategyBucket(chosenPlan.strategy);
+   bool handoffReached=true;
    bool strategyAllowed=IsStrategyAllowed(chosenPlan.strategy);
    string blockedReason="none";
    if(!strategyAllowed)
      {
       blockedReason="disabled_strategy";
+      Print(StringFormat("[MICRO_NORMAL_PIPELINE] mode=%s emergencyHarness=%s microCalled=%d microRaw=%d microValid=%d microArbAccepted=%d microSelected=%d handoffReached=%d riskReached=%d riskApproved=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topBlocker=%s",
+                         modeName,(InpEmergencyTesterMicroHarness?"true":"false"),g_microModuleCalled,g_microCandCreated,g_microValidPlans,g_pipePlanOk[4],g_pipeWinnerSel[4],handoffReached,0,0,0,g_testerOrdersAttempted,g_testerOrdersSuccessful,blockedReason));
       Print(StringFormat("[DISABLED_STRATEGY_BLOCKED] strategy=%s reason=%s",StrategyName(chosenPlan.strategy),blockedReason));
       return;
      }
@@ -1155,6 +1202,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    if(riskInputValid) g_diagRiskInputValid++; else g_diagRiskInputInvalid++;
    Print(StringFormat("[RISK_IN] hasTrade=%s hasWinner=%s symbol=%s dir=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f stopDist=%.5f riskPct=%.2f strategy=%s grade=%d score=%.2f",
                       (riskInputValid?"true":"false"),(riskArb.hasWinner?"true":"false"),symbol,DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,stopDist,g_risk.RiskPercent(),StrategyName(chosenPlan.strategy),(int)chosenGrade,chosenScore));
+   bool riskReached=true;
    RiskDecision risk; g_risk.Assess(riskArb, ctx, risk);
    Print(StringFormat("[RISK_OUT] ok=%s reason=%s rawLots=%.4f normalizedLots=%.4f riskAmount=%.2f",
                       (risk.approved?"true":"false"),risk.reason,risk.rawLots,risk.normalizedLots,risk.riskAmount));
@@ -1164,6 +1212,8 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    if(risk.approved){ g_lastRiskOkTime=TimeCurrent(); g_diagRiskApproved++; g_pipeRiskOk[sb]++; }
    else
      {
+      Print(StringFormat("[MICRO_NORMAL_PIPELINE] mode=%s emergencyHarness=%s microCalled=%d microRaw=%d microValid=%d microArbAccepted=%d microSelected=%d handoffReached=%d riskReached=%d riskApproved=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topBlocker=%s",
+                         modeName,(InpEmergencyTesterMicroHarness?"true":"false"),g_microModuleCalled,g_microCandCreated,g_microValidPlans,g_pipePlanOk[4],g_pipeWinnerSel[4],handoffReached,riskReached,0,0,g_testerOrdersAttempted,g_testerOrdersSuccessful,risk.reason));
       g_diagRiskRejected++; g_r_risk++; g_pipeRiskRej[sb]++; g_starveRejectedByRisk++;
       if(risk.reason=="no_trade_or_no_winner") g_diagRiskRejectedNoTradeOrWinner++;
       else if(risk.reason=="invalid_symbol_tick_value_or_size") g_diagRiskRejectedInvalidTick++;
@@ -1218,6 +1268,8 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
                          (submitExecutionMode==EXEC_MODE_DRYRUN?"true":"false"),(submitExecutionMode==EXEC_MODE_LOG_ONLY?"true":"false"),(testerMode?"true":"false"),(int)submitExecutionMode,accountModeLabel));
       string execReason="";
       bool submitted=ExecuteSelectedPlan(chosenPlan, ctx, risk, symbol, chosenScore, validPlan, risk.approved, portfolioOK, runtimeLimitsApproved, tstate, execReason);
+      Print(StringFormat("[MICRO_NORMAL_PIPELINE] mode=%s emergencyHarness=%s microCalled=%d microRaw=%d microValid=%d microArbAccepted=%d microSelected=%d handoffReached=%d riskReached=%d riskApproved=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topBlocker=%s",
+                         modeName,(InpEmergencyTesterMicroHarness?"true":"false"),g_microModuleCalled,g_microCandCreated,g_microValidPlans,g_pipePlanOk[4],g_pipeWinnerSel[4],handoffReached,riskReached,(risk.approved?1:0),1,g_testerOrdersAttempted,g_testerOrdersSuccessful,(submitted?"none":execReason)));
       Print(StringFormat("[EXEC] symbol=%s strategy=%s direction=%s entry=%.5f sl=%.5f tp=%.5f lots=%.2f score=%.2f grade=%d execution_mode=%d",symbol,StrategyName(chosenPlan.strategy),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,risk.approvedLots,chosenScore,(int)chosenGrade,(int)executionMode));
       int regBefore=g_tracker.CountActiveTrades();
       string lifecycleReason="not_attempted";
