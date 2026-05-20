@@ -30,6 +30,7 @@ input int MaxOpenPositions = 3;
 input int MaxPositionsPerSymbol = 1;
 input bool EnableBreakeven = true;
 input bool EnableTrailing = true;
+input bool InpEmergencyTesterMicroHarness = true;
 
 // Internal locked architecture/state (not user-tuned)
 ExecutionMode executionMode = EXEC_MODE_TESTER_SIM;
@@ -844,6 +845,71 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       ManageActiveBrokerTrade(symbol, active, ctx);
      }
    if(ShouldLog(isNewBar) && basketEntries>0) Print(StringFormat("[BASKET][PersonalEA] sym=%s entries=%d dir=%s risk=%.2f avg=%.5f newest=%s",symbol,basketEntries,DirName(basketDir),basketRisk,basketAvgEntry,TimeToString(basketNewest,TIME_MINUTES)));
+
+   if((MQLInfoInteger(MQL_TESTER)>0) && InpEmergencyTesterMicroHarness)
+     {
+      Print(StringFormat("[HARNESS_START] symbol=%s bar=%s",symbol,TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES)));
+      RegimeState harnessRegime; g_regime.Detect(ctx, harnessRegime);
+      ArbitrationResult harnessArb=g_arb.Evaluate(ctx, harnessRegime);
+      StrategyCandidate harnessCandidate; bool harnessHasCandidate=false; string harnessStopReason="none";
+      for(int hi=0;hi<harnessArb.candidateCount;hi++)
+        {
+         StrategyCandidate c=harnessArb.candidates[hi];
+         if(c.strategy!=STRATEGY_MICRO_SCALPER) continue;
+         TradeDirection d=c.plan.direction;
+         bool directionOk=(d==TRADE_DIR_LONG || d==TRADE_DIR_SHORT);
+         bool pricesOk=(c.plan.entryPrice>0.0 && c.plan.stopLoss>0.0 && c.plan.takeProfit1>0.0);
+         bool sideOk=((d==TRADE_DIR_LONG && c.plan.stopLoss<c.plan.entryPrice && c.plan.entryPrice<c.plan.takeProfit1) || (d==TRADE_DIR_SHORT && c.plan.takeProfit1<c.plan.entryPrice && c.plan.entryPrice<c.plan.stopLoss));
+         bool riskDistanceOk=(MathAbs(c.plan.entryPrice-c.plan.stopLoss)>0.0);
+         if(directionOk && pricesOk && sideOk && riskDistanceOk)
+           { harnessCandidate=c; harnessHasCandidate=true; break; }
+         harnessStopReason="invalid_candidate_structure";
+        }
+      if(!harnessHasCandidate)
+        {
+         Print(StringFormat("[HARNESS_STOP] stage=no_micro_candidate reason=%s symbol=%s bid=%.5f ask=%.5f spread=%.1f",harnessStopReason,symbol,ctx.bid,ctx.ask,ctx.spreadPoints));
+         return;
+        }
+
+      TradePlan harnessPlan; harnessPlan.Reset();
+      harnessPlan.strategy=STRATEGY_MICRO_SCALPER;
+      harnessPlan.direction=harnessCandidate.plan.direction;
+      harnessPlan.grade=harnessCandidate.grade;
+      harnessPlan.entryPrice=harnessCandidate.plan.entryPrice;
+      harnessPlan.stopLoss=harnessCandidate.plan.stopLoss;
+      harnessPlan.takeProfit1=harnessCandidate.plan.takeProfit1;
+      harnessPlan.takeProfit2=(harnessCandidate.plan.takeProfit2>0.0?harnessCandidate.plan.takeProfit2:harnessCandidate.plan.takeProfit1);
+      harnessPlan.riskR=harnessCandidate.plan.riskR;
+      harnessPlan.confidence=harnessCandidate.score.totalScore;
+      harnessPlan.useTrailing=harnessCandidate.plan.useTrailing;
+      harnessPlan.useBreakEven=harnessCandidate.plan.useBreakEven;
+      Print(StringFormat("[HARNESS_CANDIDATE] symbol=%s direction=%s entry=%.5f sl=%.5f tp=%.5f score=%.2f rr=%.2f strategy=MicroScalper",symbol,DirName(harnessPlan.direction),harnessPlan.entryPrice,harnessPlan.stopLoss,harnessPlan.takeProfit1,harnessCandidate.score.totalScore,RRNetAfterSpread(harnessPlan,ctx)));
+
+      string harnessValidateReason="";
+      if(!g_order.ValidateTradePlan(harnessPlan, ctx, harnessValidateReason))
+        {
+         Print(StringFormat("[HARNESS_STOP] stage=validate_plan_failed reason=%s symbol=%s direction=%s entry=%.5f sl=%.5f tp=%.5f bid=%.5f ask=%.5f spread=%.1f",harnessValidateReason,symbol,DirName(harnessPlan.direction),harnessPlan.entryPrice,harnessPlan.stopLoss,harnessPlan.takeProfit1,ctx.bid,ctx.ask,ctx.spreadPoints));
+         return;
+        }
+
+      ArbitrationResult harnessRiskArb; BuildRiskArbFromPlan(harnessPlan, harnessCandidate.score.totalScore, harnessCandidate.grade, harnessRiskArb);
+      RiskDecision harnessRisk; g_risk.Assess(harnessRiskArb, ctx, harnessRisk);
+      if(!harnessRisk.approved)
+        {
+         Print(StringFormat("[HARNESS_STOP] stage=risk_rejected reason=%s riskPct=%.3f lots=%.4f",harnessRisk.reason,g_risk.RiskPercent(),harnessRisk.approvedLots));
+         return;
+        }
+
+      TradeState harnessState; string harnessExecReason="";
+      Print(StringFormat("[HARNESS_ORDERMANAGER_CALL] symbol=%s direction=%s entry=%.5f sl=%.5f tp=%.5f lots=%.4f",symbol,DirName(harnessPlan.direction),harnessPlan.entryPrice,harnessPlan.stopLoss,harnessPlan.takeProfit1,harnessRisk.approvedLots));
+      bool harnessSubmitted=g_order.Submit(harnessPlan, harnessRisk, ctx, EXEC_MODE_TESTER_SIM, true, false, false, true, MagicNumber, maxSlippagePoints, TradeCommentPrefix, harnessState, harnessExecReason);
+      Print(StringFormat("[HARNESS_ORDERMANAGER_RESULT] attempted=%s success=%s retcode=%I64d reason=%s order=%I64d deal=%I64d",(g_order.LastAttempted()?"true":"false"),(harnessSubmitted?"true":"false"),g_order.LastRetcode(),harnessExecReason,g_order.LastOrder(),g_order.LastDeal()));
+      if(harnessSubmitted)
+        {
+         Print("[HARNESS_SUCCESS] one_trade_path_confirmed=true");
+        }
+      return;
+     }
    string recEvent="";
    if(executionMode==EXEC_MODE_LIVE && allowLiveExecution && manualExecutionArmed)
      {
