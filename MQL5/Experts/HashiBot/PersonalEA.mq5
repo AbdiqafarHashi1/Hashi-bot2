@@ -236,8 +236,9 @@ string TfName(){ return EnumToString(contextTimeframe); }
 ENUM_ORDER_TYPE ToOrderType(const TradeDirection d){ return (d==TRADE_DIR_SHORT?ORDER_TYPE_SELL:ORDER_TYPE_BUY); }
 void EmitDecisionTrace(const TradeDecision &d,const datetime barTime,const string stage,const string reason,const bool candidateCreated)
   {
-   Print(StringFormat("[DECISION_TRACE] id=%s symbol=%s barTime=%s strategy=%s stage=%s reason=%s candidateCreated=%s rr=%.2f score=%.2f riskApproved=%s submitted=%s success=%s",
-                      d.decisionId,d.symbol,TimeToString(barTime,TIME_DATE|TIME_MINUTES),d.strategy,stage,reason,(candidateCreated?"true":"false"),d.rr,d.score,
+   Print(StringFormat("[DECISION_TRACE] id=%s symbol=%s barTime=%s strategy=%s stage=%s reason=%s candidateCreated=%s validPlan=%s selected=%s rr=%.2f score=%.2f riskApproved=%s submitted=%s success=%s",
+                      d.decisionId,d.symbol,TimeToString(barTime,TIME_DATE|TIME_MINUTES),d.strategy,stage,reason,(candidateCreated?"true":"false"),
+                      (d.hasCandidate?"true":"false"),(d.selected?"true":"false"),d.rr,d.score,
                       (d.riskApproved?"true":"false"),(d.submitted?"true":"false"),(d.success?"true":"false")));
   }
 
@@ -255,6 +256,7 @@ string StrategyName(const StrategyType st)
    if(st==STRATEGY_PULLBACK_CONTINUATION) return "pullback";
    if(st==STRATEGY_COMPRESSION_BREAKOUT) return "compression";
    if(st==STRATEGY_EXPANSION_MOMENTUM) return "expansion";
+   if(st==STRATEGY_MICRO_SCALPER) return "micro";
    return "micro";
   }
 void BuildRiskArbFromPlan(const TradePlan &plan,const double score,const SignalGrade grade,ArbitrationResult &riskArb)
@@ -1002,7 +1004,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       return;
      }
 
-   if(chosenFromFallback){ chosenGrade=SIGNAL_GRADE_B; chosenPlan.strategy=STRATEGY_NONE; g_fallbackSelected++; }
+   if(chosenFromFallback){ chosenGrade=SIGNAL_GRADE_B; chosenPlan.strategy=STRATEGY_MICRO_SCALPER; g_fallbackSelected++; }
    if(chosenPlan.strategy==STRATEGY_NONE)
      {
       long microSelToday=g_pipeWinnerSel[4]; long totalSelToday=MathMax(1L,g_pipeWinnerSel[0]+g_pipeWinnerSel[1]+g_pipeWinnerSel[2]+g_pipeWinnerSel[3]+g_pipeWinnerSel[4]);
@@ -1315,6 +1317,15 @@ void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
                       g_testerOrdersFailed,
                       g_phaseANoCandidate,
                       phaseATopRejectReason));
+   Print(StringFormat("[PHASE_A1_SUMMARY] barsEvaluated=%d microCalled=%d microRaw=%d microValid=%d microSelected=%d ordersAttempted=%d ordersSuccessful=%d orderManagerReached=%d",
+                      g_phaseABarsEvaluated,
+                      g_arb.MicroModuleCalled(),
+                      g_arb.MicroRawCreated(),
+                      g_arb.MicroValidCreated(),
+                      g_pipeWinnerSel[4],
+                      g_testerOrdersAttempted,
+                      g_testerOrdersSuccessful,
+                      g_starveOrderManagerReached));
    Print(StringFormat("[TESTER_PIPELINE_COUNTERS] ticks=%d bars=%d strategyEvals=%d primaryEvals=%d secondaryEvals=%d validPrimary=%d validSecondary=%d arbDecisions=%d arbNoTrade=%d riskBlocks=%d spreadBlocks=%d cooldownBlocks=%d dailyLimitBlocks=%d ordersAttempted=%d ordersSuccessful=%d ordersFailed=%d positionsManaged=%d breakevenMoves=%d trailingMoves=%d",g_testerTicksProcessed,g_testerBarsProcessed,g_testerStrategyEvaluations,g_testerPrimaryEvaluations,g_testerSecondaryEvaluations,g_trendAccepted,g_compressionAccepted,g_testerArbDecisions,g_testerArbNoTrades,g_diagRiskRejected,g_r_spread,g_r_cooldown,g_riskBlockDailyLoss,g_testerOrdersAttempted,g_testerOrdersSuccessful,g_testerOrdersFailed,g_testerPositionsManaged,g_lifeBreakEvenMoves,g_lifeTrailUpdates));
    long starveTop=MathMax(g_starveRejectedBeforePlan,MathMax(g_starveRejectedByRR,MathMax(g_starveRejectedByScore,MathMax(g_starveRejectedBySpread,MathMax(g_starveRejectedByRegime,MathMax(g_starveRejectedByPortfolio,MathMax(g_starveRejectedByArbitrator,g_starveRejectedByRisk)))))));
    string starveGate=(starveTop==g_starveRejectedBeforePlan?"before_plan":(starveTop==g_starveRejectedByRR?"rr":(starveTop==g_starveRejectedByScore?"score":(starveTop==g_starveRejectedBySpread?"spread":(starveTop==g_starveRejectedByRegime?"regime":(starveTop==g_starveRejectedByPortfolio?"portfolio":(starveTop==g_starveRejectedByRisk?"risk":"arbitrator")))))));

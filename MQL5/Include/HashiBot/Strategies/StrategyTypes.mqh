@@ -23,6 +23,7 @@ namespace StrategyTypes
          case STRATEGY_COMPRESSION_BREAKOUT: return "CompressionBreakout";
          case STRATEGY_PULLBACK_CONTINUATION: return "PullbackContinuation";
          case STRATEGY_EXPANSION_MOMENTUM: return "ExpansionMomentum";
+         case STRATEGY_MICRO_SCALPER: return "MicroScalper";
          default: return "None";
         }
      }
