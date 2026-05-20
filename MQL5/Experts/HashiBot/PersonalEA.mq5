@@ -1360,9 +1360,42 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    double stratExp=StrategyEdgeExpectancy(fb);
    double symbolExp=((g_symWins[symIdx]+g_symLosses[symIdx])>0?g_symSumR[symIdx]/(double)(g_symWins[symIdx]+g_symLosses[symIdx]):0.0);
    double finalScore=chosenScore + MathMin(0.30,MathMax(0.0,rrAccept-1.0)*0.20) + 0.10*regime.confidence + 0.08*ctx.marketQuality + 0.06*stratExp + 0.04*symbolExp - (ctx.choppiness>60.0?0.12:0.0) - (ctx.spreadPoints>50.0?0.10:0.0);
-   double minFinal=(fb==4?0.72:0.68);
-   bool finalAccepted=(finalScore>=minFinal && (rrAccept+rrEpsilon)>=requiredRR);
-   Print(StringFormat("[FINAL_TRADE_ACCEPTANCE] accepted=%s strategy=%s symbol=%s score=%.2f minScore=%.2f rrAfterSpread=%.2f expectancy=%.2f regime=%.2f marketQuality=%.2f rejectReason=%s",(finalAccepted?"true":"false"),StrategyName(chosenPlan.strategy),symbol,finalScore,minFinal,rrAccept,stratExp,regime.confidence,ctx.marketQuality,(finalAccepted?"none":"score_or_rr_fail")));
+   bool isMicro=(chosenPlan.strategy==STRATEGY_MICRO_SCALPER);
+   double minFinal=(isMicro?0.72:0.68);
+   double microMinScore=activeMinScore;
+   bool directionValid=(chosenPlan.direction==TRADE_DIR_LONG || chosenPlan.direction==TRADE_DIR_SHORT);
+   bool pricesValid=(chosenPlan.entryPrice>0.0 && chosenPlan.stopLoss>0.0 && chosenPlan.takeProfit1>0.0);
+   bool marketDataOk=(ctx.bid>0.0 && ctx.ask>0.0 && ctx.point>0.0);
+   double spreadPointsNow=(ctx.point>0.0?(ctx.ask-ctx.bid)/ctx.point:0.0);
+   if(spreadPointsNow<0.0) spreadPointsNow=0.0;
+   double maxSpreadPointsNow=MaxAllowedSpreadPoints(symbol);
+   bool spreadOk=(spreadPointsNow<=maxSpreadPointsNow);
+   bool genericScorePass=(finalScore>=minFinal);
+   bool microScorePass=(chosenScore+rrEpsilon>=microMinScore);
+   bool rrGatePass=((rrAccept+rrEpsilon)>=requiredRR);
+   bool finalAccepted=(genericScorePass && rrGatePass);
+   string finalAcceptanceMode="generic_score_rr";
+   string rejectReason="none";
+   if(isMicro)
+     {
+      finalAcceptanceMode="micro_structural_rr";
+      finalAccepted=(validPlan && directionValid && pricesValid && marketDataOk && spreadOk && rrGatePass && microScorePass);
+      if(!validPlan) rejectReason="invalid_plan";
+      else if(!directionValid) rejectReason="invalid_direction";
+      else if(!pricesValid) rejectReason="invalid_price_fields";
+      else if(!marketDataOk) rejectReason="market_data_invalid";
+      else if(!spreadOk) rejectReason="spread_too_high";
+      else if(!rrGatePass) rejectReason="rr_too_low";
+      else if(!microScorePass) rejectReason="micro_score_below_min";
+     }
+   else
+     {
+      if(!genericScorePass) rejectReason="score_below_min";
+      else if(!rrGatePass) rejectReason="rr_too_low";
+     }
+   Print(StringFormat("[FINAL_TRADE_ACCEPTANCE] strategy=%s accepted=%s reason=%s score=%.2f minScore=%.2f microMinScore=%.2f rr=%.2f requiredRR=%.2f rrPass=%s planValid=%s marketDataOk=%s spreadPoints=%.2f finalAcceptanceMode=%s",
+                      StrategyName(chosenPlan.strategy),(finalAccepted?"true":"false"),rejectReason,finalScore,minFinal,microMinScore,rrAccept,requiredRR,(rrGatePass?"true":"false"),
+                      (validPlan?"true":"false"),(marketDataOk?"true":"false"),spreadPointsNow,finalAcceptanceMode));
    if(!finalAccepted){ g_rejectTrades++; g_rejectRRSum+=rrAccept; g_starveRejectedByScore++; Print("[NO_TRADE_DECISION] reason=final_trade_acceptance_failed"); return; }
    g_acceptTrades++; g_acceptRRSum+=rrAccept;
    double rMult=(fb==4?0.55:(fb==1?(stratExp>0.0?1.00:0.75):(fb==0?(regime.confidence>0.55?1.10:0.85):(fb==2||fb==3?(rrAccept>=1.8?1.05:0.80):0.90))));
