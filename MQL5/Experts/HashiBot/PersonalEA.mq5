@@ -33,12 +33,13 @@ input bool EnableTrailing = true;
 input bool InpEmergencyTesterMicroHarness = false;
 enum StrategyDebugMode
   {
-   TREND_COMPRESSION=0,
-   MICRO_ONLY=1,
-   TREND_ONLY=2,
-   COMPRESSION_ONLY=3
+   STRATEGY_DEBUG_AUTO=0,
+   STRATEGY_DEBUG_TREND_COMPRESSION=0,
+   STRATEGY_DEBUG_MICRO_ONLY=1,
+   STRATEGY_DEBUG_TREND_ONLY=2,
+   STRATEGY_DEBUG_COMPRESSION_ONLY=3
   };
-input StrategyDebugMode InpStrategyDebugMode = TREND_COMPRESSION;
+input StrategyDebugMode InpStrategyDebugMode = STRATEGY_DEBUG_TREND_COMPRESSION;
 input bool InpVerboseDiagnostics = false;
 
 // Internal locked architecture/state (not user-tuned)
@@ -243,6 +244,7 @@ bool StrategyPruned(const int sb,string &reason)
 
 string DirName(TradeDirection d){ if(d==TRADE_DIR_LONG) return "LONG"; if(d==TRADE_DIR_SHORT) return "SHORT"; return "NONE"; }
 string TfName(){ return EnumToString(contextTimeframe); }
+string StrategyModeName(){ if(InpStrategyDebugMode==STRATEGY_DEBUG_MICRO_ONLY) return "MICRO_ONLY"; if(InpStrategyDebugMode==STRATEGY_DEBUG_TREND_ONLY) return "TREND_ONLY"; if(InpStrategyDebugMode==STRATEGY_DEBUG_COMPRESSION_ONLY) return "COMPRESSION_ONLY"; return "TREND_COMPRESSION"; }
 ENUM_ORDER_TYPE ToOrderType(const TradeDirection d){ return (d==TRADE_DIR_SHORT?ORDER_TYPE_SELL:ORDER_TYPE_BUY); }
 void EmitDecisionTrace(const TradeDecision &d,const datetime barTime,const string stage,const string reason,const bool candidateCreated)
   {
@@ -409,9 +411,9 @@ bool BuildFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &score,st
 
 bool IsStrategyAllowed(const StrategyType strategy)
   {
-   if(InpStrategyDebugMode==MICRO_ONLY) return (strategy==STRATEGY_MICRO_SCALPER);
-   if(InpStrategyDebugMode==TREND_ONLY) return (strategy==STRATEGY_TREND_CONTINUATION);
-   if(InpStrategyDebugMode==COMPRESSION_ONLY) return (strategy==STRATEGY_COMPRESSION_BREAKOUT);
+   if(InpStrategyDebugMode==STRATEGY_DEBUG_MICRO_ONLY) return (strategy==STRATEGY_MICRO_SCALPER);
+   if(InpStrategyDebugMode==STRATEGY_DEBUG_TREND_ONLY) return (strategy==STRATEGY_TREND_CONTINUATION);
+   if(InpStrategyDebugMode==STRATEGY_DEBUG_COMPRESSION_ONLY) return (strategy==STRATEGY_COMPRESSION_BREAKOUT);
    return (strategy==STRATEGY_TREND_CONTINUATION || strategy==STRATEGY_COMPRESSION_BREAKOUT || strategy==STRATEGY_MICRO_SCALPER);
   }
 
@@ -692,8 +694,8 @@ void PrintFinalDecision(const TradePlan &plan,
   {
    string finalSymbol=g_execSymbol;
    double finalRiskReward=plan.riskR;
-   Print(StringFormat("[FINAL_DECISION] barTime=%s symbol=%s mode=%d strategy=%s stage=%s reason=%s selected=true planValid=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f riskR=%.2f score=%.2f riskReached=%s riskApproved=%s riskReason=%s portfolioReached=%s portfolioApproved=%s portfolioReason=%s orderValidateReached=%s orderValidateOk=%s orderValidateReason=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s retcode=%d lastError=%d",
-                      TimeToString(g_execCtx.barTime,TIME_DATE|TIME_MINUTES),finalSymbol,(int)executionMode,StrategyName(plan.strategy),stage,reason,(planValid?"true":"false"),DirName(plan.direction),plan.entryPrice,plan.stopLoss,plan.takeProfit1,plan.takeProfit2,finalRiskReward,g_execScore,(riskReached?"true":"false"),(riskApproved?"true":"false"),riskReason,(portfolioReached?"true":"false"),(portfolioApproved?"true":"false"),portfolioReason,(orderValidateReached?"true":"false"),(orderValidateOk?"true":"false"),reason,(orderManagerReached?"true":"false"),(orderAttempted?"true":"false"),(orderSuccess?"true":"false"),retcode,lastErr));
+   Print(StringFormat("[FINAL_DECISION] barTime=%s symbol=%s mode=%s strategy=%s stage=%s reason=%s selected=true planValid=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f riskR=%.2f score=%.2f riskReached=%s riskApproved=%s riskReason=%s portfolioReached=%s portfolioApproved=%s portfolioReason=%s orderValidateReached=%s orderValidateOk=%s orderValidateReason=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s retcode=%d lastError=%d",
+                      TimeToString(g_execCtx.barTime,TIME_DATE|TIME_MINUTES),finalSymbol,StrategyModeName(),StrategyName(plan.strategy),stage,reason,(planValid?"true":"false"),DirName(plan.direction),plan.entryPrice,plan.stopLoss,plan.takeProfit1,plan.takeProfit2,finalRiskReward,g_execScore,(riskReached?"true":"false"),(riskApproved?"true":"false"),riskReason,(portfolioReached?"true":"false"),(portfolioApproved?"true":"false"),portfolioReason,(orderValidateReached?"true":"false"),(orderValidateOk?"true":"false"),reason,(orderManagerReached?"true":"false"),(orderAttempted?"true":"false"),(orderSuccess?"true":"false"),retcode,lastErr));
   }
 bool ExecuteSelectedPlan(const TradePlan &plan,string &blocker)
   {
@@ -1042,16 +1044,16 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       g_strategiesReachedAfterWeakRegime++;
 
    ArbitrationResult arb=g_arb.Evaluate(ctx, regime); g_diagCandidates++; g_testerArbDecisions++; g_starveRawCandidates+=arb.candidateCount; if(arb.hasWinner) g_diagWinners++; else { g_r_no_candidate++; g_testerArbNoTrades++; g_phaseANoCandidate++; decision.rejectStage="ARBITRATION"; decision.rejectReason="NO_STRATEGY_CANDIDATE"; EmitDecisionTrace(decision,ctx.barTime,"ARBITRATION",decision.rejectReason,false); } g_lastArbTime=TimeCurrent();
-   string modeName=(InpStrategyDebugMode==MICRO_ONLY?"MICRO_ONLY":(InpStrategyDebugMode==TREND_ONLY?"TREND_ONLY":(InpStrategyDebugMode==COMPRESSION_ONLY?"COMPRESSION_ONLY":"TREND_COMPRESSION")));
-   if(InpStrategyDebugMode!=TREND_COMPRESSION)
+   string modeName=StrategyModeName();
+   if(InpStrategyDebugMode!=STRATEGY_DEBUG_TREND_COMPRESSION)
      {
       int kept=0;
       for(int fi=0; fi<arb.candidateCount; fi++)
         {
          StrategyType st=arb.candidates[fi].strategy;
-         bool keep=((InpStrategyDebugMode==MICRO_ONLY && st==STRATEGY_MICRO_SCALPER) ||
-                    (InpStrategyDebugMode==TREND_ONLY && st==STRATEGY_TREND_CONTINUATION) ||
-                    (InpStrategyDebugMode==COMPRESSION_ONLY && st==STRATEGY_COMPRESSION_BREAKOUT));
+         bool keep=((InpStrategyDebugMode==STRATEGY_DEBUG_MICRO_ONLY && st==STRATEGY_MICRO_SCALPER) ||
+                    (InpStrategyDebugMode==STRATEGY_DEBUG_TREND_ONLY && st==STRATEGY_TREND_CONTINUATION) ||
+                    (InpStrategyDebugMode==STRATEGY_DEBUG_COMPRESSION_ONLY && st==STRATEGY_COMPRESSION_BREAKOUT));
          if(keep){ arb.candidates[kept]=arb.candidates[fi]; kept++; }
         }
       arb.candidateCount=kept;
@@ -1464,7 +1466,14 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
    string modeLabel=(executionMode==EXEC_MODE_LOG_ONLY?"log_only":(executionMode==EXEC_MODE_DRYRUN?"dryrun":(executionMode==EXEC_MODE_TESTER_SIM?"tester_sim":"live_or_demo")));
    string profileLabel="adaptive_core_compat";
    Print(StringFormat("[BUILD] ea=PersonalEA phase=28H commit=%s buildTime=%s executionMode=%s personalProfile=%s",buildCommitTag,__DATETIME__,modeLabel,profileLabel));
-   Print("[BUILD_SIGNATURE] PersonalEA build=BUCKET_MISMATCH_FIX_2026_05_20 activeStrategies=TrendContinuation,CompressionBreakout disabledStrategies=PullbackContinuation,ExpansionMomentum,Micro ghostSelectionFix=ON");
+   Print(StringFormat("[BUILD_SIGNATURE] version=%s expert=PersonalEA symbol=%s timeframe=%s strategyMode=%s verbose=%s emergencyHarness=%s riskPct=%.2f maxSpread=%.1f maxTradesPerDay=%d maxOpenPositions=%d maxPositionsPerSymbol=%d trailing=%s breakeven=%s",
+                      "1.14",_Symbol,TfName(),StrategyModeName(),(InpVerboseDiagnostics?"true":"false"),(InpEmergencyTesterMicroHarness?"true":"false"),
+                      g_effectiveRiskPerTradePct,MaxSpreadPoints,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,MaxPositionsPerSymbol,(EnableTrailing?"true":"false"),(EnableBreakeven?"true":"false")));
+   Print(StringFormat("[STRATEGY_DEBUG_MODE] mode=%s trendEnabled=%s compressionEnabled=%s microEnabled=%s",
+                      StrategyModeName(),
+                      ((InpStrategyDebugMode==STRATEGY_DEBUG_TREND_ONLY || InpStrategyDebugMode==STRATEGY_DEBUG_TREND_COMPRESSION)?"true":"false"),
+                      ((InpStrategyDebugMode==STRATEGY_DEBUG_COMPRESSION_ONLY || InpStrategyDebugMode==STRATEGY_DEBUG_TREND_COMPRESSION)?"true":"false"),
+                      (InpStrategyDebugMode==STRATEGY_DEBUG_MICRO_ONLY?"true":"false")));
    Print(StringFormat("[BUILD] risk effectiveRiskPct=%.2f effectiveMaxOpenRiskPct=%.2f effectiveMaxTradesDay=%d effectiveMaxActive=%d effectiveMaxDailyLossPct=%.2f effectiveLotCap=%.2f compounding=%s",g_effectiveRiskPerTradePct,g_effectiveMaxOpenRiskPct,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,g_effectiveMaxDailyLossPct,g_effectiveLotCap,(g_effectiveCompounding?"true":"false")));
    Print(StringFormat("[BUILD] strategies trend=true pullback=false compression=true expansion=false micro=%s lifecycleFlags be=%s trailing=%s partial=%s", "true",(EnableBreakeven?"true":"false"),(EnableTrailing?"true":"false"),(enablePartialClose?"true":"false")));
    Print(StringFormat("[INPUTS_EFFECTIVE] executionMode=%s symbol=%s timeframe=%s riskPct=%.2f maxDailyLossPct=%.2f maxActiveTrades=%d maxTradesPerDay=%d sessionFilter=%s spreadLimit=%.1f partialClosePercent=%.1f breakeven=%s/atr=%.2f trailing=%s/atr=%.2f multiSymbol=%s symbols=%s",modeLabel,_Symbol,TfName(),g_effectiveRiskPerTradePct,g_effectiveMaxDailyLossPct,g_effectiveMaxActiveTrades,g_effectiveMaxTradesPerDay,(UseSessionFilter?"true":"false"),MaxSpreadPoints,partialClosePercent,(EnableBreakeven?"true":"false"),breakevenAtR,(EnableTrailing?"true":"false"),trailingAtrMultiplier,(g_enableMultiSymbolScannerEffective?"true":"false"),g_scannerSymbolsEffective));
@@ -1481,16 +1490,14 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
       RunDeterministicExecutionSelfTest();
      }
    return INIT_SUCCEEDED; }
-void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; g_testerTicksProcessed++; datetime bar=iTime(_Symbol, contextTimeframe, 0); bool isNewBar=(bar!=0 && bar!=g_lastBarTime); if(isNewBar){ g_lastBarTime=bar; g_testerBarsProcessed++; if(g_isTester) Print(StringFormat("[TESTER_NEW_BAR] symbol=%s tf=%s bar=%s",_Symbol,TfName(),TimeToString(bar,TIME_DATE|TIME_MINUTES))); } if(!g_enableMultiSymbolScannerEffective){ ProcessSymbol(_Symbol, isNewBar); return; } for(int i=0;i<g_scanCount;i++){ datetime sb=iTime(g_scan[i], contextTimeframe, 0); bool symNew=(sb!=0 && sb!=g_lastSymBar[i]); if(symNew) g_lastSymBar[i]=sb; if(ShouldLog(symNew)) ProcessSymbol(g_scan[i], symNew); }}
+void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; g_testerTicksProcessed++; datetime bar=iTime(_Symbol, contextTimeframe, 0); bool isNewBar=(bar!=0 && bar!=g_lastBarTime); if(isNewBar){ g_lastBarTime=bar; g_testerBarsProcessed++; if(g_isTester && InpVerboseDiagnostics) Print(StringFormat("[TESTER_NEW_BAR] symbol=%s tf=%s bar=%s",_Symbol,TfName(),TimeToString(bar,TIME_DATE|TIME_MINUTES))); } if(!g_enableMultiSymbolScannerEffective){ ProcessSymbol(_Symbol, isNewBar); return; } for(int i=0;i<g_scanCount;i++){ datetime sb=iTime(g_scan[i], contextTimeframe, 0); bool symNew=(sb!=0 && sb!=g_lastSymBar[i]); if(symNew) g_lastSymBar[i]=sb; if(ShouldLog(symNew)) ProcessSymbol(g_scan[i], symNew); }}
 void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA deinit reason=", reason);
-   
-   if(!InpVerboseDiagnostics)
-     {
-      string topReason=(g_testerOrdersAttempted>0?"ORDERMANAGER_SUBMIT_FAILED":(g_diagWinners>0?"SELECTED_BLOCKED_BEFORE_SUBMIT":"NO_SELECTED_PLAN_REACHED_SUBMIT_PATH"));
-      Print(StringFormat("[TEST_SUMMARY] bars=%d candidates=%d validPlans=%d selected=%d riskRejected=%d portfolioRejected=%d orderValidationRejected=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topReason=%s",
-                         g_testerBarsProcessed,g_starveRawCandidates,g_starveValidPlans,g_starveSelected,g_diagRiskRejected,g_diagPortRejected,(g_pipeSubmitRej[0]+g_pipeSubmitRej[1]+g_pipeSubmitRej[2]+g_pipeSubmitRej[3]+g_pipeSubmitRej[4]),g_starveOrderManagerReached,g_testerOrdersAttempted,g_testerOrdersSuccessful,topReason));
-      return;
-     }
+   string topReason=(g_testerOrdersAttempted>0?"ORDERMANAGER_SUBMIT_FAILED":(g_diagWinners>0?"SELECTED_BLOCKED_BEFORE_SUBMIT":"NO_SELECTED_PLAN_REACHED_SUBMIT_PATH"));
+   Print(StringFormat("[TEST_SUMMARY] bars=%d candidates=%d validPlans=%d selected=%d riskRejected=%d portfolioRejected=%d orderValidationRejected=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topReason=%s",
+                      g_testerBarsProcessed,g_starveRawCandidates,g_starveValidPlans,g_starveSelected,g_diagRiskRejected,g_diagPortRejected,(g_pipeSubmitRej[0]+g_pipeSubmitRej[1]+g_pipeSubmitRej[2]+g_pipeSubmitRej[3]+g_pipeSubmitRej[4]),g_starveOrderManagerReached,g_testerOrdersAttempted,g_testerOrdersSuccessful,topReason));
+   Print(StringFormat("[STRATEGY_TOTALS] trendRaw=%d trendValid=%d trendSelected=%d compressionRaw=%d compressionValid=%d compressionSelected=%d microRaw=%d microValid=%d microSelected=%d",
+                      g_arb.TrendRawCreated(),g_trendAccepted,g_pipeWinnerSel[0],g_arb.CompressionRawCreated(),g_compressionAccepted,g_pipeWinnerSel[2],g_arb.MicroRawCreated(),g_microAccepted,g_pipeWinnerSel[4]));
+   if(!InpVerboseDiagnostics) return;
 g_arb.PrintStrategyTriggerAudit();
    Print("[DIAG_INACTIVE] Removed placeholder diagnostics: fake lifecycle/edge/performance rollups are not emitted as truth metrics.");
    long phaseATopRejectCount=g_phaseANoCandidate;
