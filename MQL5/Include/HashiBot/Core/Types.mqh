@@ -422,6 +422,8 @@ struct StrategyCandidate
    SuppressionState         suppression;    // Candidate suppression state
    TradePlan                plan;           // Candidate trade plan
    bool                     isValid;        // Candidate passes base checks
+   string                   reason;         // Candidate context reason
+   string                   rejectReason;   // Candidate rejection reason
 
    void Reset()
      {
@@ -432,6 +434,8 @@ struct StrategyCandidate
       suppression.Reset();
       plan.Reset();
       isValid = false;
+      reason = "";
+      rejectReason = "";
      }
   };
 
