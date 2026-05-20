@@ -9,6 +9,7 @@
 #include <HashiBot/Strategies/StrategyTypes.mqh>
 #include <HashiBot/Strategies/TrendContinuation.mqh>
 #include <HashiBot/Strategies/CompressionBreakout.mqh>
+#include <HashiBot/Strategies/MicroScalper.mqh>
 
 #define HASHIBOT_AMBIGUITY_THRESHOLD      0.04
 #define HASHIBOT_MIN_REGIME_CONF_PERSONAL      0.38
@@ -36,11 +37,13 @@ private:
    int                           m_noValidWinnerCount;
    CTrendContinuationStrategy    m_trend;
    CCompressionBreakoutStrategy  m_compression;
+   CMicroScalperStrategy         m_micro;
    ProfileType                   m_profile;
    bool                          m_enableSecondaryStrategy;
    bool                          m_enableArbitrator;
    long                          m_trendModuleCalled,m_trendEnoughBars,m_trendSessionOk,m_trendSpreadOk,m_trendIndicatorsReady,m_trendRegimeOk,m_trendTriggerFound,m_trendRawCreated;
    long                          m_compModuleCalled,m_compEnoughBars,m_compSessionOk,m_compSpreadOk,m_compAtrReady,m_compBoxReady,m_compCompressionDetected,m_compBreakoutDetected,m_compRawCreated;
+   long                          m_microModuleCalled,m_microRawCreated,m_microValidCreated;
 
 private:
    SignalGrade GradeFromScore(const double score) const
@@ -176,6 +179,9 @@ public:
    long CompressionModuleCalled() const { return m_compModuleCalled; }
    long TrendRawCreated() const { return m_trendRawCreated; }
    long CompressionRawCreated() const { return m_compRawCreated; }
+   long MicroModuleCalled() const { return m_microModuleCalled; }
+   long MicroRawCreated() const { return m_microRawCreated; }
+   long MicroValidCreated() const { return m_microValidCreated; }
 
    void PrintStrategyTriggerAudit() const
      {
@@ -200,6 +206,7 @@ public:
       m_enableArbitrator = true;
       m_trendModuleCalled=m_trendEnoughBars=m_trendSessionOk=m_trendSpreadOk=m_trendIndicatorsReady=m_trendRegimeOk=m_trendTriggerFound=m_trendRawCreated=0;
       m_compModuleCalled=m_compEnoughBars=m_compSessionOk=m_compSpreadOk=m_compAtrReady=m_compBoxReady=m_compCompressionDetected=m_compBreakoutDetected=m_compRawCreated=0;
+      m_microModuleCalled=m_microRawCreated=m_microValidCreated=0;
       m_trend.Init(m_profile);
       m_compression.Init(m_profile);
       Reset();
@@ -349,6 +356,22 @@ public:
                          (compCompressionDetected?"true":"false"),(compAnalyzed?"true":"false"),(m_compRawCreated>0?"true":"false"),
                          (c.isValid?"true":"false"),(c.suppression.reasonCount>0?SuppressionReasonName(c.suppression.reasons[0]):"ok")));
       Print("[ARB_DISABLED] strategy=ExpansionMomentum reason=phase_a_two_strategy_only");
+      m_microModuleCalled++;
+      bool microAnalyzed=m_micro.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c);
+      if(microAnalyzed) m_microRawCreated++;
+      {
+         int b=StrategyBucket(c.strategy); string vreason="";
+         if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
+         if(c.isValid && ValidateCandidate(c, vreason))
+           {
+            m_microValidCreated++;
+            double rr=RRNetAfterSpread(c,ctx);
+            double microMinRR=(MQLInfoInteger(MQL_TESTER)>0?0.95:1.05);
+            if(rr<microMinRR) { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,microMinRR)); }
+            else { AddCandidateIfValid(c); }
+           }
+         else { m_invalidByStrategy[b]++; if(vreason=="") vreason=c.rejectReason; Print(StringFormat("[ARB_REJECT] strategy=%s reason=CANDIDATE_INVALID_SLTP detail=%s",StrategyTypes::StrategyName(c.strategy),vreason)); }
+      }
 
       if(!m_enableSecondaryStrategy)
         {
@@ -383,6 +406,7 @@ public:
 
       Print(StringFormat("[PRE_CANDIDATE_DIAG][TrendContinuation] moduleCalled=%d enoughBars=%d sessionOk=%d spreadOk=%d indicatorsReady=%d trendRegimeOk=%d triggerFound=%d rawCandidateCreated=%d",m_trendModuleCalled,m_trendEnoughBars,m_trendSessionOk,m_trendSpreadOk,m_trendIndicatorsReady,m_trendRegimeOk,m_trendTriggerFound,m_trendRawCreated));
       Print(StringFormat("[PRE_CANDIDATE_DIAG][CompressionBreakout] moduleCalled=%d enoughBars=%d sessionOk=%d spreadOk=%d atrReady=%d boxReady=%d compressionDetected=%d breakoutDetected=%d rawCandidateCreated=%d",m_compModuleCalled,m_compEnoughBars,m_compSessionOk,m_compSpreadOk,m_compAtrReady,m_compBoxReady,m_compCompressionDetected,m_compBreakoutDetected,m_compRawCreated));
+      Print(StringFormat("[MICRO_DIAG] called=%d raw=%d valid=%d selected=%d topReject=%s",m_microModuleCalled,m_microRawCreated,m_microValidCreated,0,(m_microRawCreated>m_microValidCreated?"candidate_invalid":"none")));
       PrintStrategyTriggerAudit();
       if(m_candidateCount == 0)
         { result.noTrade = true; result.reason = "no_candidates"; Print("[ARB] no_valid_winner reason=no_valid_candidates"); return result; }
