@@ -218,7 +218,7 @@ long g_invalidSpreadLogs=0,g_marketDataCheckLogs=0;
 
 void LogMarketDataCheck(const string symbol,const double bid,const double ask,const double point,const double spreadPoints,const double maxSpreadPoints,const bool valid,const string reason)
   {
-   bool shouldLog=(valid || g_marketDataCheckLogs<5 || (g_marketDataInvalidEvents%1000)==0);
+   bool shouldLog=(InpVerboseDiagnostics ? (valid || g_marketDataCheckLogs<5 || (g_marketDataInvalidEvents%1000)==0) : (!valid && g_marketDataCheckLogs<5));
    if(!shouldLog) return;
    if(!valid) g_marketDataCheckLogs++;
    Print(StringFormat("[MARKET_DATA_CHECK] symbol=%s bid=%.5f ask=%.5f point=%.8f spreadPoints=%.2f maxSpreadPoints=%.2f valid=%s reason=%s",
@@ -716,8 +716,8 @@ void PrintFinalDecision(const TradePlan &plan,
    double finalRiskReward=plan.riskR;
    g_finalDecisionPrinted++;
    if(g_finalTopReason=="none" && reason!="SUCCESS") g_finalTopReason=reason;
-   Print(StringFormat("[FINAL_DECISION] selectedIndex=%d strategy=%s symbol=%s direction=%s entry=%.5f sl=%.5f tp=%.5f volume=%.2f stage=%s reason=%s riskReached=%s riskApproved=%s riskReason=%s portfolioReached=%s portfolioApproved=%s portfolioReason=%s orderValidateReached=%s orderValidateOk=%s orderValidateReason=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s retcode=%d lastError=%d",
-                      selectedIndex,StrategyName(plan.strategy),finalSymbol,DirName(plan.direction),plan.entryPrice,plan.stopLoss,plan.takeProfit1,volume,stage,reason,(riskReached?"true":"false"),(riskApproved?"true":"false"),riskReason,(portfolioReached?"true":"false"),(portfolioApproved?"true":"false"),portfolioReason,(orderValidateReached?"true":"false"),(orderValidateOk?"true":"false"),reason,(orderManagerReached?"true":"false"),(orderAttempted?"true":"false"),(orderSuccess?"true":"false"),retcode,lastErr));
+   Print(StringFormat("[FINAL_DECISION] selectedIndex=%d strategy=%s symbol=%s direction=%s entry=%.5f sl=%.5f tp=%.5f volume=%.2f stage=%s reason=%s riskReached=%s riskApproved=%s riskReason=%s portfolioReached=%s portfolioApproved=%s portfolioReason=%s rr=%.5f requiredRR=%.5f epsilon=%.5f rrPass=%s orderValidateReached=%s orderValidateOk=%s orderValidateReason=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s retcode=%d lastError=%d",
+                      selectedIndex,StrategyName(plan.strategy),finalSymbol,DirName(plan.direction),plan.entryPrice,plan.stopLoss,plan.takeProfit1,volume,stage,reason,(riskReached?"true":"false"),(riskApproved?"true":"false"),riskReason,(portfolioReached?"true":"false"),(portfolioApproved?"true":"false"),portfolioReason,plan.riskR,StrategyMinRR(StrategyBucket(plan.strategy)),(plan.strategy==STRATEGY_MICRO_SCALPER?0.02:0.0001),((plan.riskR+(plan.strategy==STRATEGY_MICRO_SCALPER?0.02:0.0001))>=StrategyMinRR(StrategyBucket(plan.strategy))?"true":"false"),(orderValidateReached?"true":"false"),(orderValidateOk?"true":"false"),reason,(orderManagerReached?"true":"false"),(orderAttempted?"true":"false"),(orderSuccess?"true":"false"),retcode,lastErr));
   }
 bool ExecuteSelectedPlan(const TradePlan &plan,string &blocker)
   {
@@ -1338,14 +1338,23 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    double tpDist=tp1Dist;
    double spreadCost=MathMax(ctx.spreadPoints*ctx.point,0.0);
    double requiredRR=StrategyMinRR(fb);
-   double rrEpsilon=0.0001;
+   double rrEpsilon=(chosenPlan.strategy==STRATEGY_MICRO_SCALPER?0.02:0.0001);
    bool scalpMode=(fb==4);
-   if((rrAccept+rrEpsilon<requiredRR) || (!scalpMode && chosenPlan.takeProfit2>0.0 && tp2Dist<=slDist) || (slDist>0.0 && spreadCost/slDist>0.30) || (ctx.marketQuality<symbolMinMarketQuality) || slDist<=0.0 || tpDist<=0.0)
+   bool rrPass=((rrAccept+rrEpsilon)>=requiredRR);
+   bool rejectPayoff=(chosenPlan.strategy==STRATEGY_MICRO_SCALPER ? (!rrPass) : ((rrAccept+rrEpsilon<requiredRR) || (!scalpMode && chosenPlan.takeProfit2>0.0 && tp2Dist<=slDist) || (slDist>0.0 && spreadCost/slDist>0.30) || (ctx.marketQuality<symbolMinMarketQuality) || slDist<=0.0 || tpDist<=0.0));
+   if(rejectPayoff)
      {
       g_rejectPayoffAsymmetry++;
-      Print(StringFormat("[FINAL_DECISION] stage=payoff_check reason=PAYOFF_ASYMMETRY_REJECTED strategy=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f selectedTP=%.5f rr=%.5f requiredRR=%.5f epsilon=%.5f slDist=%.5f tpDist=%.5f",
-                         StrategyName(chosenPlan.strategy),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,selectedTp,rrAccept,requiredRR,rrEpsilon,slDist,tpDist));
-      Print(StringFormat("[NO_TRADE_DECISION] reason=payoff_asymmetry_bad strategy=%s rr=%.2f minRR=%.2f tpDist=%.5f slDist=%.5f spreadToSL=%.2f",StrategyName(chosenPlan.strategy),rrAccept,requiredRR,tpDist,slDist,(slDist>0.0?spreadCost/slDist:0.0)));
+      if(chosenPlan.strategy==STRATEGY_MICRO_SCALPER)
+        {
+         Print(StringFormat("[FINAL_DECISION] stage=rr_check reason=RR_TOO_LOW strategy=%s rr=%.5f requiredRR=%.5f epsilon=%.5f",StrategyName(chosenPlan.strategy),rrAccept,requiredRR,rrEpsilon));
+        }
+      else
+        {
+         Print(StringFormat("[FINAL_DECISION] stage=payoff_check reason=PAYOFF_ASYMMETRY_REJECTED strategy=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f selectedTP=%.5f rr=%.5f requiredRR=%.5f epsilon=%.5f slDist=%.5f tpDist=%.5f",
+                            StrategyName(chosenPlan.strategy),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,selectedTp,rrAccept,requiredRR,rrEpsilon,slDist,tpDist));
+         Print(StringFormat("[NO_TRADE_DECISION] reason=payoff_asymmetry_bad strategy=%s rr=%.2f minRR=%.2f tpDist=%.5f slDist=%.5f spreadToSL=%.2f",StrategyName(chosenPlan.strategy),rrAccept,requiredRR,tpDist,slDist,(slDist>0.0?spreadCost/slDist:0.0)));
+        }
       return;
      }
    double stratExp=StrategyEdgeExpectancy(fb);
