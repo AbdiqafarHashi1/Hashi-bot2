@@ -89,37 +89,43 @@ public:
         {
          ctx.barsLoaded = copied;
 
-         for(int i = 0; i < copied && i < HASHIBOT_RECENT_BARS; i++)
+         int closedBars = MathMax(0, copied - 1);
+         for(int i = 0; i < closedBars && i < HASHIBOT_RECENT_BARS; i++)
            {
-            ctx.recentOpen[i] = rates[i].open;
-            ctx.recentHigh[i] = rates[i].high;
-            ctx.recentLow[i] = rates[i].low;
-            ctx.recentClose[i] = rates[i].close;
+            int src = i + 1; // use closed bars only (shift=1 is newest signal bar)
+            ctx.recentOpen[i] = rates[src].open;
+            ctx.recentHigh[i] = rates[src].high;
+            ctx.recentLow[i] = rates[src].low;
+            ctx.recentClose[i] = rates[src].close;
            }
 
-         ctx.currentOpen = rates[0].open;
-         ctx.currentHigh = rates[0].high;
-         ctx.currentLow = rates[0].low;
-         ctx.currentClose = rates[0].close;
-         ctx.barTime = rates[0].time;
-
-         if(copied > 1)
+         if(closedBars > 0)
            {
-            ctx.previousOpen = rates[1].open;
-            ctx.previousHigh = rates[1].high;
-            ctx.previousLow = rates[1].low;
-            ctx.previousClose = rates[1].close;
+            ctx.currentOpen = rates[1].open;
+            ctx.currentHigh = rates[1].high;
+            ctx.currentLow = rates[1].low;
+            ctx.currentClose = rates[1].close;
+            ctx.barTime = rates[1].time;
            }
 
+         if(closedBars > 1)
+           {
+            ctx.previousOpen = rates[2].open;
+            ctx.previousHigh = rates[2].high;
+            ctx.previousLow = rates[2].low;
+            ctx.previousClose = rates[2].close;
+           }
+
+         ctx.barsLoaded = closedBars;
          ctx.isNewBar = (m_lastBarTime > 0 && rates[0].time != m_lastBarTime);
          m_lastBarTime = rates[0].time;
 
          // Phase 3A indicator calculations
-         ctx.emaFast = MathHelpers::CalculateEMA(ctx.recentClose, copied, 21);
-         ctx.emaSlow = MathHelpers::CalculateEMA(ctx.recentClose, copied, 50);
-         ctx.atr = MathHelpers::CalculateATR(ctx.recentHigh, ctx.recentLow, ctx.recentClose, copied, 14);
-         ctx.roc = MathHelpers::CalculateROC(ctx.recentClose, copied, 5);
-         ctx.choppiness = MathHelpers::CalculateChoppinessIndex(ctx.recentHigh, ctx.recentLow, ctx.recentClose, copied, 14);
+         ctx.emaFast = MathHelpers::CalculateEMA(ctx.recentClose, closedBars, 21);
+         ctx.emaSlow = MathHelpers::CalculateEMA(ctx.recentClose, closedBars, 50);
+         ctx.atr = MathHelpers::CalculateATR(ctx.recentHigh, ctx.recentLow, ctx.recentClose, closedBars, 14);
+         ctx.roc = MathHelpers::CalculateROC(ctx.recentClose, closedBars, 5);
+         ctx.choppiness = MathHelpers::CalculateChoppinessIndex(ctx.recentHigh, ctx.recentLow, ctx.recentClose, closedBars, 14);
          ctx.marketQuality = MathHelpers::CalculateMarketQuality(ctx.emaFast, ctx.emaSlow, ctx.atr, ctx.roc, ctx.choppiness);
          double atrBase=(ctx.atr>0.0?ctx.atr:MathMax(1e-6,ctx.currentClose*0.0001));
          ctx.trendStrength = MathHelpers::Clamp(MathAbs(ctx.emaFast-ctx.emaSlow)/atrBase,0.0,1.0);

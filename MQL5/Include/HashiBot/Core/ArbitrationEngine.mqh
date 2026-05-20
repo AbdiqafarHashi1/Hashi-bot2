@@ -178,9 +178,9 @@ private:
 public:
    void PrintStrategyTriggerAudit() const
      {
-      Print(StringFormat("[STRATEGY_TRIGGER_AUDIT] strategy=TrendContinuation called=%d enoughBarsPass=%d indicatorReadyPass=%d trendPass=%d structurePass=%d momentumPass=%d triggerPass=%d atrPass=%d spreadPass=%d slTpPass=%d rawCreated=%d lastRejectReason=%s",
+      Print(StringFormat("[STRATEGY_TRIGGER_AUDIT] strategy=TrendContinuation signalShift=1 called=%d enoughBarsPass=%d indicatorReadyPass=%d trendPass=%d structurePass=%d momentumPass=%d triggerPass=%d atrPass=%d spreadPass=%d slTpPass=%d rawCreated=%d lastRejectReason=%s",
                          m_trend.Called(),m_trend.EnoughBarsPass(),m_trend.IndicatorReadyPass(),m_trend.TrendPass(),m_trend.StructurePass(),m_trend.MomentumPass(),m_trend.TriggerPass(),m_trend.AtrPass(),m_trend.SpreadPass(),m_trend.SlTpPass(),m_trend.RawCreated(),m_trend.LastRejectReason()));
-      Print(StringFormat("[STRATEGY_TRIGGER_AUDIT] strategy=CompressionBreakout called=%d enoughBarsPass=%d atrReadyPass=%d boxReadyPass=%d boxWidthPass=%d compressionPass=%d breakoutPass=%d spreadPass=%d slTpPass=%d rawCreated=%d lastRejectReason=%s",
+      Print(StringFormat("[STRATEGY_TRIGGER_AUDIT] strategy=CompressionBreakout signalShift=1 called=%d enoughBarsPass=%d atrReadyPass=%d boxReadyPass=%d boxWidthPass=%d compressionPass=%d breakoutPass=%d spreadPass=%d slTpPass=%d rawCreated=%d lastRejectReason=%s",
                          m_compression.Called(),m_compression.EnoughBarsPass(),m_compression.AtrReadyPass(),m_compression.BoxReadyPass(),m_compression.BoxWidthPass(),m_compression.CompressionPass(),m_compression.BreakoutPass(),m_compression.SpreadPass(),m_compression.SlTpPass(),m_compression.RawCreated(),m_compression.LastRejectReason()));
      }
 
