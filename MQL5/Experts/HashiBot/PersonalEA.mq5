@@ -198,6 +198,7 @@ long g_testerTicksProcessed=0,g_testerBarsProcessed=0,g_testerStrategyEvaluation
 long g_testerArbDecisions=0,g_testerArbNoTrades=0,g_testerOrdersAttempted=0,g_testerOrdersSuccessful=0,g_testerOrdersFailed=0,g_testerPositionsManaged=0;
 bool g_isTester=false; double g_testerMinScore=0.0,g_testerSpreadLimitPoints=0.0;
 long g_rejectPayoffAsymmetry=0,g_drawdownLockLevel=0;
+long g_phaseABarsEvaluated=0,g_phaseANoCandidate=0;
 
 bool StrategyPruned(const int sb,string &reason)
   {
@@ -232,6 +233,13 @@ bool StrategyPruned(const int sb,string &reason)
 
 string DirName(TradeDirection d){ if(d==TRADE_DIR_LONG) return "LONG"; if(d==TRADE_DIR_SHORT) return "SHORT"; return "NONE"; }
 string TfName(){ return EnumToString(contextTimeframe); }
+ENUM_ORDER_TYPE ToOrderType(const TradeDirection d){ return (d==TRADE_DIR_SHORT?ORDER_TYPE_SELL:ORDER_TYPE_BUY); }
+void EmitDecisionTrace(const TradeDecision &d,const datetime barTime,const string stage,const string reason,const bool candidateCreated)
+  {
+   Print(StringFormat("[DECISION_TRACE] id=%s symbol=%s barTime=%s strategy=%s stage=%s reason=%s candidateCreated=%s rr=%.2f score=%.2f riskApproved=%s submitted=%s success=%s",
+                      d.decisionId,d.symbol,TimeToString(barTime,TIME_DATE|TIME_MINUTES),d.strategy,stage,reason,(candidateCreated?"true":"false"),d.rr,d.score,
+                      (d.riskApproved?"true":"false"),(d.submitted?"true":"false"),(d.success?"true":"false")));
+  }
 
 int StrategyBucket(const StrategyType st)
   {
@@ -752,9 +760,13 @@ bool StrategyEdgeGate(const int b,string &action,string &reason,double &mult)
 
 void ProcessSymbol(const string symbol,const bool isNewBar)
   {
+   TradeDecision decision; decision.Reset();
+   decision.evaluated=true;
+   decision.symbol=symbol;
+   decision.decisionId=StringFormat("%s_%I64d",symbol,(long)iTime(symbol,contextTimeframe,1));
    for(int bi=0;bi<5;bi++) if(g_strategyCooldownBars[bi]>0) g_strategyCooldownBars[bi]--;
    g_diagBarsProcessed++; g_symbolsScanned++;
-   MarketContext ctx; if(!g_ctxBuilder.Build(symbol, contextTimeframe, ctx)){ RuntimeError("unknown_runtime_error"); return; } g_lastCtxBuildTime=TimeCurrent(); if(IsStaleTick(ctx)){ RuntimeError("stale_tick"); if(ShouldLog(isNewBar)) Print("[BLOCK][PersonalEA] sym=",symbol," reason=stale_tick"); return; } if(ctx.bid<=0.0||ctx.ask<=0.0){ RuntimeError("no_tick"); return; } if(ctx.spreadPoints<=0.0){ RuntimeError("invalid_spread"); return; } RuntimeOk();
+   MarketContext ctx; if(!g_ctxBuilder.Build(symbol, contextTimeframe, ctx)){ decision.rejectStage="MARKET"; decision.rejectReason="NO_MARKET_DATA"; EmitDecisionTrace(decision,0,"MARKET",decision.rejectReason,false); RuntimeError("unknown_runtime_error"); return; } g_lastCtxBuildTime=TimeCurrent(); if(IsStaleTick(ctx)){ decision.rejectStage="MARKET"; decision.rejectReason="NO_MARKET_DATA"; EmitDecisionTrace(decision,ctx.barTime,"MARKET",decision.rejectReason,false); RuntimeError("stale_tick"); if(ShouldLog(isNewBar)) Print("[BLOCK][PersonalEA] sym=",symbol," reason=stale_tick"); return; } if(ctx.bid<=0.0||ctx.ask<=0.0){ decision.rejectStage="MARKET"; decision.rejectReason="NO_MARKET_DATA"; EmitDecisionTrace(decision,ctx.barTime,"MARKET",decision.rejectReason,false); RuntimeError("no_tick"); return; } if(ctx.spreadPoints<=0.0){ decision.rejectStage="MARKET"; decision.rejectReason="SPREAD_TOO_HIGH"; EmitDecisionTrace(decision,ctx.barTime,"MARKET",decision.rejectReason,false); RuntimeError("invalid_spread"); return; } RuntimeOk();
    int symIdx=0; for(int si=0;si<g_scanCount;si++){ if(g_scan[si]==symbol){ symIdx=si; break; } }
    double eq=AccountInfoDouble(ACCOUNT_EQUITY); if(eq>g_peakEquity) g_peakEquity=eq;
    double ddPct=(g_peakEquity>0.0?100.0*(g_peakEquity-eq)/g_peakEquity:0.0);
@@ -841,6 +853,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    Print(StringFormat("[BAR_EVAL_GATE] symbol=%s timeframe=%s newBar=%s signalShift=1 executionTick=%s",symbol,TfName(),(isNewBar?"true":"false"),(executionTick?"true":"false")));
    if(!isNewBar)
       return;
+   g_phaseABarsEvaluated++;
 
    bool scalperMode=enableMicroScalperMode;
    bool profileAllowsMicro=true;
@@ -885,7 +898,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    if(weakRegime || weakMarketQuality)
       g_strategiesReachedAfterWeakRegime++;
 
-   ArbitrationResult arb=g_arb.Evaluate(ctx, regime); g_diagCandidates++; g_testerArbDecisions++; g_starveRawCandidates+=arb.candidateCount; if(arb.hasWinner) g_diagWinners++; else { g_r_no_candidate++; g_testerArbNoTrades++; } g_lastArbTime=TimeCurrent();
+   ArbitrationResult arb=g_arb.Evaluate(ctx, regime); g_diagCandidates++; g_testerArbDecisions++; g_starveRawCandidates+=arb.candidateCount; if(arb.hasWinner) g_diagWinners++; else { g_r_no_candidate++; g_testerArbNoTrades++; g_phaseANoCandidate++; decision.rejectStage="ARBITRATION"; decision.rejectReason="NO_STRATEGY_CANDIDATE"; EmitDecisionTrace(decision,ctx.barTime,"ARBITRATION",decision.rejectReason,false); } g_lastArbTime=TimeCurrent();
    double wTrend=RegimeCompatibilityWeight(STRATEGY_TREND_CONTINUATION,regime),wPull=RegimeCompatibilityWeight(STRATEGY_PULLBACK_CONTINUATION,regime),wComp=RegimeCompatibilityWeight(STRATEGY_COMPRESSION_BREAKOUT,regime),wExp=RegimeCompatibilityWeight(STRATEGY_EXPANSION_MOMENTUM,regime),wMicro=RegimeCompatibilityWeight(STRATEGY_NONE,regime);
    int bestIdx=-1; double bestAdj=-1.0; string topRejectReason="none";
    g_acceptCandidates += arb.candidateCount;
@@ -1033,6 +1046,15 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      }
 
    g_pipeWinnerSel[sb]++; g_symSelected[symIdx]++; g_starveSelected++;
+   decision.hasCandidate=true;
+   decision.selected=true;
+   decision.strategy=StrategyName(chosenPlan.strategy);
+   decision.direction=ToOrderType(chosenPlan.direction);
+   decision.entry=chosenPlan.entryPrice;
+   decision.sl=chosenPlan.stopLoss;
+   decision.tp=chosenPlan.takeProfit1;
+   decision.rr=RRNetAfterSpread(chosenPlan,ctx);
+   decision.score=chosenScore;
    if(chosenPlan.direction==TRADE_DIR_LONG) g_dirLongSelected++; else if(chosenPlan.direction==TRADE_DIR_SHORT) g_dirShortSelected++;
    Print(StringFormat("[PIPE] winner_selected strategy=%s score=%.2f grade=%d dir=%s",StrategyName(chosenPlan.strategy),chosenScore,(int)chosenGrade,DirName(chosenPlan.direction)));
    Print(StringFormat("[SELECTED_PLAN_TRACE] strategy=%s direction=%s lot=%.2f entry=%.5f sl=%.5f tp=%.5f riskApproved=%s portfolioApproved=%s nextAction=pre_submit",StrategyName(chosenPlan.strategy),DirName(chosenPlan.direction),0.0,chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,"pending","pending"));
@@ -1084,7 +1106,10 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       if(risk.reason=="daily_loss_limit_reached") g_riskBlockDailyLoss++;
       else if(risk.reason=="max_active_trades_reached") g_riskBlockMaxActive++;
       else if(risk.reason=="direction_lockout") g_riskBlockDirection++;
-      else if(risk.reason=="strategy_health_blocked") g_riskBlockStrategyHealth++;
+     else if(risk.reason=="strategy_health_blocked") g_riskBlockStrategyHealth++;
+      decision.rejectStage="RISK";
+      decision.rejectReason="RISK_REJECTED";
+      EmitDecisionTrace(decision,ctx.barTime,"RISK",decision.rejectReason,true);
      }
 
    string guard=""; bool allowed=RuntimeRiskGuard(symbol, activeCooldown, activeMinBars, guard, "normal_scan", false); if(!allowed){ if(guard=="cooldown_active") g_r_cooldown++; if(guard=="too_soon_after_last_entry") g_r_minbars++; }
@@ -1133,10 +1158,11 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       Print(StringFormat("[LIFECYCLE_REG] id=%I64d size_before=%d size_after=%d duplicate=%s active=%d insert_result=%s reason=%s",tstate.ticket,regBefore,regAfter,(lifecycleReason=="duplicate_trade"?"true":"false"),regAfter,(lifecycleCreated?"true":"false"),lifecycleReason));
       if(lifecycleCreated)
         { g_testerOrdersSuccessful++; g_tradesToday++; g_starveSubmitted++; g_symSubmitted[symIdx]++; g_barsSinceEntry=0; g_diagDryRunSubmits++; g_diagDryRunLifecycleCreated++; if(chosenFromFallback) g_microSubmitted++; g_scaleSubmitted++; g_pipeSubmitOk[sb]++; g_pipeLifecycleOk[sb]++; Print(StringFormat("[LIFECYCLE][PersonalEA] sym=%s submitted ticket=%I64d lots=%.2f", symbol,tstate.ticket,tstate.approvedLots)); Print("[SCALE] submitted dryrun sym=",symbol," entries_now=",existingEntries+1); Print("[ORDER_RESULT] ok=true reason=none strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=true reason=registered strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_CREATE] ok=true reason=registered id=%I64d", tstate.ticket)); }
+      if(lifecycleCreated){ decision.riskApproved=true; decision.portfolioApproved=portfolioOK; decision.submitted=true; decision.success=true; decision.lots=tstate.approvedLots; decision.rejectStage="ORDER"; decision.rejectReason="ORDER_SUBMITTED"; EmitDecisionTrace(decision,ctx.barTime,"ORDER",decision.rejectReason,true); }
       else if(!submitted)
-        { g_testerOrdersFailed++; g_pipeSubmitRej[sb]++; Print("[ORDER_RESULT] ok=false reason=",execReason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=submit line=614",execReason)); Print("[LIFECYCLE_CREATE] ok=false reason=",execReason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, execReason); g_lastCloseTime=TimeCurrent(); }
+        { g_testerOrdersFailed++; g_pipeSubmitRej[sb]++; Print("[ORDER_RESULT] ok=false reason=",execReason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=submit line=614",execReason)); Print("[LIFECYCLE_CREATE] ok=false reason=",execReason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, execReason); g_lastCloseTime=TimeCurrent(); decision.riskApproved=risk.approved; decision.portfolioApproved=portfolioOK; decision.rejectStage="ORDER"; decision.rejectReason="ORDER_SUBMIT_FAILED"; EmitDecisionTrace(decision,ctx.barTime,"ORDER",decision.rejectReason,true); }
       else
-        { g_pipeSubmitOk[sb]++; g_pipeLifecycleRej[sb]++; Print("[ORDER_RESULT] ok=true reason=submitted strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",lifecycleReason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=registry line=616",lifecycleReason)); Print("[LIFECYCLE_CREATE] ok=false reason=",lifecycleReason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, lifecycleReason); g_lastCloseTime=TimeCurrent(); }
+        { g_pipeSubmitOk[sb]++; g_pipeLifecycleRej[sb]++; Print("[ORDER_RESULT] ok=true reason=submitted strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",lifecycleReason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=registry line=616",lifecycleReason)); Print("[LIFECYCLE_CREATE] ok=false reason=",lifecycleReason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, lifecycleReason); g_lastCloseTime=TimeCurrent(); decision.riskApproved=risk.approved; decision.portfolioApproved=portfolioOK; decision.rejectStage="ORDER"; decision.rejectReason="ORDER_VALIDATE_FAILED"; EmitDecisionTrace(decision,ctx.barTime,"ORDER",decision.rejectReason,true); }
      }
    else
      {
@@ -1273,6 +1299,22 @@ void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; g_testerTicksProcessed++; 
 void OnDeinit(const int reason){ Print("PersonalEA deinit reason=", reason);
    g_arb.PrintStrategyTriggerAudit();
    Print("[DIAG_INACTIVE] Removed placeholder diagnostics: fake lifecycle/edge/performance rollups are not emitted as truth metrics.");
+   long phaseATopRejectCount=g_phaseANoCandidate;
+   string phaseATopRejectReason=(phaseATopRejectCount>0?"NO_STRATEGY_CANDIDATE":"NONE");
+   Print(StringFormat("[PHASE_A_SUMMARY] barsEvaluated=%d trendCalled=%d compressionCalled=%d trendRaw=%d compressionRaw=%d candidateAccepted=%d selected=%d riskApproved=%d ordersAttempted=%d ordersSuccessful=%d ordersFailed=%d noCandidate=%d topRejectReason=%s",
+                      g_phaseABarsEvaluated,
+                      g_arb.TrendModuleCalled(),
+                      g_arb.CompressionModuleCalled(),
+                      g_arb.TrendRawCreated(),
+                      g_arb.CompressionRawCreated(),
+                      g_trendAccepted+g_compressionAccepted,
+                      g_diagWinners,
+                      g_diagRiskApproved,
+                      g_testerOrdersAttempted,
+                      g_testerOrdersSuccessful,
+                      g_testerOrdersFailed,
+                      g_phaseANoCandidate,
+                      phaseATopRejectReason));
    Print(StringFormat("[TESTER_PIPELINE_COUNTERS] ticks=%d bars=%d strategyEvals=%d primaryEvals=%d secondaryEvals=%d validPrimary=%d validSecondary=%d arbDecisions=%d arbNoTrade=%d riskBlocks=%d spreadBlocks=%d cooldownBlocks=%d dailyLimitBlocks=%d ordersAttempted=%d ordersSuccessful=%d ordersFailed=%d positionsManaged=%d breakevenMoves=%d trailingMoves=%d",g_testerTicksProcessed,g_testerBarsProcessed,g_testerStrategyEvaluations,g_testerPrimaryEvaluations,g_testerSecondaryEvaluations,g_trendAccepted,g_compressionAccepted,g_testerArbDecisions,g_testerArbNoTrades,g_diagRiskRejected,g_r_spread,g_r_cooldown,g_riskBlockDailyLoss,g_testerOrdersAttempted,g_testerOrdersSuccessful,g_testerOrdersFailed,g_testerPositionsManaged,g_lifeBreakEvenMoves,g_lifeTrailUpdates));
    long starveTop=MathMax(g_starveRejectedBeforePlan,MathMax(g_starveRejectedByRR,MathMax(g_starveRejectedByScore,MathMax(g_starveRejectedBySpread,MathMax(g_starveRejectedByRegime,MathMax(g_starveRejectedByPortfolio,MathMax(g_starveRejectedByArbitrator,g_starveRejectedByRisk)))))));
    string starveGate=(starveTop==g_starveRejectedBeforePlan?"before_plan":(starveTop==g_starveRejectedByRR?"rr":(starveTop==g_starveRejectedByScore?"score":(starveTop==g_starveRejectedBySpread?"spread":(starveTop==g_starveRejectedByRegime?"regime":(starveTop==g_starveRejectedByPortfolio?"portfolio":(starveTop==g_starveRejectedByRisk?"risk":"arbitrator")))))));

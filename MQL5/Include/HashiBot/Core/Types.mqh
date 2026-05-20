@@ -434,6 +434,89 @@ struct StrategyCandidate
      }
   };
 
+// Phase A canonical strategy output contract
+struct StrategyCandidateResult
+  {
+   bool                     created;        // Strategy created a structural setup
+   bool                     valid;          // Candidate passed strategy-local validity checks
+   string                   strategyName;   // Strategy name
+   TradeDirection           direction;      // Direction
+   double                   entry;          // Entry
+   double                   sl;             // Stop-loss
+   double                   tp;             // Take-profit (TP1 canonical view)
+   double                   rr;             // R:R ratio
+   double                   score;          // Candidate score
+   string                   reason;         // Dominant context reason
+   string                   rejectReason;   // Dominant rejection reason
+
+   void Reset()
+     {
+      created = false;
+      valid = false;
+      strategyName = "";
+      direction = TRADE_DIR_NONE;
+      entry = 0.0;
+      sl = 0.0;
+      tp = 0.0;
+      rr = 0.0;
+      score = 0.0;
+      reason = "";
+      rejectReason = "";
+     }
+  };
+
+// Phase A canonical end-to-end decision object
+struct TradeDecision
+  {
+   bool               evaluated;
+   bool               hasCandidate;
+   bool               selected;
+   bool               riskApproved;
+   bool               portfolioApproved;
+   bool               submitted;
+   bool               success;
+
+   string             symbol;
+   string             strategy;
+   ENUM_ORDER_TYPE    direction;
+
+   double             entry;
+   double             sl;
+   double             tp;
+   double             lots;
+   double             riskPct;
+   double             rr;
+   double             score;
+
+   string             rejectStage;
+   string             rejectReason;
+   string             decisionId;
+
+   void Reset()
+     {
+      evaluated = false;
+      hasCandidate = false;
+      selected = false;
+      riskApproved = false;
+      portfolioApproved = false;
+      submitted = false;
+      success = false;
+      symbol = "";
+      strategy = "NONE";
+      direction = ORDER_TYPE_BUY;
+      entry = 0.0;
+      sl = 0.0;
+      tp = 0.0;
+      lots = 0.0;
+      riskPct = 0.0;
+      rr = 0.0;
+      score = 0.0;
+      rejectStage = "INIT";
+      rejectReason = "";
+      decisionId = "";
+     }
+  };
+
 struct ArbitrationResult
   {
    bool               hasWinner;            // Winner exists
