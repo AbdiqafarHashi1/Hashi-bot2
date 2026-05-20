@@ -667,7 +667,7 @@ bool IsStaleTick(const MarketContext &ctx){ return (ctx.nowTime>0 && (TimeCurren
 string RuntimeHealth(){ string st=(g_killSwitchActive?"locked":(g_consecutiveRuntimeErrors>0?"degraded":"ok")); long syncAge=(g_lastBrokerSyncTime>0?(long)(TimeCurrent()-g_lastBrokerSyncTime):-1); return StringFormat("health=%s errs=%d lastErr=%s syncAge=%d kill=%s",st,g_consecutiveRuntimeErrors,g_lastErrorReason,syncAge,(g_killSwitchActive?"on":"off")); }
 MarketContext g_execCtx;
 RiskDecision g_execRisk;
-TradeState *g_execTradeState=NULL;
+TradeState g_execTradeState;
 string g_execSymbol="";
 double g_execScore=0.0;
 bool g_execSelectedPlanExists=false,g_execRiskApproved=false,g_execPortfolioApproved=false,g_execRuntimeLimitsApproved=false;
@@ -723,7 +723,7 @@ bool ExecuteSelectedPlan(const TradePlan &plan,string &blocker)
    orderValidateReached=true; g_execProofOrderValidateReached=true; orderValidateOk=true;
    orderManagerReached=true; g_execProofOrderManagerReached=true; g_starveOrderManagerReached++;
    RiskDecision sendRisk=g_execRisk; sendRisk.approvedLots=volume; string execReason=""; g_testerOrdersAttempted++; orderAttempted=true; g_execProofOrderAttempted=true;
-   bool submitted=g_order.Submit(plan, sendRisk, g_execCtx, (testerMode?EXEC_MODE_TESTER_SIM:executionMode), true, false, false, true, MagicNumber, maxSlippagePoints, TradeCommentPrefix, *g_execTradeState, execReason);
+   bool submitted=g_order.Submit(plan, sendRisk, g_execCtx, (testerMode?EXEC_MODE_TESTER_SIM:executionMode), true, false, false, true, MagicNumber, maxSlippagePoints, TradeCommentPrefix, g_execTradeState, execReason);
    orderSuccess=submitted; g_execProofOrderSuccess=submitted; retcode=(int)g_order.LastRetcode(); lastErr=GetLastError();
    if(orderManagerReached) Print(StringFormat("[ORDERMANAGER_RESULT] attempted=%s success=%s retcode=%d retcodeDescription=%s orderTicket=%I64d dealTicket=%I64d lastError=%d reason=%s",(g_order.LastAttempted()?"true":"false"),(submitted?"true":"false"),retcode,g_order.LastRetcodeDescription(),g_order.LastOrder(),g_order.LastDeal(),lastErr,execReason));
    if(!submitted){ blocker="ORDERMANAGER_SUBMIT_FAILED"; stage="ORDER_SUBMIT"; reason=(execReason==""?blocker:execReason);} else { blocker="none"; stage="ORDER_SUBMIT"; reason="SUCCESS"; g_testerOrdersSuccessful++; }
@@ -1332,7 +1332,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       Print(StringFormat("[SUBMIT_GATE_DIAG] selected=true planValid=%s planOk=%s riskApproved=%s portfolioApproved=%s submitAllowed=%s dryRunOnly=%s signalOnly=%s testerMode=%s executionMode=%d accountMode=%s rejectReason=none finalAction=call_ordermanager",
                          (validPlan?"true":"false"),(planOk?"true":"false"),(risk.approved?"true":"false"),(portfolioOK?"true":"false"),(runtimeLimitsApproved?"true":"false"),
                          (submitExecutionMode==EXEC_MODE_DRYRUN?"true":"false"),(submitExecutionMode==EXEC_MODE_LOG_ONLY?"true":"false"),(testerMode?"true":"false"),(int)submitExecutionMode,accountModeLabel));
-      g_execCtx=ctx; g_execRisk=risk; g_execTradeState=&tstate; g_execSymbol=symbol; g_execScore=chosenScore;
+      g_execCtx=ctx; g_execRisk=risk; g_execTradeState=tstate; g_execSymbol=symbol; g_execScore=chosenScore;
       g_execSelectedPlanExists=validPlan; g_execRiskApproved=risk.approved; g_execPortfolioApproved=portfolioOK; g_execRuntimeLimitsApproved=runtimeLimitsApproved;
       enteredExecuteSelectedPlan=true;
       g_pipeWinnerSel[sb]++; g_symSelected[symIdx]++; g_starveSelected++;
@@ -1433,7 +1433,7 @@ bool RunDeterministicExecutionSelfTest()
    return reg;
   }
 
-int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_arb.Configure(EnableSecondaryStrategy,EnableArbitrator); g_risk.Init(PROFILE_PERSONAL);
+int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_arb.Configure(EnableSecondaryStrategy,EnableArbitrator,InpVerboseDiagnostics); g_risk.Init(PROFILE_PERSONAL);
    g_effectiveRiskPerTradePct=(RiskPercentPerTrade>0.0?RiskPercentPerTrade:0.20);
    g_effectiveMaxOpenRiskPct=(testerSimMaxOpenRiskPct>0.0?testerSimMaxOpenRiskPct:0.75);
    g_effectiveMaxTradesPerDay=(MaxTradesPerDay>0?MaxTradesPerDay:14);
