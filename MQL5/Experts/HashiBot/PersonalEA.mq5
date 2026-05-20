@@ -836,6 +836,12 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       if(g_tracker.ReconcileSymbolWithBroker(symbol, recEvent) && recEvent!="")
          Print("[RECON][PersonalEA] sym=", symbol, " event=", recEvent);
      }
+
+   bool executionTick=true;
+   Print(StringFormat("[BAR_EVAL_GATE] symbol=%s timeframe=%s newBar=%s signalShift=1 executionTick=%s",symbol,TfName(),(isNewBar?"true":"false"),(executionTick?"true":"false")));
+   if(!isNewBar)
+      return;
+
    bool scalperMode=enableMicroScalperMode;
    bool profileAllowsMicro=true;
    double activeMinScore=(scalperMode?scalperMinScore:minCandidateScore);
