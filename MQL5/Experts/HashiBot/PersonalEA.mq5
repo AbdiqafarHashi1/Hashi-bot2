@@ -690,7 +690,7 @@ void PrintFinalDecision(const TradePlan &plan,
                         const int retcode,
                         const int lastErr)
   {
-   string finalSymbol=(StringLen(plan.symbol)>0?plan.symbol:g_execSymbol);
+   string finalSymbol=(plan.symbol!=""?plan.symbol:g_execSymbol);
    Print(StringFormat("[FINAL_DECISION] barTime=%s symbol=%s mode=%d strategy=%s stage=%s reason=%s selected=true planValid=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f riskR=%.2f score=%.2f riskReached=%s riskApproved=%s riskReason=%s portfolioReached=%s portfolioApproved=%s portfolioReason=%s orderValidateReached=%s orderValidateOk=%s orderValidateReason=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s retcode=%d lastError=%d",
                       TimeToString(g_execCtx.barTime,TIME_DATE|TIME_MINUTES),finalSymbol,(int)executionMode,StrategyName(plan.strategy),stage,reason,(planValid?"true":"false"),DirName(plan.direction),plan.entryPrice,plan.stopLoss,plan.takeProfit1,plan.takeProfit2,plan.riskReward,g_execScore,(riskReached?"true":"false"),(riskApproved?"true":"false"),riskReason,(portfolioReached?"true":"false"),(portfolioApproved?"true":"false"),portfolioReason,(orderValidateReached?"true":"false"),(orderValidateOk?"true":"false"),reason,(orderManagerReached?"true":"false"),(orderAttempted?"true":"false"),(orderSuccess?"true":"false"),retcode,lastErr));
   }
