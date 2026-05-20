@@ -213,6 +213,17 @@ string g_finalTopReason="none";
 bool g_isTester=false; double g_testerMinScore=0.0,g_testerSpreadLimitPoints=0.0;
 long g_rejectPayoffAsymmetry=0,g_drawdownLockLevel=0;
 long g_phaseABarsEvaluated=0,g_phaseANoCandidate=0;
+long g_invalidSpreadEvents=0,g_marketDataInvalidEvents=0;
+long g_invalidSpreadLogs=0,g_marketDataCheckLogs=0;
+
+void LogMarketDataCheck(const string symbol,const double bid,const double ask,const double point,const double spreadPoints,const double maxSpreadPoints,const bool valid,const string reason)
+  {
+   bool shouldLog=(valid || g_marketDataCheckLogs<5 || (g_marketDataInvalidEvents%1000)==0);
+   if(!shouldLog) return;
+   if(!valid) g_marketDataCheckLogs++;
+   Print(StringFormat("[MARKET_DATA_CHECK] symbol=%s bid=%.5f ask=%.5f point=%.8f spreadPoints=%.2f maxSpreadPoints=%.2f valid=%s reason=%s",
+                      symbol,bid,ask,point,spreadPoints,maxSpreadPoints,(valid?"true":"false"),reason));
+  }
 
 bool StrategyPruned(const int sb,string &reason)
   {
@@ -873,7 +884,59 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    decision.decisionId=StringFormat("%s_%I64d",symbol,(long)iTime(symbol,contextTimeframe,1));
    for(int bi=0;bi<5;bi++) if(g_strategyCooldownBars[bi]>0) g_strategyCooldownBars[bi]--;
    g_diagBarsProcessed++; g_symbolsScanned++;
-   MarketContext ctx; if(!g_ctxBuilder.Build(symbol, contextTimeframe, ctx)){ decision.rejectStage="MARKET"; decision.rejectReason="NO_MARKET_DATA"; EmitDecisionTrace(decision,0,"MARKET",decision.rejectReason,false); RuntimeError("unknown_runtime_error"); return; } g_lastCtxBuildTime=TimeCurrent(); if(IsStaleTick(ctx)){ decision.rejectStage="MARKET"; decision.rejectReason="NO_MARKET_DATA"; EmitDecisionTrace(decision,ctx.barTime,"MARKET",decision.rejectReason,false); RuntimeError("stale_tick"); if(ShouldLog(isNewBar)) Print("[BLOCK][PersonalEA] sym=",symbol," reason=stale_tick"); return; } if(ctx.bid<=0.0||ctx.ask<=0.0){ decision.rejectStage="MARKET"; decision.rejectReason="NO_MARKET_DATA"; EmitDecisionTrace(decision,ctx.barTime,"MARKET",decision.rejectReason,false); RuntimeError("no_tick"); return; } if(ctx.spreadPoints<=0.0){ decision.rejectStage="MARKET"; decision.rejectReason="SPREAD_TOO_HIGH"; EmitDecisionTrace(decision,ctx.barTime,"MARKET",decision.rejectReason,false); RuntimeError("invalid_spread"); return; } RuntimeOk();
+   MarketContext ctx;
+   if(!g_ctxBuilder.Build(symbol, contextTimeframe, ctx))
+     {
+      decision.rejectStage="MARKET"; decision.rejectReason="NO_MARKET_DATA";
+      EmitDecisionTrace(decision,0,"MARKET",decision.rejectReason,false);
+      RuntimeError("unknown_runtime_error");
+      return;
+     }
+   g_lastCtxBuildTime=TimeCurrent();
+   if(IsStaleTick(ctx))
+     {
+      decision.rejectStage="MARKET"; decision.rejectReason="NO_MARKET_DATA";
+      EmitDecisionTrace(decision,ctx.barTime,"MARKET",decision.rejectReason,false);
+      RuntimeError("stale_tick");
+      if(ShouldLog(isNewBar)) Print("[BLOCK][PersonalEA] sym=",symbol," reason=stale_tick");
+      return;
+     }
+   double bid=SymbolInfoDouble(symbol,SYMBOL_BID);
+   double ask=SymbolInfoDouble(symbol,SYMBOL_ASK);
+   if(bid<=0.0) bid=ctx.bid;
+   if(ask<=0.0) ask=ctx.ask;
+   double point=(ctx.point>0.0?ctx.point:_Point);
+   double spreadPoints=((bid>0.0 && ask>0.0 && ask>=bid && point>0.0)?((ask-bid)/point):-1.0);
+   double maxSpreadPoints=g_testerSpreadLimitPoints;
+   if(maxSpreadPoints<=0.0) maxSpreadPoints=MaxSpreadPoints;
+   bool marketDataValid=(bid>0.0 && ask>0.0 && ask>=bid && point>0.0 && spreadPoints>0.0);
+   bool spreadOk=(marketDataValid && spreadPoints<=maxSpreadPoints);
+   if(!marketDataValid || !spreadOk)
+     {
+      g_marketDataInvalidEvents++;
+      string mdReason=(!marketDataValid?"MARKET_DATA_INVALID":"SPREAD_TOO_HIGH");
+      LogMarketDataCheck(symbol,bid,ask,point,spreadPoints,maxSpreadPoints,false,mdReason);
+      decision.rejectStage="MARKET";
+      decision.rejectReason=mdReason;
+      EmitDecisionTrace(decision,ctx.barTime,"MARKET",decision.rejectReason,false);
+      if(mdReason=="MARKET_DATA_INVALID")
+        {
+         if(g_invalidSpreadLogs<5 || (g_marketDataInvalidEvents%1000)==0)
+            Print(StringFormat("[NO_TRADE_DECISION] reason=MARKET_DATA_INVALID symbol=%s bid=%.5f ask=%.5f spreadPoints=%.2f",symbol,bid,ask,spreadPoints));
+         return;
+        }
+      g_invalidSpreadEvents++;
+      if(g_invalidSpreadLogs<5 || (g_invalidSpreadEvents%1000)==0)
+         Print(StringFormat("[NO_TRADE_DECISION] reason=invalid_spread symbol=%s spreadPoints=%.2f maxSpreadPoints=%.2f",symbol,spreadPoints,maxSpreadPoints));
+      g_invalidSpreadLogs++;
+      return;
+     }
+   ctx.bid=bid;
+   ctx.ask=ask;
+   ctx.point=point;
+   ctx.spreadPoints=spreadPoints;
+   LogMarketDataCheck(symbol,bid,ask,point,spreadPoints,maxSpreadPoints,true,"OK");
+   RuntimeOk();
    int symIdx=0; for(int si=0;si<g_scanCount;si++){ if(g_scan[si]==symbol){ symIdx=si; break; } }
    double eq=AccountInfoDouble(ACCOUNT_EQUITY); if(eq>g_peakEquity) g_peakEquity=eq;
    double ddPct=(g_peakEquity>0.0?100.0*(g_peakEquity-eq)/g_peakEquity:0.0);
@@ -1268,21 +1331,28 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
 
    int fb=StrategyBucket(chosenPlan.strategy);
    double rrAccept=RRNetAfterSpread(chosenPlan,ctx);
-   double slDist=MathAbs(chosenPlan.entryPrice-chosenPlan.stopLoss);
-   double tp2Dist=MathAbs(chosenPlan.takeProfit2-chosenPlan.entryPrice);
+   double slDist=(chosenPlan.direction==TRADE_DIR_LONG?(chosenPlan.entryPrice-chosenPlan.stopLoss):(chosenPlan.stopLoss-chosenPlan.entryPrice));
+   double tp1Dist=(chosenPlan.direction==TRADE_DIR_LONG?(chosenPlan.takeProfit1-chosenPlan.entryPrice):(chosenPlan.entryPrice-chosenPlan.takeProfit1));
+   double tp2Dist=(chosenPlan.takeProfit2>0.0?(chosenPlan.direction==TRADE_DIR_LONG?(chosenPlan.takeProfit2-chosenPlan.entryPrice):(chosenPlan.entryPrice-chosenPlan.takeProfit2)):0.0);
+   double selectedTp=chosenPlan.takeProfit1;
+   double tpDist=tp1Dist;
    double spreadCost=MathMax(ctx.spreadPoints*ctx.point,0.0);
+   double requiredRR=StrategyMinRR(fb);
+   double rrEpsilon=0.0001;
    bool scalpMode=(fb==4);
-   if((rrAccept<StrategyMinRR(fb)) || (!scalpMode && tp2Dist<=slDist) || (slDist>0.0 && spreadCost/slDist>0.30) || (ctx.marketQuality<symbolMinMarketQuality))
+   if((rrAccept+rrEpsilon<requiredRR) || (!scalpMode && chosenPlan.takeProfit2>0.0 && tp2Dist<=slDist) || (slDist>0.0 && spreadCost/slDist>0.30) || (ctx.marketQuality<symbolMinMarketQuality) || slDist<=0.0 || tpDist<=0.0)
      {
       g_rejectPayoffAsymmetry++;
-      Print(StringFormat("[NO_TRADE_DECISION] reason=payoff_asymmetry_bad strategy=%s rr=%.2f minRR=%.2f tp2Dist=%.5f slDist=%.5f spreadToSL=%.2f",StrategyName(chosenPlan.strategy),rrAccept,StrategyMinRR(fb),tp2Dist,slDist,(slDist>0.0?spreadCost/slDist:0.0)));
+      Print(StringFormat("[FINAL_DECISION] stage=payoff_check reason=PAYOFF_ASYMMETRY_REJECTED strategy=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f selectedTP=%.5f rr=%.5f requiredRR=%.5f epsilon=%.5f slDist=%.5f tpDist=%.5f",
+                         StrategyName(chosenPlan.strategy),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,selectedTp,rrAccept,requiredRR,rrEpsilon,slDist,tpDist));
+      Print(StringFormat("[NO_TRADE_DECISION] reason=payoff_asymmetry_bad strategy=%s rr=%.2f minRR=%.2f tpDist=%.5f slDist=%.5f spreadToSL=%.2f",StrategyName(chosenPlan.strategy),rrAccept,requiredRR,tpDist,slDist,(slDist>0.0?spreadCost/slDist:0.0)));
       return;
      }
    double stratExp=StrategyEdgeExpectancy(fb);
    double symbolExp=((g_symWins[symIdx]+g_symLosses[symIdx])>0?g_symSumR[symIdx]/(double)(g_symWins[symIdx]+g_symLosses[symIdx]):0.0);
    double finalScore=chosenScore + MathMin(0.30,MathMax(0.0,rrAccept-1.0)*0.20) + 0.10*regime.confidence + 0.08*ctx.marketQuality + 0.06*stratExp + 0.04*symbolExp - (ctx.choppiness>60.0?0.12:0.0) - (ctx.spreadPoints>50.0?0.10:0.0);
    double minFinal=(fb==4?0.72:0.68);
-   bool finalAccepted=(finalScore>=minFinal && rrAccept>=StrategyMinRR(fb));
+   bool finalAccepted=(finalScore>=minFinal && (rrAccept+rrEpsilon)>=requiredRR);
    Print(StringFormat("[FINAL_TRADE_ACCEPTANCE] accepted=%s strategy=%s symbol=%s score=%.2f minScore=%.2f rrAfterSpread=%.2f expectancy=%.2f regime=%.2f marketQuality=%.2f rejectReason=%s",(finalAccepted?"true":"false"),StrategyName(chosenPlan.strategy),symbol,finalScore,minFinal,rrAccept,stratExp,regime.confidence,ctx.marketQuality,(finalAccepted?"none":"score_or_rr_fail")));
    if(!finalAccepted){ g_rejectTrades++; g_rejectRRSum+=rrAccept; g_starveRejectedByScore++; Print("[NO_TRADE_DECISION] reason=final_trade_acceptance_failed"); return; }
    g_acceptTrades++; g_acceptRRSum+=rrAccept;
@@ -1522,6 +1592,8 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
    return INIT_SUCCEEDED; }
 void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; g_testerTicksProcessed++; datetime bar=iTime(_Symbol, contextTimeframe, 0); bool isNewBar=(bar!=0 && bar!=g_lastBarTime); if(isNewBar){ g_lastBarTime=bar; g_testerBarsProcessed++; if(g_isTester && InpVerboseDiagnostics) Print(StringFormat("[TESTER_NEW_BAR] symbol=%s tf=%s bar=%s",_Symbol,TfName(),TimeToString(bar,TIME_DATE|TIME_MINUTES))); } if(!g_enableMultiSymbolScannerEffective){ ProcessSymbol(_Symbol, isNewBar); return; } for(int i=0;i<g_scanCount;i++){ datetime sb=iTime(g_scan[i], contextTimeframe, 0); bool symNew=(sb!=0 && sb!=g_lastSymBar[i]); if(symNew) g_lastSymBar[i]=sb; if(ShouldLog(symNew)) ProcessSymbol(g_scan[i], symNew); }}
 void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA deinit reason=", reason);
+   if(g_invalidSpreadEvents>0 || g_marketDataInvalidEvents>0)
+      Print(StringFormat("[MARKET_DATA_INVALID_SUMMARY] invalidSpreadEvents=%d marketDataInvalidEvents=%d loggedInvalidSpread=%d",g_invalidSpreadEvents,g_marketDataInvalidEvents,MathMin(g_invalidSpreadLogs,5)));
    string topReason=(g_testerOrdersAttempted>0?"ORDERMANAGER_REJECTED":"none");
    if(g_starveSelected>0 && g_testerOrdersAttempted==0){ if(g_finalRiskRejected>0) topReason="RISK_REJECTED"; else if(g_finalPortfolioRejected>0) topReason="PORTFOLIO_REJECTED"; else if(g_finalOrderValidationRejected>0) topReason="ORDER_VALIDATE_REJECTED"; else if(g_finalPlanInvalid>0) topReason="PLAN_INVALID"; else if(g_starveOrderManagerReached==0) topReason="ORDERMANAGER_NOT_REACHED"; else topReason="UNKNOWN_SELECTED_PATH_BUG"; }
    Print(StringFormat("[TEST_SUMMARY] candidates=%d validPlans=%d selected=%d finalDecisionPrinted=%d planInvalid=%d riskReached=%d riskApproved=%d riskRejected=%d portfolioReached=%d portfolioApproved=%d portfolioRejected=%d orderValidateReached=%d orderValidateOk=%d orderValidationRejected=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topReason=%s",
