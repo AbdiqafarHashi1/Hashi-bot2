@@ -5,6 +5,7 @@
 #define __HASHIBOT_CORE_ARBITRATIONENGINE_MQH__
 
 #include <HashiBot/Core/Types.mqh>
+extern bool InpVerboseDiagnostics;
 #include <HashiBot/Utils/MathHelpers.mqh>
 #include <HashiBot/Strategies/StrategyTypes.mqh>
 #include <HashiBot/Strategies/TrendContinuation.mqh>
@@ -185,6 +186,7 @@ public:
 
    void PrintStrategyTriggerAudit() const
      {
+      if(!InpVerboseDiagnostics) return;
       Print(StringFormat("[STRATEGY_TRIGGER_AUDIT] strategy=TrendContinuation signalShift=1 called=%d enoughBarsPass=%d indicatorReadyPass=%d trendPass=%d structurePass=%d momentumPass=%d triggerPass=%d atrPass=%d spreadPass=%d slTpPass=%d rawCreated=%d lastRejectReason=%s",
                          m_trend.Called(),m_trend.EnoughBarsPass(),m_trend.IndicatorReadyPass(),m_trend.TrendPass(),m_trend.StructurePass(),m_trend.MomentumPass(),m_trend.TriggerPass(),m_trend.AtrPass(),m_trend.SpreadPass(),m_trend.SlTpPass(),m_trend.RawCreated(),m_trend.LastRejectReason()));
       Print(StringFormat("[STRATEGY_TRIGGER_AUDIT] strategy=CompressionBreakout signalShift=1 called=%d enoughBarsPass=%d atrReadyPass=%d boxReadyPass=%d boxWidthPass=%d compressionPass=%d breakoutPass=%d spreadPass=%d slTpPass=%d rawCreated=%d lastRejectReason=%s",
@@ -404,9 +406,9 @@ public:
            }
         }
 
-      Print(StringFormat("[PRE_CANDIDATE_DIAG][TrendContinuation] moduleCalled=%d enoughBars=%d sessionOk=%d spreadOk=%d indicatorsReady=%d trendRegimeOk=%d triggerFound=%d rawCandidateCreated=%d",m_trendModuleCalled,m_trendEnoughBars,m_trendSessionOk,m_trendSpreadOk,m_trendIndicatorsReady,m_trendRegimeOk,m_trendTriggerFound,m_trendRawCreated));
-      Print(StringFormat("[PRE_CANDIDATE_DIAG][CompressionBreakout] moduleCalled=%d enoughBars=%d sessionOk=%d spreadOk=%d atrReady=%d boxReady=%d compressionDetected=%d breakoutDetected=%d rawCandidateCreated=%d",m_compModuleCalled,m_compEnoughBars,m_compSessionOk,m_compSpreadOk,m_compAtrReady,m_compBoxReady,m_compCompressionDetected,m_compBreakoutDetected,m_compRawCreated));
-      Print(StringFormat("[MICRO_DIAG] called=%d raw=%d valid=%d selected=%d topReject=%s",m_microModuleCalled,m_microRawCreated,m_microValidCreated,0,(m_microRawCreated>m_microValidCreated?"candidate_invalid":"none")));
+      if(InpVerboseDiagnostics) Print(StringFormat("[PRE_CANDIDATE_DIAG][TrendContinuation] moduleCalled=%d enoughBars=%d sessionOk=%d spreadOk=%d indicatorsReady=%d trendRegimeOk=%d triggerFound=%d rawCandidateCreated=%d",m_trendModuleCalled,m_trendEnoughBars,m_trendSessionOk,m_trendSpreadOk,m_trendIndicatorsReady,m_trendRegimeOk,m_trendTriggerFound,m_trendRawCreated));
+      if(InpVerboseDiagnostics) Print(StringFormat("[PRE_CANDIDATE_DIAG][CompressionBreakout] moduleCalled=%d enoughBars=%d sessionOk=%d spreadOk=%d atrReady=%d boxReady=%d compressionDetected=%d breakoutDetected=%d rawCandidateCreated=%d",m_compModuleCalled,m_compEnoughBars,m_compSessionOk,m_compSpreadOk,m_compAtrReady,m_compBoxReady,m_compCompressionDetected,m_compBreakoutDetected,m_compRawCreated));
+      if(InpVerboseDiagnostics) Print(StringFormat("[MICRO_DIAG] called=%d raw=%d valid=%d selected=%d topReject=%s",m_microModuleCalled,m_microRawCreated,m_microValidCreated,0,(m_microRawCreated>m_microValidCreated?"candidate_invalid":"none")));
       PrintStrategyTriggerAudit();
       if(m_candidateCount == 0)
         { result.noTrade = true; result.reason = "no_candidates"; Print("[ARB] no_valid_winner reason=no_valid_candidates"); return result; }
