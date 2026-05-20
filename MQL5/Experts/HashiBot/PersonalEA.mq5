@@ -207,6 +207,8 @@ long g_starveRawCandidates=0,g_starveValidPlans=0,g_starveSelected=0,g_starveSub
 
 long g_testerTicksProcessed=0,g_testerBarsProcessed=0,g_testerStrategyEvaluations=0,g_testerPrimaryEvaluations=0,g_testerSecondaryEvaluations=0;
 long g_testerArbDecisions=0,g_testerArbNoTrades=0,g_testerOrdersAttempted=0,g_testerOrdersSuccessful=0,g_testerOrdersFailed=0,g_testerPositionsManaged=0;
+long g_finalDecisionPrinted=0,g_finalPlanInvalid=0,g_finalRiskRejected=0,g_finalPortfolioRejected=0,g_finalGovernanceRejected=0,g_finalOrderValidationRejected=0;
+string g_finalTopReason="none";
 bool g_isTester=false; double g_testerMinScore=0.0,g_testerSpreadLimitPoints=0.0;
 long g_rejectPayoffAsymmetry=0,g_drawdownLockLevel=0;
 long g_phaseABarsEvaluated=0,g_phaseANoCandidate=0;
@@ -690,12 +692,17 @@ void PrintFinalDecision(const TradePlan &plan,
                         const bool orderAttempted,
                         const bool orderSuccess,
                         const int retcode,
-                        const int lastErr)
+                        const int lastErr,
+                        const double bid,
+                        const double ask,
+                        const double volume)
   {
    string finalSymbol=g_execSymbol;
    double finalRiskReward=plan.riskR;
-   Print(StringFormat("[FINAL_DECISION] barTime=%s symbol=%s mode=%s strategy=%s stage=%s reason=%s selected=true planValid=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f riskR=%.2f score=%.2f riskReached=%s riskApproved=%s riskReason=%s portfolioReached=%s portfolioApproved=%s portfolioReason=%s orderValidateReached=%s orderValidateOk=%s orderValidateReason=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s retcode=%d lastError=%d",
-                      TimeToString(g_execCtx.barTime,TIME_DATE|TIME_MINUTES),finalSymbol,StrategyModeName(),StrategyName(plan.strategy),stage,reason,(planValid?"true":"false"),DirName(plan.direction),plan.entryPrice,plan.stopLoss,plan.takeProfit1,plan.takeProfit2,finalRiskReward,g_execScore,(riskReached?"true":"false"),(riskApproved?"true":"false"),riskReason,(portfolioReached?"true":"false"),(portfolioApproved?"true":"false"),portfolioReason,(orderValidateReached?"true":"false"),(orderValidateOk?"true":"false"),reason,(orderManagerReached?"true":"false"),(orderAttempted?"true":"false"),(orderSuccess?"true":"false"),retcode,lastErr));
+   g_finalDecisionPrinted++;
+   if(g_finalTopReason=="none" && reason!="SUCCESS") g_finalTopReason=reason;
+   Print(StringFormat("[FINAL_DECISION] barTime=%s symbol=%s mode=%s strategy=%s stage=%s reason=%s selected=true planValid=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f riskR=%.2f score=%.2f riskReached=%s riskApproved=%s riskReason=%s portfolioReached=%s portfolioApproved=%s portfolioReason=%s orderValidateReached=%s orderValidateOk=%s orderValidateReason=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s retcode=%d lastError=%d bid=%.5f ask=%.5f volume=%.2f",
+                      TimeToString(g_execCtx.barTime,TIME_DATE|TIME_MINUTES),finalSymbol,StrategyModeName(),StrategyName(plan.strategy),stage,reason,(planValid?"true":"false"),DirName(plan.direction),plan.entryPrice,plan.stopLoss,plan.takeProfit1,plan.takeProfit2,finalRiskReward,g_execScore,(riskReached?"true":"false"),(riskApproved?"true":"false"),riskReason,(portfolioReached?"true":"false"),(portfolioApproved?"true":"false"),portfolioReason,(orderValidateReached?"true":"false"),(orderValidateOk?"true":"false"),reason,(orderManagerReached?"true":"false"),(orderAttempted?"true":"false"),(orderSuccess?"true":"false"),retcode,lastErr,bid,ask,volume));
   }
 bool ExecuteSelectedPlan(const TradePlan &plan,string &blocker)
   {
@@ -704,26 +711,27 @@ bool ExecuteSelectedPlan(const TradePlan &plan,string &blocker)
    string stage="START",reason="UNKNOWN_SUBMIT_BLOCKER",riskReason=g_execRisk.reason,portReason=(g_execPortfolioApproved?"APPROVED":"PORTFOLIO_REJECTED");
    bool planValid=false,riskReached=false,riskApproved=false,portfolioReached=true,portfolioApproved=g_execPortfolioApproved,orderValidateReached=false,orderValidateOk=false,orderManagerReached=false,orderAttempted=false,orderSuccess=false;
    int retcode=0,lastErr=0;
-   if(!g_execSelectedPlanExists){ blocker="NO_SELECTED_PLAN_REACHED_SUBMIT_PATH"; stage="SELECTED_PATH"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
+   double bid=SymbolInfoDouble(g_execSymbol,SYMBOL_BID),ask=SymbolInfoDouble(g_execSymbol,SYMBOL_ASK),volume=0.0;
+   if(!g_execSelectedPlanExists){ blocker="NO_SELECTED_PLAN_REACHED_SUBMIT_PATH"; stage="SELECTED_PATH"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
    planValid=IsPlanExecutable(plan);
-   if(!planValid){ blocker="PLAN_INVALID"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
+   if(!planValid){ blocker="PLAN_INVALID"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
    g_execProofPlanValid=true;
-   if(StringLen(g_execSymbol)<=0){ blocker="PLAN_INVALID_SYMBOL"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
-   if(plan.direction!=TRADE_DIR_LONG && plan.direction!=TRADE_DIR_SHORT){ blocker="PLAN_INVALID_DIRECTION"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
-   if(plan.entryPrice<=0.0){ blocker="PLAN_INVALID_ENTRY"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
-   if(plan.stopLoss<=0.0){ blocker="PLAN_INVALID_SL"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
-   if(plan.takeProfit1<=0.0){ blocker="PLAN_INVALID_TP"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
-   if(!((plan.direction==TRADE_DIR_LONG&&plan.stopLoss<plan.entryPrice)||(plan.direction==TRADE_DIR_SHORT&&plan.stopLoss>plan.entryPrice))){ blocker="PLAN_INVALID_SL"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
-   if(!((plan.direction==TRADE_DIR_LONG&&plan.takeProfit1>plan.entryPrice)||(plan.direction==TRADE_DIR_SHORT&&plan.takeProfit1<plan.entryPrice))){ blocker="PLAN_INVALID_TP"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
-   if(plan.riskR<=0.0){ blocker="PLAN_INVALID_RR"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
+   if(StringLen(g_execSymbol)<=0){ blocker="PLAN_INVALID_SYMBOL"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
+   if(plan.direction!=TRADE_DIR_LONG && plan.direction!=TRADE_DIR_SHORT){ blocker="PLAN_INVALID_DIRECTION"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
+   if(plan.entryPrice<=0.0){ blocker="PLAN_INVALID_ENTRY"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
+   if(plan.stopLoss<=0.0){ blocker="PLAN_INVALID_SL"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
+   if(plan.takeProfit1<=0.0){ blocker="PLAN_INVALID_TP"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
+   if(!((plan.direction==TRADE_DIR_LONG&&plan.stopLoss<plan.entryPrice)||(plan.direction==TRADE_DIR_SHORT&&plan.stopLoss>plan.entryPrice))){ blocker="PLAN_INVALID_SL"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
+   if(!((plan.direction==TRADE_DIR_LONG&&plan.takeProfit1>plan.entryPrice)||(plan.direction==TRADE_DIR_SHORT&&plan.takeProfit1<plan.entryPrice))){ blocker="PLAN_INVALID_TP"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
+   if(plan.riskR<=0.0){ blocker="PLAN_INVALID_RISK_R"; stage="PLAN_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
    riskReached=true; g_execProofRiskReached=true; riskApproved=g_execRiskApproved; g_execProofRiskApproved=riskApproved;
-   if(!riskApproved){ blocker="RISK_REJECTED"; stage="RISK"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
-   if(!portfolioApproved){ blocker="PORTFOLIO_REJECTED_MAX_POSITIONS_PER_SYMBOL"; stage="PORTFOLIO"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
-   if(!g_execRuntimeLimitsApproved){ blocker="PORTFOLIO_REJECTED_MAX_POSITIONS"; stage="PORTFOLIO"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
+   if(!riskApproved){ blocker="RISK_REJECTED"; stage="RISK"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
+   if(!portfolioApproved){ blocker="PORTFOLIO_REJECTED"; stage="PORTFOLIO"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
+   if(!g_execRuntimeLimitsApproved){ blocker="GOVERNANCE_REJECTED"; stage="PORTFOLIO"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
    double minLot=SymbolInfoDouble(g_execSymbol,SYMBOL_VOLUME_MIN),maxLot=SymbolInfoDouble(g_execSymbol,SYMBOL_VOLUME_MAX),lotStep=SymbolInfoDouble(g_execSymbol,SYMBOL_VOLUME_STEP);
-   double ask=SymbolInfoDouble(g_execSymbol,SYMBOL_ASK),bid=SymbolInfoDouble(g_execSymbol,SYMBOL_BID),entryPx=(plan.direction==TRADE_DIR_LONG?ask:bid);
-   double volume=MathMax(minLot,MathMin(maxLot,g_execRisk.approvedLots)); if(lotStep>0.0) volume=MathFloor(volume/lotStep)*lotStep; volume=NormalizeDouble(volume,2);
-   if(!(volume>0.0 && volume>=minLot && volume<=maxLot)){ blocker="ORDERMANAGER_RETCODE_INVALID_VOLUME"; stage="ORDER_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr); return (orderAttempted || orderSuccess); }
+   double entryPx=(plan.direction==TRADE_DIR_LONG?ask:bid);
+   volume=MathMax(minLot,MathMin(maxLot,g_execRisk.approvedLots)); if(lotStep>0.0) volume=MathFloor(volume/lotStep)*lotStep; volume=NormalizeDouble(volume,2);
+   if(!(volume>0.0 && volume>=minLot && volume<=maxLot)){ blocker="ORDER_VALIDATE_REJECTED"; stage="ORDER_VALIDATE"; reason=blocker; PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume); return (orderAttempted || orderSuccess); }
    orderValidateReached=true; g_execProofOrderValidateReached=true; orderValidateOk=true;
    orderManagerReached=true; g_execProofOrderManagerReached=true; g_starveOrderManagerReached++;
    RiskDecision sendRisk=g_execRisk; sendRisk.approvedLots=volume; string execReason=""; g_testerOrdersAttempted++; orderAttempted=true; g_execProofOrderAttempted=true;
@@ -731,7 +739,12 @@ bool ExecuteSelectedPlan(const TradePlan &plan,string &blocker)
    orderSuccess=submitted; g_execProofOrderSuccess=submitted; retcode=(int)g_order.LastRetcode(); lastErr=GetLastError();
    if(orderManagerReached) Print(StringFormat("[ORDERMANAGER_RESULT] attempted=%s success=%s retcode=%d retcodeDescription=%s orderTicket=%I64d dealTicket=%I64d lastError=%d reason=%s",(g_order.LastAttempted()?"true":"false"),(submitted?"true":"false"),retcode,g_order.LastRetcodeDescription(),g_order.LastOrder(),g_order.LastDeal(),lastErr,execReason));
    if(!submitted){ blocker="ORDERMANAGER_SUBMIT_FAILED"; stage="ORDER_SUBMIT"; reason=(execReason==""?blocker:execReason);} else { blocker="none"; stage="ORDER_SUBMIT"; reason="SUCCESS"; g_testerOrdersSuccessful++; }
-   PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr);
+   if(StringFind(reason,"PLAN_INVALID")==0) g_finalPlanInvalid++;
+   else if(reason=="RISK_REJECTED") g_finalRiskRejected++;
+   else if(reason=="PORTFOLIO_REJECTED") g_finalPortfolioRejected++;
+   else if(reason=="GOVERNANCE_REJECTED") g_finalGovernanceRejected++;
+   else if(reason=="ORDER_VALIDATE_REJECTED") g_finalOrderValidationRejected++;
+   PrintFinalDecision(plan,stage,reason,planValid,riskReached,riskApproved,riskReason,portfolioReached,portfolioApproved,portReason,orderValidateReached,orderValidateOk,orderManagerReached,orderAttempted,orderSuccess,retcode,lastErr,bid,ask,volume);
    return (orderAttempted || orderSuccess);
   }
 
@@ -884,10 +897,10 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    bool compoundingAllowed=(g_effectiveCompounding && sampleReady && rollingPF>1.10 && rollingNet>0.0 && ddPct<8.0 && !hasBucketErrors);
    bool scalingAllowed=(enablePersonalScaling && compoundingAllowed && g_accountMode==1);
    if(!compoundingAllowed) g_accountMode=2;
-   Print(StringFormat("[HYPER_GATE] enabled=%s reason=%s rollingPF=%.2f rollingNet=%.2f drawdownPct=%.2f compoundingAllowed=%s scalingAllowed=%s","true",(compoundingAllowed?"edge_proven":"edge_not_proven"),rollingPF,rollingNet,ddPct,(compoundingAllowed?"true":"false"),(scalingAllowed?"true":"false")));
+   if(InpVerboseDiagnostics) Print(StringFormat("[HYPER_GATE] enabled=%s reason=%s rollingPF=%.2f rollingNet=%.2f drawdownPct=%.2f compoundingAllowed=%s scalingAllowed=%s","true",(compoundingAllowed?"edge_proven":"edge_not_proven"),rollingPF,rollingNet,ddPct,(compoundingAllowed?"true":"false"),(scalingAllowed?"true":"false")));
    double expNow=(g_exitTotal>0?(g_sumR[0]+g_sumR[1]+g_sumR[2]+g_sumR[3]+g_sumR[4])/(double)g_exitTotal:0.0);
    string rpMode=(defense?"defense":(attack?"attack":"recovery"));
-   Print(StringFormat("[RISK_PRESSURE] mode=%s riskPct=%.3f reason=%s expectancy=%.2f drawdownPct=%.2f",rpMode,riskPctEffective,(defense?"drawdown_or_instability":(attack?"edge_real":"normalizing")),expNow,ddPct));
+   if(InpVerboseDiagnostics) Print(StringFormat("[RISK_PRESSURE] mode=%s riskPct=%.3f reason=%s expectancy=%.2f drawdownPct=%.2f",rpMode,riskPctEffective,(defense?"drawdown_or_instability":(attack?"edge_real":"normalizing")),expNow,ddPct));
    g_symRegimeScore[symIdx]=0.0; g_symMarketQuality[symIdx]=ctx.marketQuality; if(g_symCooldown[symIdx]>0) g_symCooldown[symIdx]--;
    int basketEntries=0; TradeDirection basketDir=TRADE_DIR_NONE; double basketRisk=0.0, basketAvgEntry=0.0; datetime basketNewest=0;
    g_tracker.GetSymbolBasketSummary(symbol, basketEntries, basketDir, basketRisk, basketAvgEntry, basketNewest);
@@ -995,7 +1008,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      }
 
    bool executionTick=true;
-   Print(StringFormat("[BAR_EVAL_GATE] symbol=%s timeframe=%s newBar=%s signalShift=1 executionTick=%s",symbol,TfName(),(isNewBar?"true":"false"),(executionTick?"true":"false")));
+   if(InpVerboseDiagnostics) Print(StringFormat("[BAR_EVAL_GATE] symbol=%s timeframe=%s newBar=%s signalShift=1 executionTick=%s",symbol,TfName(),(isNewBar?"true":"false"),(executionTick?"true":"false")));
    if(!isNewBar)
       return;
    g_phaseABarsEvaluated++;
@@ -1339,7 +1352,8 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       g_execCtx=ctx; g_execRisk=risk; g_execTradeState=tstate; g_execSymbol=symbol; g_execScore=chosenScore;
       g_execSelectedPlanExists=validPlan; g_execRiskApproved=risk.approved; g_execPortfolioApproved=portfolioOK; g_execRuntimeLimitsApproved=runtimeLimitsApproved;
       enteredExecuteSelectedPlan=true;
-      g_pipeWinnerSel[sb]++; g_symSelected[symIdx]++; g_starveSelected++;
+      g_starveSelected++;
+      g_pipeWinnerSel[sb]++; g_symSelected[symIdx]++; 
       string execReason="";
       bool submitted=ExecuteSelectedPlan(chosenPlan, execReason);
       submitBlocker=(submitted?"none":execReason);
@@ -1359,7 +1373,9 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       else
         { g_pipeSubmitOk[sb]++; g_pipeLifecycleRej[sb]++; Print("[ORDER_RESULT] ok=true reason=submitted strategy=",StrategyName(chosenPlan.strategy)); Print("[PIPE] lifecycle_created ok=false reason=",lifecycleReason," strategy=",StrategyName(chosenPlan.strategy)); Print(StringFormat("[LIFECYCLE_FAIL] reason=%s context=registry line=616",lifecycleReason)); Print("[LIFECYCLE_CREATE] ok=false reason=",lifecycleReason," id=0"); g_order.MarkBlocked(chosenPlan, risk, symbol, tstate, lifecycleReason); g_lastCloseTime=TimeCurrent(); decision.riskApproved=risk.approved; decision.portfolioApproved=portfolioOK; decision.rejectStage="ORDER"; decision.rejectReason="ORDER_VALIDATE_FAILED"; EmitDecisionTrace(decision,ctx.barTime,"ORDER",decision.rejectReason,true); }
      }
-   Print(StringFormat("[SELECTED_TO_SUBMIT_PROOF] strategy=%s candidateToPlanOk=%s enteredExecuteSelectedPlan=%s planValid=%s riskReached=%s riskApproved=%s orderValidateReached=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s blocker=%s",
+   if(!enteredExecuteSelectedPlan)
+      Print("[FINAL_DECISION] stage=handoff_failed reason=selected_plan_not_sent_to_execute");
+   if(InpVerboseDiagnostics) Print(StringFormat("[SELECTED_TO_SUBMIT_PROOF] strategy=%s candidateToPlanOk=%s enteredExecuteSelectedPlan=%s planValid=%s riskReached=%s riskApproved=%s orderValidateReached=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s blocker=%s",
                       StrategyName(chosenPlan.strategy),(candidateToPlanOk?"true":"false"),(enteredExecuteSelectedPlan?"true":"false"),(g_execProofPlanValid?"true":"false"),(g_execProofRiskReached?"true":"false"),(g_execProofRiskApproved?"true":"false"),(g_execProofOrderValidateReached?"true":"false"),(g_execProofOrderManagerReached?"true":"false"),(g_execProofOrderAttempted?"true":"false"),(g_execProofOrderSuccess?"true":"false"),submitBlocker));
    if(arb.hasWinner){ int wb=StrategyBucket(arb.winningStrategy); g_arbWinnerScoreSum[wb]+=arb.winningScore; g_arbWinnerScoreCount[wb]++; if(chosenFromFallback) { g_winMicro++; g_microWinners++; } else if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_winTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_winPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_winCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_winExpansion++; }
    if(ShouldLog(isNewBar))
@@ -1493,8 +1509,8 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
 void OnTick(){ g_heartbeatTick++; g_barsSinceEntry++; g_testerTicksProcessed++; datetime bar=iTime(_Symbol, contextTimeframe, 0); bool isNewBar=(bar!=0 && bar!=g_lastBarTime); if(isNewBar){ g_lastBarTime=bar; g_testerBarsProcessed++; if(g_isTester && InpVerboseDiagnostics) Print(StringFormat("[TESTER_NEW_BAR] symbol=%s tf=%s bar=%s",_Symbol,TfName(),TimeToString(bar,TIME_DATE|TIME_MINUTES))); } if(!g_enableMultiSymbolScannerEffective){ ProcessSymbol(_Symbol, isNewBar); return; } for(int i=0;i<g_scanCount;i++){ datetime sb=iTime(g_scan[i], contextTimeframe, 0); bool symNew=(sb!=0 && sb!=g_lastSymBar[i]); if(symNew) g_lastSymBar[i]=sb; if(ShouldLog(symNew)) ProcessSymbol(g_scan[i], symNew); }}
 void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA deinit reason=", reason);
    string topReason=(g_testerOrdersAttempted>0?"ORDERMANAGER_SUBMIT_FAILED":(g_diagWinners>0?"SELECTED_BLOCKED_BEFORE_SUBMIT":"NO_SELECTED_PLAN_REACHED_SUBMIT_PATH"));
-   Print(StringFormat("[TEST_SUMMARY] bars=%d candidates=%d validPlans=%d selected=%d riskRejected=%d portfolioRejected=%d orderValidationRejected=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topReason=%s",
-                      g_testerBarsProcessed,g_starveRawCandidates,g_starveValidPlans,g_starveSelected,g_diagRiskRejected,g_diagPortRejected,(g_pipeSubmitRej[0]+g_pipeSubmitRej[1]+g_pipeSubmitRej[2]+g_pipeSubmitRej[3]+g_pipeSubmitRej[4]),g_starveOrderManagerReached,g_testerOrdersAttempted,g_testerOrdersSuccessful,topReason));
+   Print(StringFormat("[TEST_SUMMARY] bars=%d candidates=%d validPlans=%d selected=%d finalDecisionPrinted=%d planInvalid=%d riskRejected=%d portfolioRejected=%d governanceRejected=%d orderValidationRejected=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topReason=%s",
+                      g_testerBarsProcessed,g_starveRawCandidates,g_starveValidPlans,g_starveSelected,g_finalDecisionPrinted,g_finalPlanInvalid,g_finalRiskRejected,g_finalPortfolioRejected,g_finalGovernanceRejected,g_finalOrderValidationRejected,g_starveOrderManagerReached,g_testerOrdersAttempted,g_testerOrdersSuccessful,(g_testerOrdersAttempted==0&&g_starveSelected>0?g_finalTopReason:topReason)));
    Print(StringFormat("[STRATEGY_TOTALS] trendRaw=%d trendValid=%d trendSelected=%d compressionRaw=%d compressionValid=%d compressionSelected=%d microRaw=%d microValid=%d microSelected=%d",
                       g_arb.TrendRawCreated(),g_trendAccepted,g_pipeWinnerSel[0],g_arb.CompressionRawCreated(),g_compressionAccepted,g_pipeWinnerSel[2],g_arb.MicroRawCreated(),g_microAccepted,g_pipeWinnerSel[4]));
    if(!InpVerboseDiagnostics) return;
