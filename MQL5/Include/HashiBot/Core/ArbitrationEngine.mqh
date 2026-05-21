@@ -199,6 +199,8 @@ public:
    long CompressionRawCreated() const { return m_compRawCreated; }
    long MicroModuleCalled() const { return m_microModuleCalled; }
    long MicroRawCreated() const { return m_microRawCreated; }
+   string TrendExposureSummary() const { return m_trend.ExposureSummary(); }
+   string CompressionExposureSummary() const { return m_compression.ExposureSummary(); }
    long MicroValidCreated() const { return m_microValidCreated; }
 
    void PrintStrategyTriggerAudit() const
@@ -353,6 +355,11 @@ public:
            }
          else { m_invalidByStrategy[b]++; trendRejectStage="VALIDATION"; trendRejectReason=(c.rejectReason!=""?c.rejectReason:(vreason==""?"NO_SETUP":vreason)); if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=TrendContinuation",StrategyTypes::StrategyName(c.strategy),trendRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
          PrintStrategyEngineResult("TrendContinuation",true,true,c,ctx);
+         if(m_verboseDiagnostics) Print(StringFormat("[TREND_EXPOSURE] barsReady=%s indicatorsReady=%s spreadOk=%s regimeOk=%s structureOk=%s emaOk=%s slopeOk=%s momentumOk=%s pullbackOk=%s pricePlanOk=%s sltpOk=%s rrOk=%s valid=%s reason=%s detail=%s",
+                                                    (trendEnoughBars?"true":"false"),(trendIndicatorsReady?"true":"false"),(trendSpreadOk?"true":"false"),(trendRegimeOk?"true":"false"),
+                                                    (m_trend.StructurePass()>0?"true":"false"),(c.direction!=TRADE_DIR_NONE?"true":"false"),(m_trend.MomentumPass()>0?"true":"false"),(m_trend.MomentumPass()>0?"true":"false"),
+                                                    (m_trend.TriggerPass()>0?"true":"false"),(c.plan.entryPrice>0.0?"true":"false"),(c.isValid?"true":"false"),(RRNetAfterSpread(c,ctx)>0.0?"true":"false"),
+                                                    (c.isValid?"true":"false"),c.rejectReason,c.reason));
       }
       Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=TrendContinuation moduleCalled=%s enoughBars=%s indicatorsReady=%s regimePass=%s triggerPass=%s rawCandidateCreated=%s candidateValid=%s reason=%s",
                          "true",(trendEnoughBars?"true":"false"),(trendIndicatorsReady?"true":"false"),(trendRegimeOk?"true":"false"),
@@ -382,6 +389,11 @@ public:
            }
          else { m_invalidByStrategy[b]++; compRejectStage="VALIDATION"; compRejectReason=(vreason==""?"NO_SETUP":vreason); if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=CompressionBreakout",StrategyTypes::StrategyName(c.strategy),compRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
          PrintStrategyEngineResult("CompressionBreakout",true,true,c,ctx);
+         if(m_verboseDiagnostics) Print(StringFormat("[COMPRESSION_EXPOSURE] barsReady=%s indicatorsReady=%s spreadOk=%s regimeOk=%s atrOk=%s boxReady=%s boxFormed=%s rangeOk=%s breakoutConfirmed=%s bodyOk=%s closeLocationOk=%s pricePlanOk=%s sltpOk=%s rrOk=%s valid=%s reason=%s detail=%s",
+                                                    (compEnoughBars?"true":"false"),(compAtrReady?"true":"false"),(compSpreadOk?"true":"false"),(compCompressionDetected?"true":"false"),(compAtrReady?"true":"false"),
+                                                    (m_compression.BoxReadyPass()>0?"true":"false"),(m_compression.AtrReadyPass()>0?"true":"false"),(m_compression.BoxWidthPass()>0?"true":"false"),
+                                                    (compAnalyzed?"true":"false"),(compAnalyzed?"true":"false"),(compAnalyzed?"true":"false"),(c.plan.entryPrice>0.0?"true":"false"),
+                                                    (c.isValid?"true":"false"),(RRNetAfterSpread(c,ctx)>0.0?"true":"false"),(c.isValid?"true":"false"),c.rejectReason,c.reason));
       }
       Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=CompressionBreakout moduleCalled=%s enoughBars=%s atrReady=%s boxReady=%s compressionDetected=%s breakoutDetected=%s rawCandidateCreated=%s candidateValid=%s reason=%s",
                          "true",(compEnoughBars?"true":"false"),(compAtrReady?"true":"false"),(compBoxReady?"true":"false"),

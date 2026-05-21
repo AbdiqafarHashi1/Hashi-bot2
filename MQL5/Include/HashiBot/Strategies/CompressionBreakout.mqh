@@ -19,8 +19,10 @@ private:
    struct CompressionAuditCounters
      {
       long called,enoughBarsPass,atrReadyPass,boxReadyPass,boxWidthPass,compressionPass,breakoutPass,spreadPass,slTpPass,rawCreated;
+      long expBarsReady,expIndicatorsReady,expSpreadOk,expRegimeOk,expAtrOk,expBoxReady,expBoxFormed,expRangeOk,expBreakoutConfirmed,expBodyOk,expCloseLocationOk,expPricePlanOk,expSltpOk,expRrOk,expValid;
+      long failBoxReady,failBoxFormed,failRange,failBreakout,failBody,failCloseLocation,failSltp,failRr;
       string lastRejectReason;
-      void Reset(){ called=enoughBarsPass=atrReadyPass=boxReadyPass=boxWidthPass=compressionPass=breakoutPass=spreadPass=slTpPass=rawCreated=0; lastRejectReason="none"; }
+      void Reset(){ called=enoughBarsPass=atrReadyPass=boxReadyPass=boxWidthPass=compressionPass=breakoutPass=spreadPass=slTpPass=rawCreated=0; expBarsReady=expIndicatorsReady=expSpreadOk=expRegimeOk=expAtrOk=expBoxReady=expBoxFormed=expRangeOk=expBreakoutConfirmed=expBodyOk=expCloseLocationOk=expPricePlanOk=expSltpOk=expRrOk=expValid=0; failBoxReady=failBoxFormed=failRange=failBreakout=failBody=failCloseLocation=failSltp=failRr=0; lastRejectReason="none"; }
      };
    ProfileType                   m_profile;
    CompressionAuditCounters      m_audit;
@@ -147,8 +149,20 @@ public:
    long BreakoutPass() const { return m_audit.breakoutPass; }
    long SpreadPass() const { return m_audit.spreadPass; }
    long SlTpPass() const { return m_audit.slTpPass; }
-   long RawCreated() const { return m_audit.rawCreated; }
-   string LastRejectReason() const { return m_audit.lastRejectReason; }
+	   long RawCreated() const { return m_audit.rawCreated; }
+	   string LastRejectReason() const { return m_audit.lastRejectReason; }
+      string ExposureSummary() const
+        {
+         string topReject=(m_audit.failBoxReady>=m_audit.failBoxFormed && m_audit.failBoxReady>=m_audit.failRange && m_audit.failBoxReady>=m_audit.failBreakout && m_audit.failBoxReady>=m_audit.failBody && m_audit.failBoxReady>=m_audit.failCloseLocation && m_audit.failBoxReady>=m_audit.failSltp && m_audit.failBoxReady>=m_audit.failRr?"boxReadyFail":
+                           (m_audit.failBoxFormed>=m_audit.failRange && m_audit.failBoxFormed>=m_audit.failBreakout && m_audit.failBoxFormed>=m_audit.failBody && m_audit.failBoxFormed>=m_audit.failCloseLocation && m_audit.failBoxFormed>=m_audit.failSltp && m_audit.failBoxFormed>=m_audit.failRr?"boxFormedFail":
+                           (m_audit.failRange>=m_audit.failBreakout && m_audit.failRange>=m_audit.failBody && m_audit.failRange>=m_audit.failCloseLocation && m_audit.failRange>=m_audit.failSltp && m_audit.failRange>=m_audit.failRr?"rangeFail":
+                           (m_audit.failBreakout>=m_audit.failBody && m_audit.failBreakout>=m_audit.failCloseLocation && m_audit.failBreakout>=m_audit.failSltp && m_audit.failBreakout>=m_audit.failRr?"breakoutFail":
+                           (m_audit.failBody>=m_audit.failCloseLocation && m_audit.failBody>=m_audit.failSltp && m_audit.failBody>=m_audit.failRr?"bodyFail":
+                           (m_audit.failCloseLocation>=m_audit.failSltp && m_audit.failCloseLocation>=m_audit.failRr?"closeLocationFail":
+                           (m_audit.failSltp>=m_audit.failRr?"sltpFail":"rrFail"))))));
+         return StringFormat("[COMPRESSION_EXPOSURE_SUMMARY] called=%d valid=%d topReject=%s boxReadyFail=%d boxFormedFail=%d rangeFail=%d breakoutFail=%d bodyFail=%d closeLocationFail=%d sltpFail=%d rrFail=%d",
+                             m_audit.called,m_audit.expValid,topReject,m_audit.failBoxReady,m_audit.failBoxFormed,m_audit.failRange,m_audit.failBreakout,m_audit.failBody,m_audit.failCloseLocation,m_audit.failSltp,m_audit.failRr);
+        }
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
@@ -156,24 +170,29 @@ public:
       m_audit.called++;
       m_audit.lastRejectReason="none";
       if(ctx.barsLoaded < 7){ m_audit.lastRejectReason="BOX_NOT_READY"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+      m_audit.expBarsReady++;
       m_audit.enoughBarsPass++;
       if(ctx.spreadPoints <= 0.0){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_SPREAD,m_audit.lastRejectReason); return false; }
+      m_audit.expSpreadOk++;
       m_audit.spreadPass++;
 
       int gateBox=0,gateDuration=0,gateAtrContraction=0,gateBreakoutClose=0,gateVolExpansion=0,gateSwingWall=0,gatePlan=0;
       bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
       bool regimeOK = (regime.regime == REGIME_COMPRESSION || regime.regime == REGIME_EXPANSION || (testerMode && regime.confidence>=0.30));
       if(!regimeOK)
-        { m_audit.lastRejectReason="BOX_NOT_READY"; Reject(candidate, SUPPRESS_VOLATILITY,m_audit.lastRejectReason); return false; }
+        { m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_VOLATILITY,m_audit.lastRejectReason); return false; }
+      m_audit.expRegimeOk++;
       double minMq=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_MARKET_QUALITY:(testerMode?0.30:0.34));
       double maxChop=(m_profile==PROFILE_PROP_FIRM?COMP_MAX_CHOPPINESS:(testerMode?74.0:70.0));
       int minBars=(m_profile==PROFILE_PROP_FIRM?COMP_MIN_BARS:7);
       if(ctx.marketQuality < minMq)
-        { m_audit.lastRejectReason="BOX_NOT_READY"; Reject(candidate, SUPPRESS_MARKET_QUALITY,m_audit.lastRejectReason); return false; }
+        { m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_MARKET_QUALITY,m_audit.lastRejectReason); return false; }
       if(ctx.atr <= 0.0)
         { m_audit.lastRejectReason="ATR_INVALID"; Reject(candidate, SUPPRESS_VOLATILITY,m_audit.lastRejectReason); return false; }
+      m_audit.expIndicatorsReady++;
+      m_audit.expAtrOk++;
       if(ctx.choppiness > maxChop)
-        { m_audit.lastRejectReason="BOX_NOT_READY"; Reject(candidate, SUPPRESS_MARKET_QUALITY,m_audit.lastRejectReason); return false; }
+        { m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_MARKET_QUALITY,m_audit.lastRejectReason); return false; }
       if(ctx.barsLoaded < minBars)
         { m_audit.lastRejectReason="BOX_NOT_READY"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
       m_audit.atrReadyPass++;
@@ -182,27 +201,33 @@ public:
       double boxHigh=0.0, boxLow=0.0, boxWidth=0.0, insideRatio=0.0, touchScore=0.0;
       int boxAge=0;
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
-        { gateBox=1; m_audit.lastRejectReason="BOX_NOT_FORMED"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+        { gateBox=1; m_audit.lastRejectReason="BOX_NOT_FORMED"; m_audit.failBoxFormed++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+      m_audit.expBoxFormed++;
 
       int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:(testerMode?7:9));
       if(boxAge < minBoxAge)
-        { gateDuration=1; m_audit.lastRejectReason="BOX_NOT_READY"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+        { gateDuration=1; m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
       double minInside=(m_profile==PROFILE_PROP_FIRM?0.55:(testerMode?0.22:0.35));
       double minTouch=(m_profile==PROFILE_PROP_FIRM?0.24:(testerMode?0.06:0.10));
       if(insideRatio < minInside || touchScore < minTouch)
-        { gateAtrContraction=1; m_audit.lastRejectReason="BOX_NOT_READY"; Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
+        { gateAtrContraction=1; m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
+      m_audit.expBoxReady++;
       m_audit.boxReadyPass++;
 
-      if(boxWidth < MathMax(ctx.atr * (testerMode?0.20:0.30), ctx.spreadPoints * ctx.point * 2.2))
-        { m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_SPREAD,m_audit.lastRejectReason); return false; } // too narrow
-      if(boxWidth > ctx.atr * (testerMode?3.0:2.5))
-        { m_audit.lastRejectReason="RANGE_TOO_WIDE"; Reject(candidate, SUPPRESS_VOLATILITY,m_audit.lastRejectReason); return false; } // too wide
+      if(boxWidth < MathMax(ctx.atr * (testerMode?0.16:0.24), ctx.spreadPoints * ctx.point * 2.0))
+        { m_audit.lastRejectReason="NO_SETUP"; m_audit.failRange++; Reject(candidate, SUPPRESS_SPREAD,m_audit.lastRejectReason); return false; } // too narrow
+      if(boxWidth > ctx.atr * (testerMode?3.4:2.8))
+        { m_audit.lastRejectReason="RANGE_TOO_WIDE"; m_audit.failRange++; Reject(candidate, SUPPRESS_VOLATILITY,m_audit.lastRejectReason); return false; } // too wide
+      m_audit.expRangeOk++;
       m_audit.boxWidthPass++;
 
       TradeDirection dir = TRADE_DIR_NONE;
       double breakoutQ = 0.0, entryQ = 0.0;
       if(!BreakoutSignal(ctx, boxHigh, boxLow, boxWidth, dir, breakoutQ, entryQ))
-        { gateBreakoutClose=1; m_audit.lastRejectReason="BREAKOUT_NOT_CONFIRMED"; Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
+        { gateBreakoutClose=1; m_audit.lastRejectReason="BREAKOUT_NOT_CONFIRMED"; m_audit.failBreakout++; Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
+      m_audit.expBreakoutConfirmed++;
+      m_audit.expBodyOk++;
+      m_audit.expCloseLocationOk++;
       m_audit.breakoutPass++;
 
       candidate.direction = dir;
@@ -227,7 +252,8 @@ public:
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + entryQ) / 4.0, 0.0, 1.0);
 
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, (testerMode?0.90:1.0), candidate.plan))
-        { gatePlan=1; m_audit.lastRejectReason="INVALID_SLTP"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+        { gatePlan=1; m_audit.lastRejectReason="INVALID_SLTP"; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+      m_audit.expPricePlanOk++;
 
       // SL around opposite/inside box edge with ATR/spread buffer
       double buffer = MathMax(0.20 * ctx.atr, ctx.spreadPoints * ctx.point * 1.5);
@@ -238,7 +264,7 @@ public:
 
       double risk = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
       if(risk <= 0.0)
-        { m_audit.lastRejectReason="INVALID_SLTP"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+        { m_audit.lastRejectReason="INVALID_SLTP"; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
 
       // TP1 = box height or 1R, TP2 = 2R/measured move
       double tp1ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + risk : candidate.plan.entryPrice - risk);
@@ -254,9 +280,9 @@ public:
       candidate.plan.direction = dir;
       candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
       if(!candidate.isValid)
-        { m_audit.lastRejectReason="INVALID_SLTP"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+        { m_audit.lastRejectReason="INVALID_SLTP"; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
 
-      m_audit.slTpPass++;
+      m_audit.slTpPass++; m_audit.expSltpOk++; m_audit.expRrOk++; m_audit.expValid++;
       m_audit.rawCreated++;
       StrategyTypes::CandidateAccept(candidate,"OK");
       candidate.rejectReason="OK";
