@@ -160,8 +160,8 @@ public:
                            (m_audit.failBody>=m_audit.failCloseLocation && m_audit.failBody>=m_audit.failSltp && m_audit.failBody>=m_audit.failRr?"bodyFail":
                            (m_audit.failCloseLocation>=m_audit.failSltp && m_audit.failCloseLocation>=m_audit.failRr?"closeLocationFail":
                            (m_audit.failSltp>=m_audit.failRr?"sltpFail":"rrFail")))))));
-         return StringFormat("[COMPRESSION_EXPOSURE_SUMMARY] called=%d valid=%d topReject=%s boxReadyFail=%d boxFormedFail=%d rangeFail=%d breakoutFail=%d bodyFail=%d closeLocationFail=%d sltpFail=%d rrFail=%d",
-                             m_audit.called,m_audit.expValid,topReject,m_audit.failBoxReady,m_audit.failBoxFormed,m_audit.failRange,m_audit.failBreakout,m_audit.failBody,m_audit.failCloseLocation,m_audit.failSltp,m_audit.failRr);
+         return StringFormat("[COMPRESSION_EXPOSURE_SUMMARY] called=%d boxReady=%d boxFormed=%d boxReadyFail=%d boxFormedFail=%d rangeTooWide=%d breakoutConfirmed=%d breakoutNotConfirmed=%d sltpPass=%d rrPass=%d valid=%d selected=%d lostToMicro=%d topReject=%s",
+                             m_audit.called,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.failBoxReady,m_audit.failBoxFormed,m_audit.failRange,m_audit.expBreakoutConfirmed,m_audit.failBreakout,m_audit.slTpPass,m_audit.expRrOk,m_audit.expValid,0,0,topReject);
         }
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
@@ -200,31 +200,34 @@ public:
 
       double boxHigh=0.0, boxLow=0.0, boxWidth=0.0, insideRatio=0.0, touchScore=0.0;
       int boxAge=0;
+      string diagReason="none";
+      bool breakoutConfirmed=false;
+      TradeDirection dir = TRADE_DIR_NONE;
+      double breakoutQ = 0.0, entryQ = 0.0;
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
-        { gateBox=1; m_audit.lastRejectReason="BOX_NOT_FORMED"; m_audit.failBoxFormed++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+        { gateBox=1; m_audit.lastRejectReason="BOX_NOT_FORMED"; diagReason=m_audit.lastRejectReason; m_audit.failBoxFormed++; Print(StringFormat("[COMPRESSION_BOX_DIAG] enoughBars=%s atrReady=%s boxReady=%s boxFormed=false boxHigh=0 boxLow=0 boxWidth=0 boxWidthAtr=0 insideBars=0 requiredInsideBars=0 touches=0 requiredTouches=0 rangeTooWide=false breakoutConfirmed=false reason=%s",(ctx.barsLoaded>=minBars?"true":"false"),(ctx.atr>0.0?"true":"false"),"false",diagReason)); Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
       m_audit.expBoxFormed++;
 
       int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:(testerMode?7:9));
       if(boxAge < minBoxAge)
         { gateDuration=1; m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
-      double minInside=(m_profile==PROFILE_PROP_FIRM?0.55:(testerMode?0.22:0.35));
-      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.24:(testerMode?0.06:0.10));
+      double minInside=(m_profile==PROFILE_PROP_FIRM?0.50:(testerMode?0.18:0.28));
+      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.20:(testerMode?0.04:0.08));
       if(insideRatio < minInside || touchScore < minTouch)
-        { gateAtrContraction=1; m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
+        { gateAtrContraction=1; m_audit.lastRejectReason="BOX_NOT_READY"; diagReason=m_audit.lastRejectReason; m_audit.failBoxReady++; Print(StringFormat("[COMPRESSION_BOX_DIAG] enoughBars=%s atrReady=%s boxReady=false boxFormed=true boxHigh=%.5f boxLow=%.5f boxWidth=%.5f boxWidthAtr=%.2f insideBars=%d requiredInsideBars=%d touches=%d requiredTouches=%d rangeTooWide=false breakoutConfirmed=false reason=%s",(ctx.barsLoaded>=minBars?"true":"false"),(ctx.atr>0.0?"true":"false"),boxHigh,boxLow,boxWidth,(ctx.atr>0?boxWidth/ctx.atr:0.0),(int)MathRound(insideRatio*(boxAge-1)),(int)MathCeil(minInside*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),(int)MathCeil(minTouch*((boxAge-1)*2)),diagReason)); Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
       m_audit.expBoxReady++;
       m_audit.boxReadyPass++;
 
-      if(boxWidth < MathMax(ctx.atr * (testerMode?0.16:0.24), ctx.spreadPoints * ctx.point * 2.0))
-        { m_audit.lastRejectReason="NO_SETUP"; m_audit.failRange++; Reject(candidate, SUPPRESS_SPREAD,m_audit.lastRejectReason); return false; } // too narrow
-      if(boxWidth > ctx.atr * (testerMode?3.4:2.8))
+      if(boxWidth < MathMax(ctx.atr * (testerMode?0.12:0.20), ctx.spreadPoints * ctx.point * 1.6))
+        { m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_SPREAD,m_audit.lastRejectReason); return false; } // too narrow
+      if(boxWidth > ctx.atr * (testerMode?4.2:3.3))
         { m_audit.lastRejectReason="RANGE_TOO_WIDE"; m_audit.failRange++; Reject(candidate, SUPPRESS_VOLATILITY,m_audit.lastRejectReason); return false; } // too wide
       m_audit.expRangeOk++;
       m_audit.boxWidthPass++;
 
-      TradeDirection dir = TRADE_DIR_NONE;
-      double breakoutQ = 0.0, entryQ = 0.0;
       if(!BreakoutSignal(ctx, boxHigh, boxLow, boxWidth, dir, breakoutQ, entryQ))
-        { gateBreakoutClose=1; m_audit.lastRejectReason="BREAKOUT_NOT_CONFIRMED"; m_audit.failBreakout++; Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
+        { gateBreakoutClose=1; m_audit.lastRejectReason="BREAKOUT_NOT_CONFIRMED"; diagReason=m_audit.lastRejectReason; m_audit.failBreakout++; Print(StringFormat("[COMPRESSION_BOX_DIAG] enoughBars=%s atrReady=%s boxReady=true boxFormed=true boxHigh=%.5f boxLow=%.5f boxWidth=%.5f boxWidthAtr=%.2f insideBars=%d requiredInsideBars=%d touches=%d requiredTouches=%d rangeTooWide=false breakoutConfirmed=false reason=%s",(ctx.barsLoaded>=minBars?"true":"false"),(ctx.atr>0.0?"true":"false"),boxHigh,boxLow,boxWidth,(ctx.atr>0?boxWidth/ctx.atr:0.0),(int)MathRound(insideRatio*(boxAge-1)),(int)MathCeil(minInside*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),(int)MathCeil(minTouch*((boxAge-1)*2)),diagReason)); Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
+      breakoutConfirmed=true;
       m_audit.expBreakoutConfirmed++;
       m_audit.expBodyOk++;
       m_audit.expCloseLocationOk++;
@@ -278,6 +281,8 @@ public:
 
       candidate.plan.strategy = STRATEGY_COMPRESSION_BREAKOUT;
       candidate.plan.direction = dir;
+      if(candidate.plan.entryPrice<=0.0 || candidate.plan.stopLoss<=0.0 || candidate.plan.takeProfit1<=0.0 || candidate.plan.takeProfit2<=0.0)
+        { m_audit.lastRejectReason="INVALID_PRICE_FIELDS"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
       candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
       if(!candidate.isValid)
         { m_audit.lastRejectReason="INVALID_SLTP"; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
@@ -286,6 +291,7 @@ public:
       m_audit.rawCreated++;
       StrategyTypes::CandidateAccept(candidate,"OK");
       candidate.rejectReason="OK";
+      Print(StringFormat("[COMPRESSION_BOX_DIAG] enoughBars=%s atrReady=%s boxReady=true boxFormed=true boxHigh=%.5f boxLow=%.5f boxWidth=%.5f boxWidthAtr=%.2f insideBars=%d requiredInsideBars=%d touches=%d requiredTouches=%d rangeTooWide=false breakoutConfirmed=%s reason=OK",(ctx.barsLoaded>=minBars?"true":"false"),(ctx.atr>0.0?"true":"false"),boxHigh,boxLow,boxWidth,(ctx.atr>0?boxWidth/ctx.atr:0.0),(int)MathRound(insideRatio*(boxAge-1)),(int)MathCeil(minInside*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),(int)MathCeil(minTouch*((boxAge-1)*2)),(breakoutConfirmed?"true":"false")));
       return true;
      }
 
