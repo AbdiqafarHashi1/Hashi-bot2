@@ -69,8 +69,8 @@ private:
       else if(!MathIsValidNumber(c.score.totalScore)) { rejectReason="INVALID_SCORE_NAN"; rejectDetail="score_not_valid_number"; }
       if(rejectReason!="OK")
         {
-         Print(StringFormat("[ARBITRATION_REJECT] strategy=%s reason=%s detail=%s valid=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
-                            StrategyTypes::StrategyName(c.strategy),rejectReason,rejectDetail,(c.isValid?"true":"false"),StrategyTypes::DirectionName(c.direction),
+         Print(StringFormat("[ARBITRATION_REJECT] strategy=%s reason=%s isValid=%s rejectReason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
+                            StrategyTypes::StrategyName(c.strategy),rejectReason,(c.isValid?"true":"false"),c.rejectReason,StrategyTypes::DirectionName(c.direction),
                             c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore));
          return;
         }
