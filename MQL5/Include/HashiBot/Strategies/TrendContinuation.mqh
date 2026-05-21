@@ -352,7 +352,7 @@ public:
         {
          m_audit.lastRejectReason=finalReason;
          if(finalReason=="INVALID_ENTRY_PRICE") m_audit.failInvalidPrice++;
-         else if(finalReason=="INVALID_SLTP" || finalReason==StrategyTypes::CANDIDATE_REASON_INVALID_SLTP) m_audit.failInvalidSltp++;
+         else if(finalReason=="INVALID_SLTP" || finalReason==CANDIDATE_REASON_INVALID_SLTP) m_audit.failInvalidSltp++;
          else if(finalReason=="INVALID_RR") m_audit.failRr++;
          else m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_OTHER, finalReason);
