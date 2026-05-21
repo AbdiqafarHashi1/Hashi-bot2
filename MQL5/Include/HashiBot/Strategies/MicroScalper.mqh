@@ -15,6 +15,7 @@ public:
      {
       StrategyTypes::InitCandidateBase(out, STRATEGY_MICRO_SCALPER);
       out.reason = "micro_diag";
+      out.rejectReason = "NO_SETUP";
 
       if(ctx.barsLoaded < 12) { out.rejectReason = "micro_not_enough_bars"; return false; }
       if(ctx.atr <= 0.0 || ctx.emaFast <= 0.0 || ctx.emaSlow <= 0.0) { out.rejectReason = "micro_indicators_not_ready"; return false; }
@@ -32,7 +33,7 @@ public:
       bool longBias = (close0 > ctx.emaFast || ctx.emaFast > ctx.emaSlow) && bullish;
       bool shortBias = (close0 < ctx.emaFast || ctx.emaFast < ctx.emaSlow) && bearish;
 
-      if(!longBias && !shortBias) { out.rejectReason = "micro_no_momentum_setup"; return false; }
+      if(!longBias && !shortBias) { out.rejectReason = "NO_MOMENTUM_SETUP"; return false; }
 
       double entry = (longBias ? (ctx.ask > 0.0 ? ctx.ask : ctx.currentClose) : (ctx.bid > 0.0 ? ctx.bid : ctx.currentClose));
       double atrStop = ctx.atr * 0.95;
@@ -40,7 +41,7 @@ public:
       double recentSwingShort = MathMax(high0, ctx.recentHigh[2]);
       double sl = longBias ? MathMin(entry - atrStop, recentSwingLong - 0.5 * ctx.point) : MathMax(entry + atrStop, recentSwingShort + 0.5 * ctx.point);
       double risk = MathAbs(entry - sl);
-      if(risk <= MathMax(2.0 * ctx.point, 1e-6)) { out.rejectReason = "micro_invalid_risk"; return false; }
+      if(risk <= MathMax(2.0 * ctx.point, 1e-6)) { out.rejectReason = "STOP_TOO_SMALL"; return false; }
 
       double rr = (regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN) ? 1.5 : 1.2;
       double tp1 = longBias ? (entry + risk * rr) : (entry - risk * rr);
@@ -64,7 +65,10 @@ public:
       out.score.scoreUnique = 0.66;
       out.score.scoreSuppression = 0.0;
       out.reason = (out.direction == TRADE_DIR_LONG ? "micro_long_closed_bar" : "micro_short_closed_bar");
-      return true;
+      out.isValid = StrategyTypes::IsTradePlanComplete(out.plan);
+      if(!out.isValid) out.rejectReason = "INVALID_SLTP";
+      else if(out.plan.riskR < 1.0) { out.isValid = false; out.rejectReason = "RR_TOO_LOW"; out.direction = TRADE_DIR_NONE; out.plan.Reset(); out.plan.strategy = STRATEGY_MICRO_SCALPER; }
+      return out.isValid;
      }
   };
 

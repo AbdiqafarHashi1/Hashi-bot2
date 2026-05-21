@@ -295,9 +295,9 @@ public:
    void PrintStrategyEngineResult(const string strategy,const bool called,const bool enabled,const bool eligible,const bool rawCandidate,const bool validCandidate,const string rejectStage,const string rejectReason,const StrategyCandidate &c,const MarketContext &ctx) const
      {
       double rr=(validCandidate?RRNetAfterSpread(c,ctx):0.0);
-      Print(StringFormat("[STRATEGY_ENGINE_RESULT] strategy=%s called=%s enabled=%s eligible=%s rawCandidate=%s validCandidate=%s rejectStage=%s rejectReason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
-                         strategy,(called?"true":"false"),(enabled?"true":"false"),(eligible?"true":"false"),(rawCandidate?"true":"false"),(validCandidate?"true":"false"),
-                         rejectStage,rejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,rr,c.score.totalScore));
+      Print(StringFormat("[STRATEGY_ENGINE_RESULT] strategy=%s called=%s enabled=%s eligible=%s candidateValid=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f rejectReason=%s",
+                         strategy,(called?"true":"false"),(enabled?"true":"false"),(eligible?"true":"false"),(validCandidate?"true":"false"),
+                         StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,rr,c.score.totalScore,rejectReason));
      }
 
    ArbitrationResult Evaluate(const MarketContext &ctx,const RegimeState &regime)
@@ -334,7 +334,7 @@ public:
             else if(c.score.totalScore<minTopScore) { m_invalidByStrategy[b]++; trendRejectStage="SCORE_GATE"; trendRejectReason="SCORE_TOO_LOW"; Print(StringFormat("[ARB_REJECT] strategy=%s reason=SCORE_TOO_LOW score=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),c.score.totalScore,minTopScore)); }
             else { trendValid=true; AddCandidateIfValid(c); }
            }
-         else { m_invalidByStrategy[b]++; trendRejectStage="VALIDATION"; trendRejectReason=(vreason==""?"NO_SETUP":vreason); if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=TrendContinuation",StrategyTypes::StrategyName(c.strategy),trendRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
+         else { m_invalidByStrategy[b]++; trendRejectStage="VALIDATION"; trendRejectReason=(c.rejectReason!=""?c.rejectReason:(vreason==""?"NO_SETUP":vreason)); if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=TrendContinuation",StrategyTypes::StrategyName(c.strategy),trendRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
          PrintStrategyEngineResult("TrendContinuation",true,true,true,trendAnalyzed,trendValid,trendRejectStage,trendRejectReason,c,ctx);
       }
       Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=TrendContinuation moduleCalled=%s enoughBars=%s indicatorsReady=%s regimePass=%s triggerPass=%s rawCandidateCreated=%s candidateValid=%s reason=%s",

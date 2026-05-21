@@ -24,11 +24,15 @@ private:
      };
    ProfileType                   m_profile;
    TrendAuditCounters            m_audit;
-   void Reject(StrategyCandidate &candidate,const SuppressionReason reason)
+   void Reject(StrategyCandidate &candidate,const SuppressionReason reason,const string rejectReason)
      {
       candidate.suppression.isSuppressed = true;
       candidate.suppression.reasonCount = 1;
       candidate.suppression.reasons[0] = reason;
+      candidate.direction = TRADE_DIR_NONE;
+      candidate.plan.Reset();
+      candidate.plan.strategy = STRATEGY_TREND_CONTINUATION;
+      candidate.rejectReason = rejectReason;
       candidate.isValid = false;
      }
 
@@ -150,11 +154,11 @@ public:
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_TREND_CONTINUATION);
       m_audit.called++;
       m_audit.lastRejectReason="none";
-      if(ctx.barsLoaded < 8){ m_audit.lastRejectReason="TRIGGER_NOT_FOUND"; Reject(candidate, SUPPRESS_OTHER); return false; }
+      if(ctx.barsLoaded < 8){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason); return false; }
       m_audit.enoughBarsPass++;
-      if(!(ctx.atr>0.0 && ctx.emaFast>0.0 && ctx.emaSlow>0.0)){ m_audit.lastRejectReason="ATR_INVALID"; Reject(candidate, SUPPRESS_VOLATILITY); return false; }
+      if(!(ctx.atr>0.0 && ctx.emaFast>0.0 && ctx.emaSlow>0.0)){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_VOLATILITY, m_audit.lastRejectReason); return false; }
       m_audit.indicatorReadyPass++;
-      if(ctx.spreadPoints <= 0.0){ m_audit.lastRejectReason="SPREAD_TOO_HIGH"; Reject(candidate, SUPPRESS_SPREAD); return false; }
+      if(ctx.spreadPoints <= 0.0){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_SPREAD, m_audit.lastRejectReason); return false; }
       m_audit.spreadPass++;
 
       bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
@@ -162,8 +166,8 @@ public:
       bool pseudoTrend=(testerMode && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow) && regime.confidence>=0.33);
       if(!(regimeTrend || pseudoTrend))
         {
-         m_audit.lastRejectReason="TREND_NOT_PRESENT";
-         Reject(candidate, SUPPRESS_INVALID_STRUCTURE);
+         m_audit.lastRejectReason="NO_SETUP";
+         Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason);
          return false;
         }
       double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:(testerMode?0.33:0.36));
@@ -171,26 +175,26 @@ public:
       double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:(testerMode?62.0:58.0));
       if(regime.confidence < minRegimeConf)
         {
-         m_audit.lastRejectReason="TREND_NOT_PRESENT";
-         Reject(candidate, SUPPRESS_MARKET_QUALITY); // low confidence
+         m_audit.lastRejectReason="NO_SETUP";
+         Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason); // low confidence
          return false;
         }
       if(ctx.marketQuality < minMq)
         {
-         m_audit.lastRejectReason="TREND_NOT_PRESENT";
-         Reject(candidate, SUPPRESS_MARKET_QUALITY); // low market quality
+         m_audit.lastRejectReason="NO_SETUP";
+         Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason); // low market quality
          return false;
         }
       if(ctx.choppiness > maxChop)
         {
-         m_audit.lastRejectReason="TREND_NOT_PRESENT";
-         Reject(candidate, SUPPRESS_MARKET_QUALITY); // high choppiness
+         m_audit.lastRejectReason="NO_SETUP";
+         Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason); // high choppiness
          return false;
         }
       if(ctx.atr <= 0.0)
         {
-         m_audit.lastRejectReason="ATR_INVALID";
-         Reject(candidate, SUPPRESS_VOLATILITY); // invalid ATR
+         m_audit.lastRejectReason="NO_SETUP";
+         Reject(candidate, SUPPRESS_VOLATILITY, m_audit.lastRejectReason); // invalid ATR
          return false;
         }
       m_audit.trendPass++;
@@ -206,8 +210,8 @@ public:
       bool structureOK = (dir == TRADE_DIR_LONG ? HasBullStructure(ctx, structureScore) : HasBearStructure(ctx, structureScore));
       if(!structureOK)
         {
-         m_audit.lastRejectReason="TRIGGER_NOT_FOUND";
-         Reject(candidate, SUPPRESS_INVALID_STRUCTURE);
+         m_audit.lastRejectReason="NO_SETUP";
+         Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason);
          return false;
         }
       m_audit.structurePass++;
@@ -218,25 +222,25 @@ public:
       bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast - 0.15*ctx.atr) : (ctx.currentClose <= ctx.emaFast + 0.15*ctx.atr));
       if(!(emaOk && rocOk && priceVsEma))
         {
-         m_audit.lastRejectReason="MOMENTUM_NOT_PRESENT";
-         Reject(candidate, SUPPRESS_INVALID_STRUCTURE); // momentum mismatch
+         m_audit.lastRejectReason="NO_SETUP";
+         Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason); // momentum mismatch
          return false;
         }
 
       double entryQuality = 0.0;
       double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
-      if(bodyAtr>(testerMode?1.70:1.45)){ m_audit.lastRejectReason="TRIGGER_NOT_FOUND"; Reject(candidate, SUPPRESS_AMBIGUOUS); return false; }
+      if(bodyAtr>(testerMode?1.70:1.45)){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason); return false; }
       if(!HasReclaimTrigger(ctx, dir, entryQuality))
         {
-         m_audit.lastRejectReason="TRIGGER_NOT_FOUND";
-         Reject(candidate, SUPPRESS_AMBIGUOUS); // no reclaim trigger
+         m_audit.lastRejectReason="NO_SETUP";
+         Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason); // no reclaim trigger
          return false;
         }
 
       double emaSlopeAtr = MathHelpers::SafeDivide(MathAbs(ctx.emaFast - ctx.emaSlow), MathMax(ctx.atr, 1e-6), 0.0);
       double minSlope=(m_profile==PROFILE_PROP_FIRM?0.12:(testerMode?0.06:0.08));
       if(emaSlopeAtr < minSlope)
-        { m_audit.lastRejectReason="MOMENTUM_NOT_PRESENT"; Reject(candidate, SUPPRESS_INVALID_STRUCTURE); return false; }
+        { m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason); return false; }
       m_audit.momentumPass++;
       m_audit.triggerPass++;
 
@@ -259,8 +263,8 @@ public:
       double atrMult=(testerMode?1.35:1.55);
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_TREND_CONTINUATION, dir, ctx, atrMult, candidate.plan))
         {
-         m_audit.lastRejectReason="SLTP_INVALID";
-         Reject(candidate, SUPPRESS_OTHER); // invalid trade plan
+         m_audit.lastRejectReason="INVALID_SLTP";
+         Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason); // invalid trade plan
          return false;
         }
 
@@ -280,8 +284,14 @@ public:
       double risk = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
       if(risk <= 0.0)
         {
-         m_audit.lastRejectReason="SLTP_INVALID";
-         Reject(candidate, SUPPRESS_OTHER);
+         m_audit.lastRejectReason="INVALID_SLTP";
+         Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
+         return false;
+        }
+      if(risk <= MathMax(2.0*ctx.point,1e-6))
+        {
+         m_audit.lastRejectReason="STOP_TOO_SMALL";
+         Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
          return false;
         }
       double rr1=(testerMode?0.95:1.05);
@@ -301,7 +311,7 @@ public:
       candidate.plan.direction = dir;
       candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
       if(candidate.isValid){ m_audit.slTpPass++; m_audit.rawCreated++; }
-      else { m_audit.lastRejectReason="SLTP_INVALID"; }
+      else { m_audit.lastRejectReason="INVALID_SLTP"; candidate.rejectReason=m_audit.lastRejectReason; }
       return candidate.isValid;
      }
 
