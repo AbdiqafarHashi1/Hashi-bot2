@@ -1324,7 +1324,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    if(chosenPlan.direction==TRADE_DIR_NONE || chosenPlan.entryPrice<=0.0 || chosenPlan.stopLoss<=0.0 || chosenPlan.takeProfit1<=0.0 || chosenPlan.takeProfit2<=0.0)
      {
       g_diagNoValidWinner++;
-      Print("[ARB] no_valid_winner reason=invalid_or_missing_selected_plan:"+selectedPlanReason);
+      Print(StringFormat("[NO_TRADE_DECISION] reason=NO_VALID_CANDIDATES topReason=%s trendReason=%s compressionReason=%s microReason=%s",selectedPlanReason,g_trendTopReason,g_compressionTopReason,g_microTopReason));
       return;
      }
 
@@ -1542,9 +1542,9 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       PrintFinalDecision(chosenPlan,g_starveSelected,"pre_order_block","ORDERMANAGER_NOT_REACHED",validPlan,false,risk.approved,risk.reason,true,portfolioOK,pReason,false,false,false,false,false,0,0,SymbolInfoDouble(symbol,SYMBOL_BID),SymbolInfoDouble(symbol,SYMBOL_ASK),risk.approvedLots);
    if(g_execProofOrderValidateReached) g_pipelineOrderValidateReached++;
    if(g_execProofOrderManagerReached) g_pipelineOrderManagerReached++;
-   Print(StringFormat("[SELECTED_FLOW] selectedStrategy=%s accepted=%s executeSelectedPlanCalled=%s riskReached=%s riskApproved=%s orderValidateReached=%s orderManagerReached=%s ordersAttempted=%d ordersSuccessful=%d reason=%s",
-                      StrategyName(chosenPlan.strategy),(finalAccepted?"true":"false"),(enteredExecuteSelectedPlan?"true":"false"),
-                      (riskReached?"true":"false"),(risk.approved?"true":"false"),(g_execProofOrderValidateReached?"true":"false"),(g_execProofOrderManagerReached?"true":"false"),g_pipelineOrdersAttempted,g_pipelineOrdersSuccessful,submitBlocker));
+   Print(StringFormat("[SELECTED_FLOW] selectedStrategy=%s candidateToPlanOk=%s acceptanceReached=%s acceptanceOk=%s riskReached=%s riskApproved=%s orderValidateReached=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s retcode=%d lastError=%d reason=%s",
+                      StrategyName(chosenPlan.strategy),(candidateToPlanOk?"true":"false"),"true",(finalAccepted?"true":"false"),
+                      (riskReached?"true":"false"),(risk.approved?"true":"false"),(g_execProofOrderValidateReached?"true":"false"),(g_execProofOrderManagerReached?"true":"false"),(g_execProofOrderAttempted?"true":"false"),(g_execProofOrderSuccess?"true":"false"),0,GetLastError(),submitBlocker));
    if(InpVerboseDiagnostics) Print(StringFormat("[SELECTED_TO_SUBMIT_PROOF] strategy=%s candidateToPlanOk=%s enteredExecuteSelectedPlan=%s planValid=%s riskReached=%s riskApproved=%s orderValidateReached=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s blocker=%s",
                       StrategyName(chosenPlan.strategy),(candidateToPlanOk?"true":"false"),(enteredExecuteSelectedPlan?"true":"false"),(g_execProofPlanValid?"true":"false"),(g_execProofRiskReached?"true":"false"),(g_execProofRiskApproved?"true":"false"),(g_execProofOrderValidateReached?"true":"false"),(g_execProofOrderManagerReached?"true":"false"),(g_execProofOrderAttempted?"true":"false"),(g_execProofOrderSuccess?"true":"false"),submitBlocker));
    if(arb.hasWinner){ int wb=StrategyBucket(arb.winningStrategy); g_arbWinnerScoreSum[wb]+=arb.winningScore; g_arbWinnerScoreCount[wb]++; if(chosenFromFallback) { g_winMicro++; g_microWinners++; } else if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_winTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_winPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_winCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_winExpansion++; }
