@@ -159,7 +159,7 @@ public:
                            (m_audit.failBreakout>=m_audit.failBody && m_audit.failBreakout>=m_audit.failCloseLocation && m_audit.failBreakout>=m_audit.failSltp && m_audit.failBreakout>=m_audit.failRr?"breakoutFail":
                            (m_audit.failBody>=m_audit.failCloseLocation && m_audit.failBody>=m_audit.failSltp && m_audit.failBody>=m_audit.failRr?"bodyFail":
                            (m_audit.failCloseLocation>=m_audit.failSltp && m_audit.failCloseLocation>=m_audit.failRr?"closeLocationFail":
-                           (m_audit.failSltp>=m_audit.failRr?"sltpFail":"rrFail"))))));
+                           (m_audit.failSltp>=m_audit.failRr?"sltpFail":"rrFail")))))));
          return StringFormat("[COMPRESSION_EXPOSURE_SUMMARY] called=%d valid=%d topReject=%s boxReadyFail=%d boxFormedFail=%d rangeFail=%d breakoutFail=%d bodyFail=%d closeLocationFail=%d sltpFail=%d rrFail=%d",
                              m_audit.called,m_audit.expValid,topReject,m_audit.failBoxReady,m_audit.failBoxFormed,m_audit.failRange,m_audit.failBreakout,m_audit.failBody,m_audit.failCloseLocation,m_audit.failSltp,m_audit.failRr);
         }

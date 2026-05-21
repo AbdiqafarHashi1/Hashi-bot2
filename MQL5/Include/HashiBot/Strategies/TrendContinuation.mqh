@@ -154,7 +154,7 @@ public:
                            (m_audit.failSlope>=m_audit.failMomentum && m_audit.failSlope>=m_audit.failPullback && m_audit.failSlope>=m_audit.failSltp && m_audit.failSlope>=m_audit.failRr?"slopeFail":
                            (m_audit.failMomentum>=m_audit.failPullback && m_audit.failMomentum>=m_audit.failSltp && m_audit.failMomentum>=m_audit.failRr?"momentumFail":
                            (m_audit.failPullback>=m_audit.failSltp && m_audit.failPullback>=m_audit.failRr?"pullbackFail":
-                           (m_audit.failSltp>=m_audit.failRr?"sltpFail":"rrFail")))));
+                           (m_audit.failSltp>=m_audit.failRr?"sltpFail":"rrFail"))))));
          return StringFormat("[TREND_EXPOSURE_SUMMARY] called=%d valid=%d topReject=%s structureFail=%d emaFail=%d slopeFail=%d momentumFail=%d pullbackFail=%d sltpFail=%d rrFail=%d",
                              m_audit.called,m_audit.expValid,topReject,m_audit.failStructure,m_audit.failEma,m_audit.failSlope,m_audit.failMomentum,m_audit.failPullback,m_audit.failSltp,m_audit.failRr);
         }
