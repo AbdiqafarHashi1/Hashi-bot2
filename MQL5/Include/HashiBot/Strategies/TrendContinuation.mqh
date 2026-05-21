@@ -194,25 +194,25 @@ public:
       double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:(testerMode?62.0:58.0));
       if(regime.confidence < minRegimeConf)
         {
-         m_audit.lastRejectReason="NO_SETUP";
+         m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
          m_audit.failNoSetup++; Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
          return false;
         }
       if(ctx.marketQuality < minMq)
         {
-         m_audit.lastRejectReason="NO_SETUP";
+         m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
          m_audit.failNoSetup++; Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
          return false;
         }
       if(ctx.choppiness > maxChop)
         {
-         m_audit.lastRejectReason="NO_SETUP";
+         m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
          m_audit.failNoSetup++; Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
          return false;
         }
       if(ctx.atr <= 0.0)
         {
-         m_audit.lastRejectReason="NO_SETUP";
+         m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_PRICE_FIELDS;
          m_audit.failNoSetup++; Reject(candidate, SUPPRESS_VOLATILITY, m_audit.lastRejectReason);
          return false;
         }
@@ -290,10 +290,23 @@ public:
       double atrMult=(testerMode?1.20:1.45);
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_TREND_CONTINUATION, dir, ctx, atrMult, candidate.plan))
         {
-         m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP;
-         m_audit.failInvalidSltp++;
-         Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason); // invalid trade plan
-         return false;
+         // micro-style fallback: explicit direction/entry/SL/TP construction to avoid dropping valid setup path
+         candidate.plan.strategy = STRATEGY_TREND_CONTINUATION;
+         candidate.plan.direction = dir;
+         candidate.plan.entryPrice = (dir == TRADE_DIR_LONG ? (ctx.ask > 0.0 ? ctx.ask : ctx.currentClose) : (ctx.bid > 0.0 ? ctx.bid : ctx.currentClose));
+         double fallbackStop = MathMax(ctx.atr * atrMult, MathMax(2.0 * ctx.point, 1e-6));
+         if(dir == TRADE_DIR_LONG)
+           {
+            candidate.plan.stopLoss = candidate.plan.entryPrice - fallbackStop;
+            candidate.plan.takeProfit1 = candidate.plan.entryPrice + fallbackStop;
+            candidate.plan.takeProfit2 = candidate.plan.entryPrice + 2.0 * fallbackStop;
+           }
+         else
+           {
+            candidate.plan.stopLoss = candidate.plan.entryPrice + fallbackStop;
+            candidate.plan.takeProfit1 = candidate.plan.entryPrice - fallbackStop;
+            candidate.plan.takeProfit2 = candidate.plan.entryPrice - 2.0 * fallbackStop;
+           }
         }
 
       // structure-aware safer stop (further stop for long=lower price, for short=higher price)
@@ -399,8 +412,9 @@ public:
          Print(StringFormat("[TREND_FAILURE_SNAPSHOT] n=%d barTime=%s structurePass=%s momentumPass=%s reclaimPass=%s directionPass=%s setupFound=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f reason=%s finalReason=%s priceFieldsPass=%s sltpPass=%s rrPass=%s scorePass=%s candidateAcceptCalled=%s returnValue=%s atr=%.5f roc=%.5f slope=%.5f emaFast=%.5f emaSlow=%.5f close=%.5f bid=%.5f ask=%.5f",
                             (int)m_audit.nearValidSnapshots,TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),(structureOK?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(candidate.setupFound?"true":"false"),(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,candidate.rejectReason,finalReason,(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(candidateAcceptCalled?"true":"false"),(finalValid?"true":"false"),ctx.atr,ctx.roc,emaSlopeAtr,ctx.emaFast,ctx.emaSlow,ctx.currentClose,ctx.bid,ctx.ask));
         }
-      Print(StringFormat("[TREND_CANDIDATE_BUILD] barTime=%s path=%s structurePass=%s momentumPass=%s reclaimPass=%s directionPass=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
-                         TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),setupPath,(structureOK?"true":"false"),(momentumPathOk?"true":"false"),(reclaimPathOk?"true":"false"),(directionPass?"true":"false"),(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
+      if((setupPath!="none" || finalValid) && m_audit.nearValidSnapshots<=20)
+         Print(StringFormat("[TREND_ACCEPT_ATTEMPT] path=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
+                            setupPath,(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
       Print(StringFormat("[TREND_FINAL_VALIDATION] setupFound=%s momentumPass=%s reclaimPass=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
                          (finalValid?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       return finalValid;

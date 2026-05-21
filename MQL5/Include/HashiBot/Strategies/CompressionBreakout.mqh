@@ -282,7 +282,25 @@ public:
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + entryQ) / 4.0, 0.0, 1.0);
 
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, (testerMode?0.90:1.0), candidate.plan))
-        { gatePlan=1; m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+        {
+         // micro-style fallback: explicit direction/entry/SL/TP construction once breakout side exists
+         candidate.plan.strategy = STRATEGY_COMPRESSION_BREAKOUT;
+         candidate.plan.direction = dir;
+         candidate.plan.entryPrice = (dir == TRADE_DIR_LONG ? (ctx.ask > 0.0 ? ctx.ask : ctx.currentClose) : (ctx.bid > 0.0 ? ctx.bid : ctx.currentClose));
+         double fallbackStop = MathMax(ctx.atr * (testerMode?0.90:1.0), MathMax(2.0 * ctx.point, 1e-6));
+         if(dir == TRADE_DIR_LONG)
+           {
+            candidate.plan.stopLoss = candidate.plan.entryPrice - fallbackStop;
+            candidate.plan.takeProfit1 = candidate.plan.entryPrice + fallbackStop;
+            candidate.plan.takeProfit2 = candidate.plan.entryPrice + 2.0 * fallbackStop;
+           }
+         else
+           {
+            candidate.plan.stopLoss = candidate.plan.entryPrice + fallbackStop;
+            candidate.plan.takeProfit1 = candidate.plan.entryPrice - fallbackStop;
+            candidate.plan.takeProfit2 = candidate.plan.entryPrice - 2.0 * fallbackStop;
+           }
+        }
       m_audit.expPricePlanOk++;
 
       // SL around opposite/inside box edge with ATR/spread buffer
@@ -366,8 +384,9 @@ public:
          Print(StringFormat("[COMPRESSION_FAILURE_SNAPSHOT] n=%d barTime=%s boxReady=%s boxFormed=%s breakoutConfirmed=%s direction=%d setupFound=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f reason=%s finalReason=%s priceFieldsPass=%s sltpPass=%s rrPass=%s scorePass=%s candidateAcceptCalled=%s returnValue=%s boxHigh=%.5f boxLow=%.5f boxWidth=%.5f insideBars=%d touches=%d close=%.5f bid=%.5f ask=%.5f atr=%.5f spread=%.2f",
                            (int)m_audit.nearValidSnapshots,TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),(m_audit.expBoxReady>0?"true":"false"),(m_audit.expBoxFormed>0?"true":"false"),(breakoutConfirmed?"true":"false"),(int)candidate.plan.direction,(candidate.setupFound?"true":"false"),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,candidate.rejectReason,finalReason,(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(candidateAcceptCalled?"true":"false"),(finalValid?"true":"false"),boxHigh,boxLow,boxWidth,(int)MathRound(insideRatio*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),ctx.currentClose,ctx.bid,ctx.ask,ctx.atr,ctx.spreadPoints));
         }
-      Print(StringFormat("[COMPRESSION_CANDIDATE_BUILD] barTime=%s boxReady=%s boxFormed=%s breakoutConfirmed=%s direction=%d boxHigh=%.5f boxLow=%.5f boxWidth=%.5f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
-                         TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),"true","true",(breakoutConfirmed?"true":"false"),(int)candidate.plan.direction,boxHigh,boxLow,boxWidth,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
+      if((breakoutConfirmed || finalValid) && m_audit.nearValidSnapshots<=20)
+         Print(StringFormat("[COMPRESSION_ACCEPT_ATTEMPT] side=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
+                            (dir==TRADE_DIR_LONG?"long":(dir==TRADE_DIR_SHORT?"short":"none")),(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
       Print(StringFormat("[COMPRESSION_FINAL_VALIDATION] boxReady=true boxFormed=true breakoutConfirmed=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",(breakoutConfirmed?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       return finalValid;
      }
