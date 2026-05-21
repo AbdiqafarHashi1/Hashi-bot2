@@ -332,6 +332,92 @@ string StrategyResultName(const int bucket)
    if(bucket==4) return "MicroScalper";
    return "UnknownStrategy";
   }
+
+
+int StrategyFromEncodedComment(const string comment)
+  {
+   if(StringLen(comment)<=0) return -1;
+   string parts[]; int n=StringSplit(comment,'|',parts);
+   if(n<=0) return -1;
+   string last=parts[n-1]; StringTrimLeft(last); StringTrimRight(last);
+   if(last=="") return -1;
+   int code=(int)StringToInteger(last);
+   if(code==(int)STRATEGY_TREND_CONTINUATION) return 0;
+   if(code==(int)STRATEGY_PULLBACK_CONTINUATION) return 1;
+   if(code==(int)STRATEGY_COMPRESSION_BREAKOUT) return 2;
+   if(code==(int)STRATEGY_EXPANSION_MOMENTUM) return 3;
+   if(code==(int)STRATEGY_MICRO_SCALPER) return 4;
+   return -1;
+  }
+
+int ResolveStrategyBucketFromDeal(const long magic,const string comment,const ulong order,const ulong positionId)
+  {
+   if((long)MagicNumber>0 && magic==(long)MagicNumber)
+     {
+      int fromComment=StrategyFromEncodedComment(comment);
+      if(fromComment>=0) return fromComment;
+      if(StringFind(comment,"MicroScalper")>=0 || StringFind(comment,"micro")>=0) return 4;
+      if(StringFind(comment,"Compression")>=0 || StringFind(comment,"compression")>=0) return 2;
+      if(StringFind(comment,"Trend")>=0 || StringFind(comment,"trend")>=0) return 0;
+      if(StringFind(comment,"Pullback")>=0 || StringFind(comment,"pullback")>=0) return 1;
+      if(StringFind(comment,"Expansion")>=0 || StringFind(comment,"expansion")>=0) return 3;
+      if(StringFind(comment,TradeCommentPrefix)>=0) return 4;
+     }
+   return -1;
+  }
+
+void UpdateAttributionFromDeal(const ulong deal,const string source,long &openDeals,long &closeDeals,long &attributedClosed,long &unknownClosed,double &netProfit)
+  {
+   const long entryType=(long)HistoryDealGetInteger(deal,DEAL_ENTRY);
+   if(entryType==DEAL_ENTRY_IN) { openDeals++; return; }
+   if(entryType!=DEAL_ENTRY_OUT && entryType!=DEAL_ENTRY_INOUT && entryType!=DEAL_ENTRY_OUT_BY) return;
+   closeDeals++;
+   double profit=HistoryDealGetDouble(deal,DEAL_PROFIT);
+   double commission=HistoryDealGetDouble(deal,DEAL_COMMISSION);
+   double swap=HistoryDealGetDouble(deal,DEAL_SWAP);
+   double net=profit+commission+swap;
+   ulong positionId=(ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+   ulong order=(ulong)HistoryDealGetInteger(deal,DEAL_ORDER);
+   long magic=(long)HistoryDealGetInteger(deal,DEAL_MAGIC);
+   string comment=HistoryDealGetString(deal,DEAL_COMMENT);
+   int bucket=ResolveStrategyBucketFromDeal(magic,comment,order,positionId);
+   string strategyName=(bucket>=0?StrategyResultName(bucket):"UnknownStrategy");
+   string result=(net>0.0?"WIN":(net<0.0?"LOSS":"BREAKEVEN"));
+   if(bucket>=0)
+     {
+      attributedClosed++;
+      g_closedCount[bucket]++;
+      g_netPnl[bucket]+=net;
+      if(net>0.0) g_sumR[bucket]+=net;
+      else if(net<0.0) g_sumR[bucket]-=MathAbs(net);
+      if(bucket==0){ if(net>0.0) g_winTrend++; else if(net<0.0) g_lossTrend++; }
+      else if(bucket==1){ if(net>0.0) g_winPullback++; else if(net<0.0) g_lossPullback++; }
+      else if(bucket==2){ if(net>0.0) g_winCompression++; else if(net<0.0) g_lossCompression++; }
+      else if(bucket==3){ if(net>0.0) g_winExpansion++; else if(net<0.0) g_lossExpansion++; }
+      else if(bucket==4){ if(net>0.0) g_winMicro++; else if(net<0.0) g_lossMicro++; }
+     }
+   else unknownClosed++;
+   netProfit+=net;
+   Print(StringFormat("[TRADE_RESULT] strategy=%s positionId=%I64d deal=%I64d order=%I64d entryType=%d profit=%.2f commission=%.2f swap=%.2f net=%.2f result=%s source=%s",strategyName,positionId,deal,order,entryType,profit,commission,swap,net,result,source));
+  }
+
+void RebuildClosedResultsFromHistory(const string source,long &testerDeals,long &openDeals,long &closeDeals,long &attributedClosed,long &unknownClosed,double &netProfit)
+  {
+   for(int i=0;i<5;i++){ g_closedCount[i]=0; g_netPnl[i]=0.0; g_sumR[i]=0.0; }
+   g_winTrend=0; g_winPullback=0; g_winCompression=0; g_winExpansion=0; g_winMicro=0;
+   g_lossTrend=0; g_lossPullback=0; g_lossCompression=0; g_lossExpansion=0; g_lossMicro=0;
+   testerDeals=0; openDeals=0; closeDeals=0; attributedClosed=0; unknownClosed=0; netProfit=0.0;
+   if(!HistorySelect(0,TimeCurrent())) return;
+   int total=(int)HistoryDealsTotal();
+   testerDeals=total;
+   for(int i=0;i<total;i++)
+     {
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0) continue;
+      UpdateAttributionFromDeal(deal,source,openDeals,closeDeals,attributedClosed,unknownClosed,netProfit);
+     }
+  }
+
 void BuildRiskArbFromPlan(const TradePlan &plan,const double score,const SignalGrade grade,ArbitrationResult &riskArb)
   {
    riskArb.Reset();
@@ -1597,6 +1683,9 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
    long riskApprovedCount=MathMax(0L,g_pipelineRiskReached-g_finalRiskRejected);
    Print(StringFormat("[TEST_SUMMARY] candidates=%d validPlans=%d selected=%d accepted=%d executeSelectedPlanCalled=%d riskReached=%d riskApproved=%d riskRejected=%d orderValidateReached=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topReason=%s",
                       g_starveRawCandidates,g_starveValidPlans,g_starveSelected,g_pipelineAcceptedCount,g_pipelineExecuteSelectedPlanCalled,g_pipelineRiskReached,riskApprovedCount,g_finalRiskRejected,g_pipelineOrderValidateReached,g_pipelineOrderManagerReached,g_pipelineOrdersAttempted,g_pipelineOrdersSuccessful,topReason));
+   long testerDeals=0,openDeals=0,closeDeals=0,attributedClosed=0,unknownClosed=0;
+   double historyNetProfit=0.0;
+   RebuildClosedResultsFromHistory("HistoryRebuild",testerDeals,openDeals,closeDeals,attributedClosed,unknownClosed,historyNetProfit);
    int resultBuckets[4]={0,2,4,-1};
    double portfolioGrossProfit=0.0,portfolioGrossLoss=0.0,portfolioNet=0.0,portfolioBest=0.0,portfolioWorst=0.0;
    long portfolioOpened=0,portfolioClosed=0,portfolioWins=0,portfolioLosses=0;
@@ -1610,13 +1699,14 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
       double sumWin=0.0,sumLoss=0.0;
       if(b>=0)
         {
-         wins=(long)MathRound((g_closedCount[b]+g_sumR[b])/2.0);
-         losses=g_closedCount[b]-wins;
-         if(wins<0) wins=0;
-         if(losses<0) losses=0;
+         if(b==0){ wins=g_winTrend; losses=g_lossTrend; }
+         else if(b==1){ wins=g_winPullback; losses=g_lossPullback; }
+         else if(b==2){ wins=g_winCompression; losses=g_lossCompression; }
+         else if(b==3){ wins=g_winExpansion; losses=g_lossExpansion; }
+         else if(b==4){ wins=g_winMicro; losses=g_lossMicro; }
          if((wins+losses)>g_closedCount[b]) losses=MathMax(0,g_closedCount[b]-wins);
-         sumWin=MathMax(0.0,g_sumR[b]);
-         sumLoss=MathAbs(MathMin(0.0,g_sumR[b]));
+         sumWin=MathMax(0.0,g_netPnl[b]);
+         sumLoss=MathAbs(MathMin(0.0,g_netPnl[b]));
         }
       double net=(b>=0?g_netPnl[b]:0.0);
       double grossProfit=MathMax(0.0,net);
@@ -1642,6 +1732,8 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
    double portfolioWinRate=((portfolioWins+portfolioLosses)>0?100.0*(double)portfolioWins/(double)(portfolioWins+portfolioLosses):0.0);
    Print(StringFormat("[PORTFOLIO_RESULT_SUMMARY] opened=%d closed=%d wins=%d losses=%d winRate=%.2f grossProfit=%.2f grossLoss=%.2f netProfit=%.2f profitFactor=%.2f maxDrawdownApprox=NA topWinningStrategy=%s topLosingStrategy=%s",
                       portfolioOpened,portfolioClosed,portfolioWins,portfolioLosses,portfolioWinRate,portfolioGrossProfit,portfolioGrossLoss,portfolioNet,pf,topStrategy,bottomStrategy));
+   Print(StringFormat("[RESULT_ATTRIBUTION_CHECK] testerDeals=%d openDeals=%d closeDeals=%d attributedClosed=%d unknownClosed=%d strategyClosedTotal=%d portfolioClosed=%d netProfit=%.2f",
+                      testerDeals,openDeals,closeDeals,attributedClosed,unknownClosed,(g_closedCount[0]+g_closedCount[1]+g_closedCount[2]+g_closedCount[3]+g_closedCount[4]),portfolioClosed,portfolioNet));
    Print(StringFormat("[STRATEGY_ACCEPTANCE_SUMMARY] microSelected=%d microAccepted=%d microRejected=%d microTopReason=%s trendSelected=%d trendAccepted=%d trendRejected=%d trendTopReason=%s compressionSelected=%d compressionAccepted=%d compressionRejected=%d compressionTopReason=%s",
                       g_microSelected,g_microAcceptedFinal,g_microRejectedFinal,g_microTopReason,g_trendSelected,g_trendAcceptedFinal,g_trendRejectedFinal,g_trendTopReason,g_compressionSelected,g_compressionAcceptedFinal,g_compressionRejectedFinal,g_compressionTopReason));
    if(InpVerboseDiagnostics) Print(StringFormat("[STRATEGY_TOTALS] trendRaw=%d trendValid=%d trendSelected=%d compressionRaw=%d compressionValid=%d compressionSelected=%d microRaw=%d microValid=%d microSelected=%d",
