@@ -325,6 +325,13 @@ string StrategyName(const StrategyType st)
    if(st==STRATEGY_MICRO_SCALPER) return "micro";
    return "micro";
   }
+string StrategyResultName(const int bucket)
+  {
+   if(bucket==0) return "TrendContinuation";
+   if(bucket==2) return "CompressionBreakout";
+   if(bucket==4) return "MicroScalper";
+   return "UnknownStrategy";
+  }
 void BuildRiskArbFromPlan(const TradePlan &plan,const double score,const SignalGrade grade,ArbitrationResult &riskArb)
   {
    riskArb.Reset();
@@ -745,6 +752,9 @@ bool ExecuteSelectedPlan(const TradePlan &plan,string &blocker)
    RiskDecision sendRisk=g_execRisk; sendRisk.approvedLots=volume; string execReason=""; g_testerOrdersAttempted++; orderAttempted=true; g_execProofOrderAttempted=true;
    bool submitted=g_order.Submit(plan, sendRisk, g_execCtx, (testerMode?EXEC_MODE_TESTER_SIM:executionMode), true, false, false, true, MagicNumber, maxSlippagePoints, TradeCommentPrefix, g_execTradeState, execReason);
    orderSuccess=submitted; g_execProofOrderSuccess=submitted; retcode=(int)g_order.LastRetcode(); lastErr=GetLastError();
+   Print(StringFormat("[TRADE_OPEN_ATTRIBUTION] symbol=%s timeframe=%s barTime=%s strategy=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f riskPercent=%.2f approvedLot=%.2f order=%I64d deal=%I64d retcode=%d comment=%s",
+                      g_execSymbol,TfName(),TimeToString(g_execCtx.barTime,TIME_DATE|TIME_MINUTES),StrategyName(plan.strategy),DirName(plan.direction),
+                      plan.entryPrice,plan.stopLoss,plan.takeProfit1,plan.takeProfit2,plan.riskR,g_execScore,g_risk.RiskPercent(),volume,g_order.LastOrder(),g_order.LastDeal(),retcode,TradeCommentPrefix));
    Print(StringFormat("[ORDERMANAGER_RESULT] attempted=%s success=%s retcode=%d retcodeDescription=%s lastError=%d order=%I64d deal=%I64d reason=%s",
                       (g_order.LastAttempted()?"true":"false"),(submitted?"true":"false"),retcode,g_order.LastRetcodeDescription(),lastErr,g_order.LastOrder(),g_order.LastDeal(),execReason));
    if(!submitted){ blocker="ORDERMANAGER_REJECTED"; stage="ORDER"; reason=blocker; Print(StringFormat("[FINAL_DECISION] stage=order reason=ORDERMANAGER_REJECTED strategy=%s retcode=%d lastError=%d orderReason=%s",StrategyName(plan.strategy),retcode,lastErr,execReason)); }
@@ -991,6 +1001,13 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
       if(!wasClosed && active.closed)
         {
          g_exitTotal++; g_exitHoldBarsSum+=active.barsInTrade;
+         double grossProfit=(active.realizedR>0.0?active.realizedR*active.riskAmount:0.0);
+         double grossLoss=(active.realizedR<0.0?active.realizedR*active.riskAmount:0.0);
+         string closeReason=(active.closeReason!=""?active.closeReason:"UNKNOWN");
+         Print(StringFormat("[TRADE_RESULT] symbol=%s strategy=%s direction=%s entry=%.5f exit=%.5f volume=%.2f profit=%.2f commission=%.2f swap=%.2f netProfit=%.2f rr=%.2f score=%.2f openTime=%s closeTime=%s closeReason=%s order=%I64d deal=%I64d positionId=%I64d",
+                            symbol,StrategyName(active.strategy),DirName(active.direction),active.entryPrice,ctx.currentClose,active.approvedLots,
+                            grossProfit,grossLoss,0.0,(active.realizedR*active.riskAmount),active.realizedR,active.initialRiskR,
+                            TimeToString(active.openTime,TIME_DATE|TIME_MINUTES),TimeToString(TimeCurrent(),TIME_DATE|TIME_MINUTES),closeReason,active.ticket,active.ticket,active.ticket));
          if(active.closeReason=="tp_hit"){ g_exitTp2++; Print(StringFormat("[LIFECYCLE_ACTION] action=tp2_close sym=%s ticket=%I64d",symbol,active.ticket)); }
          else if(active.closeReason=="breakeven_exit"){ g_exitBE++; Print(StringFormat("[LIFECYCLE_ACTION] action=be_move sym=%s ticket=%I64d",symbol,active.ticket)); }
          else if(active.closeReason=="timeout"){ g_exitTime++; Print(StringFormat("[LIFECYCLE_ACTION] action=time_stop sym=%s ticket=%I64d",symbol,active.ticket)); }
@@ -1580,6 +1597,51 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
    long riskApprovedCount=MathMax(0L,g_pipelineRiskReached-g_finalRiskRejected);
    Print(StringFormat("[TEST_SUMMARY] candidates=%d validPlans=%d selected=%d accepted=%d executeSelectedPlanCalled=%d riskReached=%d riskApproved=%d riskRejected=%d orderValidateReached=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topReason=%s",
                       g_starveRawCandidates,g_starveValidPlans,g_starveSelected,g_pipelineAcceptedCount,g_pipelineExecuteSelectedPlanCalled,g_pipelineRiskReached,riskApprovedCount,g_finalRiskRejected,g_pipelineOrderValidateReached,g_pipelineOrderManagerReached,g_pipelineOrdersAttempted,g_pipelineOrdersSuccessful,topReason));
+   int resultBuckets[4]={0,2,4,-1};
+   double portfolioGrossProfit=0.0,portfolioGrossLoss=0.0,portfolioNet=0.0,portfolioBest=0.0,portfolioWorst=0.0;
+   long portfolioOpened=0,portfolioClosed=0,portfolioWins=0,portfolioLosses=0;
+   double topNet=-1.0e10,bottomNet=1.0e10; string topStrategy="UnknownStrategy",bottomStrategy="UnknownStrategy";
+   for(int rbi=0;rbi<4;rbi++)
+     {
+      int b=resultBuckets[rbi];
+      long opened=(b>=0?g_pipeSubmitOk[b]:0);
+      long closed=(b>=0?g_closedCount[b]:0);
+      long wins=0,losses=0;
+      double sumWin=0.0,sumLoss=0.0;
+      if(b>=0)
+        {
+         wins=(long)MathRound((g_closedCount[b]+g_sumR[b])/2.0);
+         losses=g_closedCount[b]-wins;
+         if(wins<0) wins=0;
+         if(losses<0) losses=0;
+         if((wins+losses)>g_closedCount[b]) losses=MathMax(0,g_closedCount[b]-wins);
+         sumWin=MathMax(0.0,g_sumR[b]);
+         sumLoss=MathAbs(MathMin(0.0,g_sumR[b]));
+        }
+      double net=(b>=0?g_netPnl[b]:0.0);
+      double grossProfit=MathMax(0.0,net);
+      double grossLoss=MathAbs(MathMin(0.0,net));
+      double avg=(closed>0?net/(double)closed:0.0);
+      double winRate=((wins+losses)>0?100.0*(double)wins/(double)(wins+losses):0.0);
+      double bestTrade=(wins>0?sumWin/(double)wins:0.0);
+      double worstTrade=(losses>0?(-sumLoss/(double)losses):0.0);
+      string name=StrategyResultName(b);
+      if(b>=0)
+        {
+         portfolioOpened+=opened; portfolioClosed+=closed; portfolioWins+=wins; portfolioLosses+=losses;
+         portfolioGrossProfit+=grossProfit; portfolioGrossLoss+=grossLoss; portfolioNet+=net;
+         if((portfolioWins+portfolioLosses)==(wins+losses)){ portfolioBest=bestTrade; portfolioWorst=worstTrade; }
+         else { portfolioBest=MathMax(portfolioBest,bestTrade); portfolioWorst=MathMin(portfolioWorst,worstTrade); }
+         if(net>topNet){ topNet=net; topStrategy=name; }
+         if(net<bottomNet){ bottomNet=net; bottomStrategy=name; }
+        }
+      Print(StringFormat("[STRATEGY_RESULT_SUMMARY] strategy=%s opened=%d closed=%d wins=%d losses=%d winRate=%.2f grossProfit=%.2f grossLoss=%.2f netProfit=%.2f avgProfit=%.2f bestTrade=%.2f worstTrade=%.2f",
+                         name,opened,closed,wins,losses,winRate,grossProfit,grossLoss,net,avg,bestTrade,worstTrade));
+     }
+   double pf=(portfolioGrossLoss>0.0?portfolioGrossProfit/portfolioGrossLoss:(portfolioGrossProfit>0.0?2.0:0.0));
+   double portfolioWinRate=((portfolioWins+portfolioLosses)>0?100.0*(double)portfolioWins/(double)(portfolioWins+portfolioLosses):0.0);
+   Print(StringFormat("[PORTFOLIO_RESULT_SUMMARY] opened=%d closed=%d wins=%d losses=%d winRate=%.2f grossProfit=%.2f grossLoss=%.2f netProfit=%.2f profitFactor=%.2f maxDrawdownApprox=NA topWinningStrategy=%s topLosingStrategy=%s",
+                      portfolioOpened,portfolioClosed,portfolioWins,portfolioLosses,portfolioWinRate,portfolioGrossProfit,portfolioGrossLoss,portfolioNet,pf,topStrategy,bottomStrategy));
    Print(StringFormat("[STRATEGY_ACCEPTANCE_SUMMARY] microSelected=%d microAccepted=%d microRejected=%d microTopReason=%s trendSelected=%d trendAccepted=%d trendRejected=%d trendTopReason=%s compressionSelected=%d compressionAccepted=%d compressionRejected=%d compressionTopReason=%s",
                       g_microSelected,g_microAcceptedFinal,g_microRejectedFinal,g_microTopReason,g_trendSelected,g_trendAcceptedFinal,g_trendRejectedFinal,g_trendTopReason,g_compressionSelected,g_compressionAcceptedFinal,g_compressionRejectedFinal,g_compressionTopReason));
    if(InpVerboseDiagnostics) Print(StringFormat("[STRATEGY_TOTALS] trendRaw=%d trendValid=%d trendSelected=%d compressionRaw=%d compressionValid=%d compressionSelected=%d microRaw=%d microValid=%d microSelected=%d",
