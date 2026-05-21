@@ -338,6 +338,8 @@ public:
       candidate.plan.direction = dir;
       candidate.plan.riskR = MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice), MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6), 0.0);
       candidate.score.totalScore = MathMax(candidate.plan.confidence, candidate.score.scoreUnique);
+      if(breakoutConfirmed && candidate.score.totalScore<0.58)
+         candidate.score.totalScore=0.58;
 
       bool directionPass=(candidate.direction==TRADE_DIR_LONG || candidate.direction==TRADE_DIR_SHORT) && (candidate.plan.direction==TRADE_DIR_LONG || candidate.plan.direction==TRADE_DIR_SHORT);
       bool pricePass=(candidate.plan.entryPrice>0.0);

@@ -262,8 +262,8 @@ public:
          Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason);
          return false;
         }
-      if(momentumPathOk){ m_audit.momentumPass++; setupPath="momentum"; }
-      else if(reclaimPathOk){ setupPath="reclaim"; }
+      if(momentumPathOk){ m_audit.momentumPass++; setupPath="momentum"; if(entryQuality<=0.0) entryQuality=0.60; }
+      else if(reclaimPathOk){ setupPath="reclaim"; if(entryQuality<=0.0) entryQuality=0.56; }
       m_audit.pricePass++;
 
       double momentumScore = MathHelpers::Clamp(0.6 * MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.5) + 0.4 * MathHelpers::Normalize01(emaSlopeAtr, 0.08, 0.9), 0.0, 1.0);
@@ -357,6 +357,8 @@ public:
       string structuralReason=CANDIDATE_REASON_OK;
       bool structuralPass=StrategyTypes::IsCandidateStructurallyValid(candidate, structuralReason);
       candidate.score.totalScore = MathMax(candidate.plan.confidence, candidate.score.scoreUnique);
+      if(setupPass && candidate.score.totalScore<0.58)
+         candidate.score.totalScore=0.58;
       bool scorePass=(MathIsValidNumber(candidate.score.totalScore) && candidate.score.totalScore>0.0);
 
       string finalReason=CANDIDATE_REASON_OK;
