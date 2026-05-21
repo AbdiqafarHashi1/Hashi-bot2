@@ -201,6 +201,8 @@ public:
    long MicroRawCreated() const { return m_microRawCreated; }
    string TrendExposureSummary() const { return m_trend.ExposureSummary(); }
    string CompressionExposureSummary() const { return m_compression.ExposureSummary(); }
+   string TrendProvenBlockerSummary() const { return m_trend.ProvenBlockerSummary(); }
+   string CompressionProvenBlockerSummary() const { return m_compression.ProvenBlockerSummary(); }
    long MicroValidCreated() const { return m_microValidCreated; }
 
    void PrintStrategyTriggerAudit() const
