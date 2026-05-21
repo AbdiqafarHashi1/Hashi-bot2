@@ -35,6 +35,8 @@ private:
       candidate.suppression.reasons[0] = reason;
       StrategyTypes::CandidateReject(candidate,rejectReason,rejectReason);
       candidate.plan.strategy = STRATEGY_TREND_CONTINUATION;
+      Print(StringFormat("[TREND_ACCEPT_ATTEMPT] called=1 setupFound=false path=none direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=false reason=%s",
+                         StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,rejectReason));
      }
 
    double CandleBodyQuality(const MarketContext &ctx)
@@ -375,7 +377,7 @@ public:
       else if(!pricePass) finalReason=CANDIDATE_REASON_INVALID_PRICE_FIELDS;
       else if(!slTpPass) finalReason=CANDIDATE_REASON_INVALID_SLTP;
       else if(!rrPass) finalReason=CANDIDATE_REASON_RR_TOO_LOW;
-      else if(!scorePass) finalReason="INVALID_SCORE";
+      else if(!scorePass) finalReason="SCORE_INVALID";
       else if(!structuralPass) finalReason=structuralReason;
 
       bool finalValid=(finalReason==CANDIDATE_REASON_OK);
@@ -407,14 +409,13 @@ public:
          else if(finalReason==CANDIDATE_REASON_INVALID_SLTP) m_audit.nearFailInvalidSltp++;
          else if(finalReason==CANDIDATE_REASON_RR_TOO_LOW) m_audit.nearFailRr++;
          else if(finalReason=="DIRECTION_MISSING") m_audit.nearFailDirection++;
-         else if(finalReason=="INVALID_SCORE") m_audit.nearFailScore++;
+         else if(finalReason=="SCORE_INVALID") m_audit.nearFailScore++;
          else if(finalReason!=CANDIDATE_REASON_OK) m_audit.nearFailNoSetup++;
          Print(StringFormat("[TREND_FAILURE_SNAPSHOT] n=%d barTime=%s structurePass=%s momentumPass=%s reclaimPass=%s directionPass=%s setupFound=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f reason=%s finalReason=%s priceFieldsPass=%s sltpPass=%s rrPass=%s scorePass=%s candidateAcceptCalled=%s returnValue=%s atr=%.5f roc=%.5f slope=%.5f emaFast=%.5f emaSlow=%.5f close=%.5f bid=%.5f ask=%.5f",
                             (int)m_audit.nearValidSnapshots,TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),(structureOK?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(candidate.setupFound?"true":"false"),(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,candidate.rejectReason,finalReason,(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(candidateAcceptCalled?"true":"false"),(finalValid?"true":"false"),ctx.atr,ctx.roc,emaSlopeAtr,ctx.emaFast,ctx.emaSlow,ctx.currentClose,ctx.bid,ctx.ask));
         }
-      if((setupPath!="none" || finalValid) && m_audit.nearValidSnapshots<=20)
-         Print(StringFormat("[TREND_ACCEPT_ATTEMPT] path=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
-                            setupPath,(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
+            Print(StringFormat("[TREND_ACCEPT_ATTEMPT] called=1 setupFound=%s path=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
+                         (setupPass?"true":"false"),setupPath,StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
       Print(StringFormat("[TREND_FINAL_VALIDATION] setupFound=%s momentumPass=%s reclaimPass=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
                          (finalValid?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       return finalValid;
