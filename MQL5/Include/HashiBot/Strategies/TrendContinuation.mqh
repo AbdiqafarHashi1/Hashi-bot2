@@ -18,11 +18,11 @@ class CTrendContinuationStrategy
 private:
    struct TrendAuditCounters
      {
-      long called,enoughBarsPass,indicatorReadyPass,trendPass,structurePass,momentumPass,triggerPass,atrPass,spreadPass,slTpPass,rawCreated;
-      long expBarsReady,expIndicatorsReady,expSpreadOk,expRegimeOk,expStructureOk,expEmaOk,expSlopeOk,expMomentumOk,expPullbackOk,expPricePlanOk,expSltpOk,expRrOk,expValid;
-      long failStructure,failEma,failSlope,failMomentum,failPullback,failSltp,failRr;
+      long called,structurePass,momentumPass,reclaimPass,directionPass,pricePass,slTpPass,rrPass,rawCreated;
+      long expValid,selected,lostToMicro;
+      long failNoSetup,failInvalidPrice,failInvalidSltp,failRr;
       string lastRejectReason;
-      void Reset(){ called=enoughBarsPass=indicatorReadyPass=trendPass=structurePass=momentumPass=triggerPass=atrPass=spreadPass=slTpPass=rawCreated=0; expBarsReady=expIndicatorsReady=expSpreadOk=expRegimeOk=expStructureOk=expEmaOk=expSlopeOk=expMomentumOk=expPullbackOk=expPricePlanOk=expSltpOk=expRrOk=expValid=0; failStructure=failEma=failSlope=failMomentum=failPullback=failSltp=failRr=0; lastRejectReason="none"; }
+      void Reset(){ called=structurePass=momentumPass=reclaimPass=directionPass=pricePass=slTpPass=rrPass=rawCreated=0; expValid=selected=lostToMicro=0; failNoSetup=failInvalidPrice=failInvalidSltp=failRr=0; lastRejectReason="none"; }
      };
    ProfileType                   m_profile;
    TrendAuditCounters            m_audit;
@@ -136,27 +136,24 @@ public:
    bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); m_audit.Reset(); return true; }
    void Reset() { m_audit.Reset(); }
    long Called() const { return m_audit.called; }
-   long EnoughBarsPass() const { return m_audit.enoughBarsPass; }
-   long IndicatorReadyPass() const { return m_audit.indicatorReadyPass; }
-   long TrendPass() const { return m_audit.trendPass; }
+   long EnoughBarsPass() const { return m_audit.called; }
+   long IndicatorReadyPass() const { return m_audit.directionPass; }
+   long TrendPass() const { return m_audit.pricePass; }
    long StructurePass() const { return m_audit.structurePass; }
    long MomentumPass() const { return m_audit.momentumPass; }
-   long TriggerPass() const { return m_audit.triggerPass; }
-   long AtrPass() const { return m_audit.atrPass; }
-   long SpreadPass() const { return m_audit.spreadPass; }
+   long TriggerPass() const { return m_audit.reclaimPass; }
+   long AtrPass() const { return m_audit.rrPass; }
+   long SpreadPass() const { return m_audit.pricePass; }
    long SlTpPass() const { return m_audit.slTpPass; }
 	   long RawCreated() const { return m_audit.rawCreated; }
 	   string LastRejectReason() const { return m_audit.lastRejectReason; }
       string ExposureSummary() const
         {
-         string topReject=(m_audit.failStructure>=m_audit.failEma && m_audit.failStructure>=m_audit.failSlope && m_audit.failStructure>=m_audit.failMomentum && m_audit.failStructure>=m_audit.failPullback && m_audit.failStructure>=m_audit.failSltp && m_audit.failStructure>=m_audit.failRr?"structureFail":
-                           (m_audit.failEma>=m_audit.failSlope && m_audit.failEma>=m_audit.failMomentum && m_audit.failEma>=m_audit.failPullback && m_audit.failEma>=m_audit.failSltp && m_audit.failEma>=m_audit.failRr?"emaFail":
-                           (m_audit.failSlope>=m_audit.failMomentum && m_audit.failSlope>=m_audit.failPullback && m_audit.failSlope>=m_audit.failSltp && m_audit.failSlope>=m_audit.failRr?"slopeFail":
-                           (m_audit.failMomentum>=m_audit.failPullback && m_audit.failMomentum>=m_audit.failSltp && m_audit.failMomentum>=m_audit.failRr?"momentumFail":
-                           (m_audit.failPullback>=m_audit.failSltp && m_audit.failPullback>=m_audit.failRr?"pullbackFail":
-                           (m_audit.failSltp>=m_audit.failRr?"sltpFail":"rrFail"))))));
-         return StringFormat("[TREND_EXPOSURE_SUMMARY] called=%d valid=%d topReject=%s structureFail=%d emaFail=%d slopeFail=%d momentumFail=%d pullbackFail=%d sltpFail=%d rrFail=%d",
-                             m_audit.called,m_audit.expValid,topReject,m_audit.failStructure,m_audit.failEma,m_audit.failSlope,m_audit.failMomentum,m_audit.failPullback,m_audit.failSltp,m_audit.failRr);
+         string topReject=(m_audit.failNoSetup>=m_audit.failInvalidPrice && m_audit.failNoSetup>=m_audit.failInvalidSltp && m_audit.failNoSetup>=m_audit.failRr?"NO_SETUP":
+                           (m_audit.failInvalidPrice>=m_audit.failInvalidSltp && m_audit.failInvalidPrice>=m_audit.failRr?"INVALID_PRICE_FIELDS":
+                           (m_audit.failInvalidSltp>=m_audit.failRr?"INVALID_SLTP":"RR_TOO_LOW")));
+         return StringFormat("[TREND_EXPOSURE_SUMMARY] called=%d structurePass=%d momentumPass=%d reclaimPass=%d directionPass=%d pricePass=%d sltpPass=%d rrPass=%d valid=%d selected=%d lostToMicro=%d topReject=%s",
+                             m_audit.called,m_audit.structurePass,m_audit.momentumPass,m_audit.reclaimPass,m_audit.directionPass,m_audit.pricePass,m_audit.slTpPass,m_audit.rrPass,m_audit.expValid,m_audit.selected,m_audit.lostToMicro,topReject);
         }
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
@@ -164,15 +161,7 @@ public:
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_TREND_CONTINUATION);
       m_audit.called++;
       m_audit.lastRejectReason="none";
-      if(ctx.barsLoaded < 8){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason); return false; }
-      m_audit.expBarsReady++;
-      m_audit.enoughBarsPass++;
-      if(!(ctx.atr>0.0 && ctx.emaFast>0.0 && ctx.emaSlow>0.0)){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_VOLATILITY, m_audit.lastRejectReason); return false; }
-      m_audit.expIndicatorsReady++;
-      m_audit.indicatorReadyPass++;
-      if(ctx.spreadPoints <= 0.0){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_SPREAD, m_audit.lastRejectReason); return false; }
-      m_audit.expSpreadOk++;
-      m_audit.spreadPass++;
+      if(ctx.barsLoaded < 8 || !(ctx.atr>0.0 && ctx.emaFast>0.0 && ctx.emaSlow>0.0) || ctx.spreadPoints <= 0.0){ m_audit.lastRejectReason="NO_SETUP"; m_audit.failNoSetup++; Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason); return false; }
 
       bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
       bool regimeTrend=(regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN);
@@ -180,96 +169,89 @@ public:
       if(!(regimeTrend || pseudoTrend))
         {
          m_audit.lastRejectReason="NO_SETUP";
-         m_audit.failStructure++;
+         m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason);
          return false;
         }
-      m_audit.expRegimeOk++;
       double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:(testerMode?0.33:0.36));
       double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:(testerMode?0.28:0.32));
       double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:(testerMode?62.0:58.0));
       if(regime.confidence < minRegimeConf)
         {
          m_audit.lastRejectReason="NO_SETUP";
-         Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason); // low confidence
+         m_audit.failNoSetup++; Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
          return false;
         }
       if(ctx.marketQuality < minMq)
         {
          m_audit.lastRejectReason="NO_SETUP";
-         Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason); // low market quality
+         m_audit.failNoSetup++; Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
          return false;
         }
       if(ctx.choppiness > maxChop)
         {
          m_audit.lastRejectReason="NO_SETUP";
-         Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason); // high choppiness
+         m_audit.failNoSetup++; Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
          return false;
         }
       if(ctx.atr <= 0.0)
         {
          m_audit.lastRejectReason="NO_SETUP";
-         Reject(candidate, SUPPRESS_VOLATILITY, m_audit.lastRejectReason); // invalid ATR
+         m_audit.failNoSetup++; Reject(candidate, SUPPRESS_VOLATILITY, m_audit.lastRejectReason);
          return false;
         }
-      m_audit.trendPass++;
-      m_audit.atrPass++;
 
       TradeDirection dir = TRADE_DIR_NONE;
       if(regime.regime == REGIME_TREND_UP) dir = TRADE_DIR_LONG;
       else if(regime.regime == REGIME_TREND_DOWN) dir = TRADE_DIR_SHORT;
       else dir = (ctx.emaFast >= ctx.emaSlow ? TRADE_DIR_LONG : TRADE_DIR_SHORT);
       candidate.direction = dir;
+      m_audit.directionPass++;
 
       double structureScore = 0.0;
       bool structureOK = (dir == TRADE_DIR_LONG ? HasBullStructure(ctx, structureScore) : HasBearStructure(ctx, structureScore));
       if(!structureOK)
         {
          m_audit.lastRejectReason="NO_SETUP";
-         m_audit.failStructure++;
+         m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason);
          return false;
         }
-      m_audit.expStructureOk++;
       m_audit.structurePass++;
 
       bool emaOk = (dir == TRADE_DIR_LONG ? (ctx.emaFast > ctx.emaSlow) : (ctx.emaFast < ctx.emaSlow));
-      double minRoc=(testerMode?0.0:0.006);
+      double minRoc=(testerMode?0.0:0.0008);
       bool rocOk = (dir == TRADE_DIR_LONG ? (ctx.roc > minRoc) : (ctx.roc < -minRoc));
       bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast - 0.15*ctx.atr) : (ctx.currentClose <= ctx.emaFast + 0.15*ctx.atr));
       if(!emaOk)
         {
          m_audit.lastRejectReason="NO_SETUP";
-         m_audit.failEma++;
+         m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason); // momentum mismatch
          return false;
         }
-      m_audit.expEmaOk++;
-      bool momentumPathOk=(rocOk && priceVsEma);
+      bool bodyContinuation=(dir==TRADE_DIR_LONG?ctx.currentClose>=ctx.currentOpen:ctx.currentClose<=ctx.currentOpen);
+      bool momentumPathOk=(rocOk && priceVsEma && bodyContinuation);
 
       double entryQuality = 0.0;
       double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
       if(bodyAtr>(testerMode?1.70:1.45)){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason); return false; }
       bool reclaimOk=HasReclaimTrigger(ctx, dir, entryQuality);
-      if(reclaimOk) m_audit.expPullbackOk++;
+      if(reclaimOk) m_audit.reclaimPass++;
 
       double emaSlopeAtr = MathHelpers::SafeDivide(MathAbs(ctx.emaFast - ctx.emaSlow), MathMax(ctx.atr, 1e-6), 0.0);
-      double minSlope=(m_profile==PROFILE_PROP_FIRM?0.12:(testerMode?0.05:0.07));
+      double minSlope=(m_profile==PROFILE_PROP_FIRM?0.12:(testerMode?0.035:0.055));
       bool slopeOk=(emaSlopeAtr >= minSlope);
-      if(slopeOk) m_audit.expSlopeOk++;
       bool altPathOk=(reclaimOk && slopeOk);
       if(!momentumPathOk && !altPathOk)
         {
          m_audit.lastRejectReason="NO_SETUP";
-         if(!reclaimOk) m_audit.failPullback++;
-         else if(!slopeOk) m_audit.failSlope++;
-         else m_audit.failMomentum++;
+         m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason);
          return false;
         }
-      if(momentumPathOk) m_audit.expMomentumOk++;
-      m_audit.momentumPass++;
-      m_audit.triggerPass++;
+      if(momentumPathOk) m_audit.momentumPass++;
+      m_audit.pricePass++;
 
       double momentumScore = MathHelpers::Clamp(0.6 * MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.5) + 0.4 * MathHelpers::Normalize01(emaSlopeAtr, 0.08, 0.9), 0.0, 1.0);
       double volScore = MathHelpers::Normalize01(ctx.atr, 0.0, MathMax(ctx.currentClose * 0.01, 1e-6));
@@ -287,15 +269,14 @@ public:
       // deterministic confidence blend
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + structureScore + momentumScore + entryQuality) / 4.0, 0.0, 1.0);
 
-      double atrMult=(testerMode?1.35:1.55);
+      double atrMult=(testerMode?1.20:1.45);
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_TREND_CONTINUATION, dir, ctx, atrMult, candidate.plan))
         {
          m_audit.lastRejectReason="INVALID_SLTP";
-         m_audit.failSltp++;
+         m_audit.failInvalidSltp++;
          Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason); // invalid trade plan
          return false;
         }
-      m_audit.expPricePlanOk++;
 
       // structure-aware safer stop (further stop for long=lower price, for short=higher price)
       double atrStop = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
@@ -314,13 +295,14 @@ public:
       if(risk <= 0.0)
         {
          m_audit.lastRejectReason="INVALID_SLTP";
-         m_audit.failSltp++;
+         m_audit.failInvalidSltp++;
          Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
          return false;
         }
       if(risk <= MathMax(2.0*ctx.point,1e-6))
         {
-         m_audit.lastRejectReason="STOP_TOO_SMALL";
+         m_audit.lastRejectReason="INVALID_SLTP";
+         m_audit.failInvalidSltp++;
          Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
          return false;
         }
@@ -339,9 +321,16 @@ public:
 
       candidate.plan.strategy = STRATEGY_TREND_CONTINUATION;
       candidate.plan.direction = dir;
+      if(candidate.plan.entryPrice<=0.0 || candidate.plan.stopLoss<=0.0 || candidate.plan.takeProfit1<=0.0 || candidate.plan.takeProfit2<=0.0)
+        {
+         m_audit.lastRejectReason="INVALID_PRICE_FIELDS";
+         m_audit.failInvalidPrice++;
+         Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
+         return false;
+        }
       candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
-      if(candidate.isValid){ m_audit.slTpPass++; m_audit.expSltpOk++; m_audit.expRrOk++; m_audit.expValid++; m_audit.rawCreated++; StrategyTypes::CandidateAccept(candidate,"OK"); candidate.rejectReason="OK"; }
-      else { m_audit.lastRejectReason="INVALID_SLTP"; StrategyTypes::CandidateReject(candidate,m_audit.lastRejectReason,"trend_plan_invalid"); candidate.plan.strategy=STRATEGY_TREND_CONTINUATION; }
+      if(candidate.isValid){ m_audit.slTpPass++; m_audit.rrPass++; m_audit.expValid++; m_audit.rawCreated++; StrategyTypes::CandidateAccept(candidate,"OK"); candidate.rejectReason="OK"; }
+      else { m_audit.lastRejectReason="INVALID_SLTP"; m_audit.failInvalidSltp++; StrategyTypes::CandidateReject(candidate,m_audit.lastRejectReason,"trend_plan_invalid"); candidate.plan.strategy=STRATEGY_TREND_CONTINUATION; }
       return candidate.isValid;
      }
 
