@@ -29,11 +29,8 @@ private:
       candidate.suppression.isSuppressed = true;
       candidate.suppression.reasonCount = 1;
       candidate.suppression.reasons[0] = reason;
-      candidate.direction = TRADE_DIR_NONE;
-      candidate.plan.Reset();
+      StrategyTypes::CandidateReject(candidate,rejectReason,rejectReason);
       candidate.plan.strategy = STRATEGY_COMPRESSION_BREAKOUT;
-      candidate.rejectReason = rejectReason;
-      candidate.isValid = false;
      }
 
    bool DetectBox(const MarketContext &ctx,double &boxHigh,double &boxLow,double &boxWidth,int &usedBars,double &insideRatio,double &touchScore)
@@ -261,7 +258,8 @@ public:
 
       m_audit.slTpPass++;
       m_audit.rawCreated++;
-
+      StrategyTypes::CandidateAccept(candidate,"OK");
+      candidate.rejectReason="OK";
       return true;
      }
 
