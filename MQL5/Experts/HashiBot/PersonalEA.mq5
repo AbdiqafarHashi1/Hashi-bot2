@@ -296,7 +296,7 @@ bool AcceptSelectedPlanByStrategy(const TradePlan &plan,const string strategyNam
    else reason=(plan.strategy==STRATEGY_MICRO_SCALPER?"MICRO_ACCEPTED":(plan.strategy==STRATEGY_TREND_CONTINUATION?"TREND_ACCEPTED":(plan.strategy==STRATEGY_COMPRESSION_BREAKOUT?"COMPRESSION_ACCEPTED":"GENERIC_ACCEPTED")));
    return (StringFind(reason,"ACCEPTED")>=0);
   }
-string StrategyModeName(){ if(InpStrategyDebugMode==STRATEGY_DEBUG_MICRO_ONLY) return "MICRO_ONLY"; if(InpStrategyDebugMode==STRATEGY_DEBUG_TREND_ONLY) return "TREND_ONLY"; if(InpStrategyDebugMode==STRATEGY_DEBUG_COMPRESSION_ONLY) return "COMPRESSION_ONLY"; return "TREND_COMPRESSION"; }
+string StrategyModeName(){ if(InpStrategyDebugMode==STRATEGY_DEBUG_MICRO_ONLY) return "MICRO_ONLY"; if(InpStrategyDebugMode==STRATEGY_DEBUG_TREND_ONLY) return "TREND_ONLY"; if(InpStrategyDebugMode==STRATEGY_DEBUG_COMPRESSION_ONLY) return "COMPRESSION_ONLY"; return "AUTO_ALL"; }
 ENUM_ORDER_TYPE ToOrderType(const TradeDirection d){ return (d==TRADE_DIR_SHORT?ORDER_TYPE_SELL:ORDER_TYPE_BUY); }
 void EmitDecisionTrace(const TradeDecision &d,const datetime barTime,const string stage,const string reason,const bool candidateCreated)
   {
@@ -1173,8 +1173,12 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
 
    ArbitrationResult arb=g_arb.Evaluate(ctx, regime); g_diagCandidates++; g_testerArbDecisions++; g_starveRawCandidates+=arb.candidateCount; if(arb.hasWinner) g_diagWinners++; else { g_r_no_candidate++; g_testerArbNoTrades++; g_phaseANoCandidate++; decision.rejectStage="ARBITRATION"; decision.rejectReason="NO_STRATEGY_CANDIDATE"; EmitDecisionTrace(decision,ctx.barTime,"ARBITRATION",decision.rejectReason,false); } g_lastArbTime=TimeCurrent();
    string modeName=StrategyModeName();
+   string eligibleStrategies="TrendContinuation,CompressionBreakout,MicroScalper";
    if(InpStrategyDebugMode!=STRATEGY_DEBUG_TREND_COMPRESSION)
      {
+      if(InpStrategyDebugMode==STRATEGY_DEBUG_MICRO_ONLY) eligibleStrategies="MicroScalper";
+      else if(InpStrategyDebugMode==STRATEGY_DEBUG_TREND_ONLY) eligibleStrategies="TrendContinuation";
+      else if(InpStrategyDebugMode==STRATEGY_DEBUG_COMPRESSION_ONLY) eligibleStrategies="CompressionBreakout";
       int kept=0;
       for(int fi=0; fi<arb.candidateCount; fi++)
         {
@@ -1195,16 +1199,26 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
          arb.winningScore=arb.candidates[best].score.totalScore;
          arb.winningGrade=arb.candidates[best].grade;
          arb.plan=arb.candidates[best].plan;
-         arb.reason="mode_filtered";
+         arb.reason="mode_filtered_real_candidates_only";
         }
       else
         {
          arb.noTrade=true;
-         arb.reason="mode_filtered_no_candidates";
+         arb.reason="mode_filtered_no_real_candidates";
          g_r_no_candidate++;
          g_testerArbNoTrades++;
         }
      }
+   int trendValid=0,compressionValid=0,microValid=0;
+   for(int vi=0;vi<arb.candidateCount;vi++)
+     {
+      if(!arb.candidates[vi].isValid) continue;
+      if(arb.candidates[vi].strategy==STRATEGY_TREND_CONTINUATION) trendValid++;
+      else if(arb.candidates[vi].strategy==STRATEGY_COMPRESSION_BREAKOUT) compressionValid++;
+      else if(arb.candidates[vi].strategy==STRATEGY_MICRO_SCALPER) microValid++;
+     }
+   Print(StringFormat("[ARBITRATION_INPUT] trendValid=%d compressionValid=%d microValid=%d totalValidCandidates=%d eligibleStrategies=%s",
+                      trendValid,compressionValid,microValid,(trendValid+compressionValid+microValid),eligibleStrategies));
    double wTrend=RegimeCompatibilityWeight(STRATEGY_TREND_CONTINUATION,regime),wPull=RegimeCompatibilityWeight(STRATEGY_PULLBACK_CONTINUATION,regime),wComp=RegimeCompatibilityWeight(STRATEGY_COMPRESSION_BREAKOUT,regime),wExp=RegimeCompatibilityWeight(STRATEGY_EXPANSION_MOMENTUM,regime),wMicro=RegimeCompatibilityWeight(STRATEGY_NONE,regime);
    int bestIdx=-1; double bestAdj=-1.0; string topRejectReason="none";
    g_acceptCandidates += arb.candidateCount;
@@ -1293,13 +1307,11 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    if(scalperMode && arb.hasWinner && candidateGradeOK && arb.topScore>=activeMinScore) g_scalperCandidatesAccepted++;
    if((!arb.hasWinner || !candidateGradeOK || chosenScore<activeMinScore) && scalperMode && scalperAllowFallback)
      {
-      TradePlan fb; double fbScore=0.0; string fbReason="";
       g_microEvaluated++;
       Print(StringFormat("[MICRO_CALL] symbol=%s called=true hasWinner=%s gradeOK=%s topScore=%.2f minScore=%.2f profileAllows=%s",symbol,(arb.hasWinner?"true":"false"),(candidateGradeOK?"true":"false"),chosenScore,activeMinScore,(profileAllowsMicro?"true":"false")));
-      if(!profileAllowsMicro){ g_microGateProfile++; Print(StringFormat("[MICRO_GATE] symbol=%s pass=false reason=profile_disallows_micro",symbol)); }
-      if(BuildScalperFallbackPlan(ctx, fb, fbScore, fbReason))
-        { chosenPlan=fb; chosenScore=fbScore; chosenFromFallback=true; g_microAccepted++; g_diagValidDirCandidates[4]++; Print(StringFormat("[MICRO_GATE] symbol=%s pass=true reason=scalper_fallback_ok",symbol)); Print(StringFormat("[MICRO_CANDIDATE] symbol=%s created=true score=%.2f dir=%s",symbol,fbScore,DirName(fb.direction))); Print("[SCALPER] accepted sym=",symbol," source=fallback score=",DoubleToString(fbScore,2)); }
-      else { g_microRejected++; Print(StringFormat("[MICRO_GATE] symbol=%s pass=false reason=%s",symbol,fbReason)); Print(StringFormat("[MICRO_CANDIDATE] symbol=%s created=false reason=%s",symbol,fbReason)); Print("[SCALPER] rejected sym=",symbol," reason=",fbReason); }
+      g_microRejected++;
+      Print(StringFormat("[MICRO_GATE] symbol=%s pass=false reason=fallback_disabled_real_candidates_only",symbol));
+      Print(StringFormat("[MICRO_CANDIDATE] symbol=%s created=false reason=fallback_disabled_real_candidates_only",symbol));
      }
    if(chosenPlan.direction==TRADE_DIR_NONE || chosenPlan.entryPrice<=0.0 || chosenPlan.stopLoss<=0.0 || chosenPlan.takeProfit1<=0.0 || chosenPlan.takeProfit2<=0.0)
      {
@@ -1514,6 +1526,10 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      }
    if(!enteredExecuteSelectedPlan)
       PrintFinalDecision(chosenPlan,g_starveSelected,"pre_order_block","ORDERMANAGER_NOT_REACHED",validPlan,false,risk.approved,risk.reason,true,portfolioOK,pReason,false,false,false,false,false,0,0,SymbolInfoDouble(symbol,SYMBOL_BID),SymbolInfoDouble(symbol,SYMBOL_ASK),risk.approvedLots);
+   Print(StringFormat("[SELECTED_FLOW] selectedStrategy=%s candidateToPlanOk=%s acceptanceReached=%s acceptanceOk=%s acceptanceReason=%s riskReached=%s riskApproved=%s riskReason=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s retcode=%I64d lastError=%d",
+                      StrategyName(chosenPlan.strategy),(candidateToPlanOk?"true":"false"),(candidateToPlanOk?"true":"false"),(finalAccepted?"true":"false"),acceptanceReason,
+                      (riskReached?"true":"false"),(risk.approved?"true":"false"),risk.reason,(enteredExecuteSelectedPlan?"true":"false"),
+                      (g_order.LastAttempted()?"true":"false"),(g_order.LastSubmitSuccess()?"true":"false"),g_order.LastRetcode(),GetLastError()));
    if(InpVerboseDiagnostics) Print(StringFormat("[SELECTED_TO_SUBMIT_PROOF] strategy=%s candidateToPlanOk=%s enteredExecuteSelectedPlan=%s planValid=%s riskReached=%s riskApproved=%s orderValidateReached=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s blocker=%s",
                       StrategyName(chosenPlan.strategy),(candidateToPlanOk?"true":"false"),(enteredExecuteSelectedPlan?"true":"false"),(g_execProofPlanValid?"true":"false"),(g_execProofRiskReached?"true":"false"),(g_execProofRiskApproved?"true":"false"),(g_execProofOrderValidateReached?"true":"false"),(g_execProofOrderManagerReached?"true":"false"),(g_execProofOrderAttempted?"true":"false"),(g_execProofOrderSuccess?"true":"false"),submitBlocker));
    if(arb.hasWinner){ int wb=StrategyBucket(arb.winningStrategy); g_arbWinnerScoreSum[wb]+=arb.winningScore; g_arbWinnerScoreCount[wb]++; if(chosenFromFallback) { g_winMicro++; g_microWinners++; } else if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_winTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_winPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_winCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_winExpansion++; }
