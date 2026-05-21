@@ -234,10 +234,11 @@ public:
       bool momentumPathOk=(rocOk && priceVsEma && bodyContinuation);
 
       double entryQuality = 0.0;
+      string setupPath="none";
       double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
       if(bodyAtr>(testerMode?1.70:1.45)){ m_audit.lastRejectReason="RECLAIM_NOT_CONFIRMED"; m_audit.failNoSetup++; Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason); return false; }
       bool reclaimOk=HasReclaimTrigger(ctx, dir, entryQuality);
-      if(reclaimOk) m_audit.reclaimPass++;
+      if(reclaimOk){ m_audit.reclaimPass++; setupPath="reclaim"; }
 
       double emaSlopeAtr = MathHelpers::SafeDivide(MathAbs(ctx.emaFast - ctx.emaSlow), MathMax(ctx.atr, 1e-6), 0.0);
       double minSlope=(m_profile==PROFILE_PROP_FIRM?0.12:(testerMode?0.035:0.055));
@@ -250,7 +251,7 @@ public:
          Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason);
          return false;
         }
-      if(momentumPathOk) m_audit.momentumPass++;
+      if(momentumPathOk){ m_audit.momentumPass++; setupPath="momentum"; }
       m_audit.pricePass++;
 
       double momentumScore = MathHelpers::Clamp(0.6 * MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.5) + 0.4 * MathHelpers::Normalize01(emaSlopeAtr, 0.08, 0.9), 0.0, 1.0);
@@ -329,7 +330,7 @@ public:
       bool rrPass=(candidate.plan.riskR>0.0 && MathIsValidNumber(candidate.plan.riskR));
       string structuralReason=CANDIDATE_REASON_OK;
       bool structuralPass=StrategyTypes::IsCandidateStructurallyValid(candidate, structuralReason);
-      candidate.score.totalScore = candidate.plan.confidence;
+      candidate.score.totalScore = MathMax(candidate.plan.confidence, candidate.score.scoreUnique);
       bool scorePass=(MathIsValidNumber(candidate.score.totalScore) && candidate.score.totalScore>0.0);
 
       string finalReason=CANDIDATE_REASON_OK;
@@ -357,8 +358,8 @@ public:
          else m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_OTHER, finalReason);
         }
-      Print(StringFormat("[TREND_CANDIDATE_BUILD] structurePass=%s momentumPass=%s reclaimPass=%s directionPass=%s pricePass=%s sltpPass=%s rrPass=%s accepted=%s reason=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
-                         (structureOK?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(finalValid?"true":"false"),finalReason,(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
+      Print(StringFormat("[TREND_CANDIDATE_BUILD] barTime=%s path=%s structurePass=%s momentumPass=%s reclaimPass=%s directionPass=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
+                         TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),setupPath,(structureOK?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
       Print(StringFormat("[TREND_FINAL_VALIDATION] setupFound=%s momentumPass=%s reclaimPass=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
                          (finalValid?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       return finalValid;
