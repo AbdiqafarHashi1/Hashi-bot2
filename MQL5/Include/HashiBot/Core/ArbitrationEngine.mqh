@@ -334,7 +334,7 @@ public:
             else if(c.score.totalScore<minTopScore) { m_invalidByStrategy[b]++; trendRejectStage="SCORE_GATE"; trendRejectReason="SCORE_TOO_LOW"; Print(StringFormat("[ARB_REJECT] strategy=%s reason=SCORE_TOO_LOW score=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),c.score.totalScore,minTopScore)); }
             else { trendValid=true; AddCandidateIfValid(c); }
            }
-         else { m_invalidByStrategy[b]++; trendRejectStage="VALIDATION"; trendRejectReason=(vreason==""?"CANDIDATE_INVALID_SLTP":vreason); Print(StringFormat("[ARB_REJECT] strategy=%s reason=CANDIDATE_INVALID_SLTP detail=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f direction=%s",StrategyTypes::StrategyName(c.strategy),vreason,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,StrategyTypes::DirectionName(c.direction))); }
+         else { m_invalidByStrategy[b]++; trendRejectStage="VALIDATION"; trendRejectReason=(vreason==""?"NO_SETUP":vreason); if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=TrendContinuation",StrategyTypes::StrategyName(c.strategy),trendRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
          PrintStrategyEngineResult("TrendContinuation",true,true,true,trendAnalyzed,trendValid,trendRejectStage,trendRejectReason,c,ctx);
       }
       Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=TrendContinuation moduleCalled=%s enoughBars=%s indicatorsReady=%s regimePass=%s triggerPass=%s rawCandidateCreated=%s candidateValid=%s reason=%s",
@@ -363,7 +363,7 @@ public:
             else if(c.score.totalScore<minTopScore) { m_invalidByStrategy[b]++; compRejectStage="SCORE_GATE"; compRejectReason="SCORE_TOO_LOW"; Print(StringFormat("[ARB_REJECT] strategy=%s reason=SCORE_TOO_LOW score=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),c.score.totalScore,minTopScore)); }
             else { compValid=true; AddCandidateIfValid(c); }
            }
-         else { m_invalidByStrategy[b]++; compRejectStage="VALIDATION"; compRejectReason=(vreason==""?"CANDIDATE_INVALID_SLTP":vreason); Print(StringFormat("[ARB_REJECT] strategy=%s reason=CANDIDATE_INVALID_SLTP detail=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f direction=%s",StrategyTypes::StrategyName(c.strategy),vreason,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,StrategyTypes::DirectionName(c.direction))); }
+         else { m_invalidByStrategy[b]++; compRejectStage="VALIDATION"; compRejectReason=(vreason==""?"NO_SETUP":vreason); if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=CompressionBreakout",StrategyTypes::StrategyName(c.strategy),compRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
          PrintStrategyEngineResult("CompressionBreakout",true,true,true,compAnalyzed,compValid,compRejectStage,compRejectReason,c,ctx);
       }
       Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=CompressionBreakout moduleCalled=%s enoughBars=%s atrReady=%s boxReady=%s compressionDetected=%s breakoutDetected=%s rawCandidateCreated=%s candidateValid=%s reason=%s",
@@ -382,10 +382,10 @@ public:
             m_microValidCreated++;
             double rr=RRNetAfterSpread(c,ctx);
             double microMinRR=(MQLInfoInteger(MQL_TESTER)>0?0.95:1.05);
-            if(rr<microMinRR) { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,microMinRR)); }
+            if(rr<microMinRR) { m_invalidByStrategy[b]++; Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f requiredRR=%.2f",StrategyTypes::StrategyName(c.strategy),rr,microMinRR)); }
             else { AddCandidateIfValid(c); }
-           }
-         else { m_invalidByStrategy[b]++; if(vreason=="") vreason=c.rejectReason; Print(StringFormat("[ARB_REJECT] strategy=%s reason=CANDIDATE_INVALID_SLTP detail=%s",StrategyTypes::StrategyName(c.strategy),vreason)); }
+          }
+         else { m_invalidByStrategy[b]++; if(vreason=="") vreason=c.rejectReason; if(vreason=="micro_no_momentum_setup") vreason="NO_MOMENTUM_SETUP"; if(vreason=="") vreason="NO_SETUP"; Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=MicroScalper",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
       }
 
       if(!m_enableSecondaryStrategy)
