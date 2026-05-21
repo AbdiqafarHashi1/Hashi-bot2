@@ -277,6 +277,63 @@ public:
       return StringFormat("[COMPRESSION_PROFITABILITY_SUMMARY] called=%d boxReady=%d boxFormed=%d breakoutDetected=%d cleanBreakoutPath=%d continuationPath=%d retestPath=%d planBuilt=%d accepted=%d selected=%d rejected=%d acceptedLong=%d acceptedShort=%d acceptedAPlus=%d acceptedA=%d acceptedRetest=%d weakBreakoutReject=%d fakeoutRiskReject=%d lateEntryReject=%d spreadBurdenReject=%d poorBoxQualityReject=%d slTooWideReject=%d slTooTightReject=%d rrTooLowReject=%d scoreReject=%d avgBreakoutQuality=%.2f avgBreakoutDistanceAtr=%.2f avgBoxWidthAtr=%.2f avgSlAtr=%.2f avgRiskR=%.2f avgScore=%.2f avgSpreadBurden=%.2f avgFakeoutRisk=%.2f avgLateEntryRisk=%.2f nextHint=%s",
                           m_audit.called,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.expBreakoutConfirmed,m_audit.cleanBreakoutAccepted,m_audit.continuationAccepted,m_audit.retestAccepted,m_audit.expPricePlanOk,m_audit.accepted,m_audit.selected,m_audit.rejected,m_audit.acceptedLong,m_audit.acceptedShort,m_audit.tierAPlus,m_audit.tierA,m_audit.tierRetest,m_audit.weakBreakoutReject,m_audit.fakeoutRiskReject,m_audit.lateEntryReject,m_audit.spreadBurdenReject,m_audit.poorBoxQualityReject,m_audit.slTooWideReject,m_audit.slTooTightReject,m_audit.rrTooLowReject,m_audit.scoreReject,avgBreakoutQuality,avgBreakoutDistanceAtr,avgBoxWidthAtr,avgSlAtr,avgRiskR,avgScore,avgSpreadBurden,avgFakeoutRisk,avgLateEntryRisk,nextHint);
      }
+   void PrintForensicSummaryLines() const
+     {
+      double denom=(m_audit.expValid>0?(double)m_audit.expValid:1.0);
+      double avgBreakoutQuality=(m_audit.expValid>0?m_audit.sumBreakoutQuality/denom:0.0);
+      double avgSpreadBurden=(m_audit.expValid>0?m_audit.sumSpreadBurden/denom:0.0);
+      double avgFakeoutRisk=(m_audit.expValid>0?m_audit.sumFakeoutRisk/denom:0.0);
+      double avgLateEntryRisk=(m_audit.expValid>0?m_audit.sumLateEntryRisk/denom:0.0);
+      double avgScore=(m_audit.expValid>0?m_audit.sumScore/denom:0.0);
+      double avgBreakoutDistanceAtr=(m_audit.expValid>0?m_audit.sumBreakoutDistanceAtr/denom:0.0);
+      double avgBoxWidthAtr=(m_audit.expValid>0?m_audit.sumBoxWidthAtr/denom:0.0);
+      double avgSlAtr=(m_audit.expValid>0?m_audit.sumSlAtr/denom:0.0);
+      double avgRiskR=(m_audit.expValid>0?m_audit.sumRiskR/denom:0.0);
+
+      long mainRejectCount=m_audit.weakBreakoutReject;
+      string mainRejectBucket="WEAK_BREAKOUT";
+      if(m_audit.fakeoutRiskReject>mainRejectCount){ mainRejectCount=m_audit.fakeoutRiskReject; mainRejectBucket="FAKEOUT_RISK"; }
+      if(m_audit.lateEntryReject>mainRejectCount){ mainRejectCount=m_audit.lateEntryReject; mainRejectBucket="LATE_ENTRY"; }
+      if(m_audit.spreadBurdenReject>mainRejectCount){ mainRejectCount=m_audit.spreadBurdenReject; mainRejectBucket="SPREAD_BURDEN"; }
+      if(m_audit.poorBoxQualityReject>mainRejectCount){ mainRejectCount=m_audit.poorBoxQualityReject; mainRejectBucket="POOR_BOX_QUALITY"; }
+      if(m_audit.slTooWideReject>mainRejectCount){ mainRejectCount=m_audit.slTooWideReject; mainRejectBucket="SL_TOO_WIDE"; }
+      if(m_audit.slTooTightReject>mainRejectCount){ mainRejectCount=m_audit.slTooTightReject; mainRejectBucket="SL_TOO_TIGHT"; }
+      if(m_audit.rrTooLowReject>mainRejectCount){ mainRejectCount=m_audit.rrTooLowReject; mainRejectBucket="RR_TOO_LOW"; }
+      if(m_audit.scoreReject>mainRejectCount){ mainRejectCount=m_audit.scoreReject; mainRejectBucket="SCORE_REJECT"; }
+
+      string profitState="SAMPLE_TOO_SMALL";
+      string mainBlocker=mainRejectBucket;
+      string nextHint="SAMPLE_TOO_SMALL";
+      double acceptedDenom=(m_audit.accepted>0?(double)m_audit.accepted:1.0);
+      double selectedToAccepted=MathHelpers::SafeDivide((double)m_audit.selected,acceptedDenom,0.0);
+      if(selectedToAccepted<0.80)
+        {
+         mainBlocker=mainRejectBucket;
+         nextHint="INCREASE_ACCEPTED_SAMPLE";
+        }
+      else if(m_audit.accepted>=8)
+        {
+         if(avgFakeoutRisk>=avgSpreadBurden && avgFakeoutRisk>=avgLateEntryRisk){ mainBlocker="FAKEOUT_RISK"; nextHint="FAKEOUT_RISK"; }
+         else if(avgSpreadBurden>=avgLateEntryRisk){ mainBlocker="SPREAD_BURDEN"; nextHint="SPREAD_BURDEN"; }
+         else { mainBlocker="LATE_ENTRY_RISK"; nextHint="LATE_ENTRY_RISK"; }
+         if(avgSlAtr>2.20 || avgSlAtr<0.85){ mainBlocker="SL_GEOMETRY"; nextHint="SL_GEOMETRY"; }
+         if(avgRiskR<0.95){ mainBlocker="RR_TP_GEOMETRY"; nextHint="RR_TP_GEOMETRY"; }
+         if(avgScore<0.54){ mainBlocker="SCORE_TOO_PERMISSIVE"; nextHint="SCORE_TOO_PERMISSIVE"; }
+        }
+
+      Print(StringFormat("[COMPRESSION_FORENSIC_COUNTS] called=%d boxReady=%d boxFormed=%d breakoutConfirmed=%d planBuilt=%d accepted=%d rejected=%d selected=%d",
+                         m_audit.called,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.expBreakoutConfirmed,m_audit.expPricePlanOk,m_audit.accepted,m_audit.rejected,m_audit.selected));
+      Print(StringFormat("[COMPRESSION_FORENSIC_TIERS] acceptedAPlus=%d acceptedA=%d acceptedRetest=%d acceptedLong=%d acceptedShort=%d cleanBreakoutAccepted=%d continuationAccepted=%d retestAccepted=%d",
+                         m_audit.tierAPlus,m_audit.tierA,m_audit.tierRetest,m_audit.acceptedLong,m_audit.acceptedShort,m_audit.cleanBreakoutAccepted,m_audit.continuationAccepted,m_audit.retestAccepted));
+      Print(StringFormat("[COMPRESSION_FORENSIC_REJECTS] weakBreakoutReject=%d fakeoutRiskReject=%d lateEntryReject=%d spreadBurdenReject=%d poorBoxQualityReject=%d slTooWideReject=%d slTooTightReject=%d rrTooLowReject=%d scoreReject=%d",
+                         m_audit.weakBreakoutReject,m_audit.fakeoutRiskReject,m_audit.lateEntryReject,m_audit.spreadBurdenReject,m_audit.poorBoxQualityReject,m_audit.slTooWideReject,m_audit.slTooTightReject,m_audit.rrTooLowReject,m_audit.scoreReject));
+      Print(StringFormat("[COMPRESSION_FORENSIC_AVG_QUALITY] avgBreakoutQuality=%.2f avgSpreadBurden=%.2f avgFakeoutRisk=%.2f avgLateEntryRisk=%.2f avgScore=%.2f",
+                         avgBreakoutQuality,avgSpreadBurden,avgFakeoutRisk,avgLateEntryRisk,avgScore));
+      Print(StringFormat("[COMPRESSION_FORENSIC_AVG_GEOMETRY] avgBreakoutDistanceAtr=%.2f avgBoxWidthAtr=%.2f avgSlAtr=%.2f avgRiskR=%.2f",
+                         avgBreakoutDistanceAtr,avgBoxWidthAtr,avgSlAtr,avgRiskR));
+      Print(StringFormat("[COMPRESSION_FORENSIC_NEXT_HINT] nextHint=%s mainBlocker=%s selectedCount=%d profitState=%s",
+                         nextHint,mainBlocker,m_audit.selected,profitState));
+     }
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
@@ -662,6 +719,7 @@ public:
                          (finalValid?"true":"false"),finalReason,(m_audit.expBoxReady>0?"true":"false"),(m_audit.expBoxFormed>0?"true":"false"),(breakoutConfirmed?"true":"false"),
                          StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       Print(ProfitabilitySummary());
+      PrintForensicSummaryLines();
       return finalValid;
      }
 
