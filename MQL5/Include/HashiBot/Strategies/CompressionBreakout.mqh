@@ -104,7 +104,7 @@ private:
       return true;
      }
 
-   bool BreakoutSignal(const MarketContext &ctx,const double boxHigh,const double boxLow,const double boxWidth,TradeDirection &dir,double &breakoutQ,double &entryQ,double &fakeoutRisk,double &spreadQuality,bool &weakBreakout)
+   bool BreakoutSignal(const MarketContext &ctx,const double boxHigh,const double boxLow,const double boxWidth,TradeDirection &dir,double &breakoutQ,double &entryQ,double &fakeoutRisk,double &spreadQuality,bool &weakBreakout,bool &fakeoutReject,double &followThroughScore)
      {
       dir = TRADE_DIR_NONE;
       breakoutQ = 0.0;
@@ -112,6 +112,8 @@ private:
       fakeoutRisk=0.0;
       spreadQuality=0.0;
       weakBreakout=false;
+      fakeoutReject=false;
+      followThroughScore=0.0;
 
       double atr = ctx.atr;
       double bufferAtr=(MQLInfoInteger(MQL_TESTER)>0?0.008:0.015);
@@ -135,8 +137,18 @@ private:
       bool closeOutsideDown = (ctx.currentClose < boxLow - buffer && ctx.currentLow < boxLow);
       bool wickPierceUp = (ctx.currentHigh > boxHigh + 0.5*buffer && ctx.currentClose >= boxHigh - 0.10*atr && ctx.currentClose >= ctx.currentOpen);
       bool wickPierceDown = (ctx.currentLow < boxLow - 0.5*buffer && ctx.currentClose <= boxLow + 0.10*atr && ctx.currentClose <= ctx.currentOpen);
-      bool buyBreak = closeOutsideUp || wickPierceUp;
-      bool sellBreak = closeOutsideDown || wickPierceDown;
+      double minBreakDist=MathMax(0.08*MathMax(atr,1e-6), 1.2*ctx.spreadPoints*ctx.point);
+      double prevBody=MathAbs(ctx.recentClose[1]-ctx.recentOpen[1]);
+      double prevRange=MathMax(ctx.recentHigh[1]-ctx.recentLow[1],1e-6);
+      double prevBodyQ=MathHelpers::Clamp(prevBody/prevRange,0.0,1.0);
+      bool prevBull=(ctx.recentClose[1]>=ctx.recentOpen[1]);
+      bool prevBear=(ctx.recentClose[1]<=ctx.recentOpen[1]);
+      double upDist=MathMax(0.0,ctx.currentClose-boxHigh);
+      double downDist=MathMax(0.0,boxLow-ctx.currentClose);
+      bool wickUpFollow=(wickPierceUp && (ctx.currentClose>boxHigh || (prevBull && prevBodyQ>=0.38) || (upDist>=minBreakDist)));
+      bool wickDownFollow=(wickPierceDown && (ctx.currentClose<boxLow || (prevBear && prevBodyQ>=0.38) || (downDist>=minBreakDist)));
+      bool buyBreak = closeOutsideUp || wickUpFollow;
+      bool sellBreak = closeOutsideDown || wickDownFollow;
       if(!(buyBreak || sellBreak))
          return false;
       if(wickDominant && !closeOutsideUp && !closeOutsideDown)
@@ -163,7 +175,11 @@ private:
          if(closeLoc < minCloseLoc)
             return false;
          double edgeStrength=MathHelpers::Clamp(MathHelpers::SafeDivide(ctx.currentClose-(boxHigh+buffer),MathMax(atr,1e-6),0.0),0.0,1.0);
-         weakBreakout=(edgeStrength<0.06 || closeLoc<0.48 || bodyQ<0.18);
+         double closeBack=MathHelpers::SafeDivide((boxHigh+buffer)-ctx.currentClose,MathMax(atr,1e-6),0.0);
+         double upperWickAtr=MathHelpers::SafeDivide(upperWick,MathMax(atr,1e-6),0.0);
+         fakeoutReject=(closeBack>0.03 || (upperWickAtr>0.38 && bodyQ<0.45));
+         weakBreakout=(edgeStrength<0.12 || closeLoc<0.54 || bodyQ<0.22 || upDist<0.03*MathMax(atr,1e-6));
+         followThroughScore=MathHelpers::Clamp(0.55*edgeStrength + 0.30*bodyQ + 0.15*(prevBull?prevBodyQ:0.0),0.0,1.0);
          breakoutQ = MathHelpers::Clamp(0.35 * bodyQ + 0.35 * closeLoc + 0.20 * edgeStrength + 0.10 * spreadQuality - 0.10 * wickPenalty, 0.0, 1.0);
         }
       else
@@ -174,11 +190,15 @@ private:
          if(closeLoc < minCloseLoc)
             return false;
          double edgeStrength=MathHelpers::Clamp(MathHelpers::SafeDivide((boxLow-buffer)-ctx.currentClose,MathMax(atr,1e-6),0.0),0.0,1.0);
-         weakBreakout=(edgeStrength<0.06 || closeLoc<0.48 || bodyQ<0.18);
+         double closeBack=MathHelpers::SafeDivide(ctx.currentClose-(boxLow-buffer),MathMax(atr,1e-6),0.0);
+         double lowerWickAtr=MathHelpers::SafeDivide(lowerWick,MathMax(atr,1e-6),0.0);
+         fakeoutReject=(closeBack>0.03 || (lowerWickAtr>0.38 && bodyQ<0.45));
+         weakBreakout=(edgeStrength<0.12 || closeLoc<0.54 || bodyQ<0.22 || downDist<0.03*MathMax(atr,1e-6));
+         followThroughScore=MathHelpers::Clamp(0.55*edgeStrength + 0.30*bodyQ + 0.15*(prevBear?prevBodyQ:0.0),0.0,1.0);
          breakoutQ = MathHelpers::Clamp(0.35 * bodyQ + 0.35 * closeLoc + 0.20 * edgeStrength + 0.10 * spreadQuality - 0.10 * wickPenalty, 0.0, 1.0);
         }
 
-      fakeoutRisk=MathHelpers::Clamp(0.45*(1.0-breakoutQ)+0.25*wickPenalty+0.30*(1.0-spreadQuality),0.0,1.0);
+      fakeoutRisk=MathHelpers::Clamp(0.38*(1.0-breakoutQ)+0.24*wickPenalty+0.24*(1.0-spreadQuality)+0.14*(1.0-followThroughScore),0.0,1.0);
       entryQ = MathHelpers::Clamp(0.65*breakoutQ + 0.35*(1.0-fakeoutRisk),0.0,1.0);
       return true;
      }
@@ -268,8 +288,8 @@ public:
       int boxAge=0;
       string diagReason="none";
       TradeDirection dir = TRADE_DIR_NONE;
-      double breakoutQ = 0.0, entryQ = 0.0,fakeoutRisk=0.0,spreadQuality=0.0;
-      bool weakBreakout=false;
+      double breakoutQ = 0.0, entryQ = 0.0,fakeoutRisk=0.0,spreadQuality=0.0,followThroughScore=0.0;
+      bool weakBreakout=false,fakeoutReject=false;
       bool boxProxyFallback=false;
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
         {
@@ -314,7 +334,7 @@ public:
       m_audit.expRangeOk++;
       m_audit.boxWidthPass++;
 
-      if(!BreakoutSignal(ctx, boxHigh, boxLow, boxWidth, dir, breakoutQ, entryQ,fakeoutRisk,spreadQuality,weakBreakout))
+      if(!BreakoutSignal(ctx, boxHigh, boxLow, boxWidth, dir, breakoutQ, entryQ,fakeoutRisk,spreadQuality,weakBreakout,fakeoutReject,followThroughScore))
         {
          if(testerMode && boxProxyFallback)
            {
@@ -344,6 +364,13 @@ public:
          Reject(candidate,SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason);
          return false;
         }
+      if(fakeoutReject || fakeoutRisk>=0.70)
+        {
+         m_audit.fakeoutRiskCount++;
+         m_audit.lastRejectReason="FAKEOUT_RISK_REJECT";
+         Reject(candidate,SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason);
+         return false;
+        }
       if(fakeoutRisk>=0.62) m_audit.fakeoutRiskCount++;
 
       candidate.setupFound=true;
@@ -366,7 +393,7 @@ public:
       candidate.score.scoreVol = volExpansionProxy;
       candidate.score.scoreEntry = entryQ;
       double rrProxy = MathHelpers::Clamp(MathHelpers::SafeDivide(boxWidth, MathMax(ctx.atr,1e-6), 0.0) / 2.0, 0.0, 1.0);
-      double breakoutQuality=MathHelpers::Clamp(0.30*boxQuality + 0.32*breakoutQ + 0.18*entryQ + 0.10*volExpansionProxy + 0.10*spreadQuality - 0.20*fakeoutRisk,0.0,1.0);
+      double breakoutQuality=MathHelpers::Clamp(0.26*boxQuality + 0.30*breakoutQ + 0.16*entryQ + 0.12*volExpansionProxy + 0.08*spreadQuality + 0.12*followThroughScore - 0.24*fakeoutRisk,0.0,1.0);
       candidate.score.scoreUnique = StrategyTypes::BuildUnifiedQualityScore(regimeScore, boxQuality, volExpansionProxy, breakoutQuality, rrProxy, (regime.suppression.isSuppressed ? 1.0 : 0.0));
       candidate.score.scoreSuppression = (regime.suppression.isSuppressed ? 1.0 : 0.0);
 
@@ -395,7 +422,7 @@ public:
       m_audit.expPricePlanOk++;
 
       // SL around opposite/inside box edge with ATR/spread buffer
-      double buffer = MathMax(0.24 * ctx.atr, ctx.spreadPoints * ctx.point * 1.8);
+      double buffer = MathMax(0.20 * ctx.atr, ctx.spreadPoints * ctx.point * 1.8);
       if(dir == TRADE_DIR_LONG)
          candidate.plan.stopLoss = MathMin(candidate.plan.stopLoss, boxLow - buffer);
       else
@@ -405,15 +432,15 @@ public:
       if(risk <= 0.0)
         { m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
       double atrRisk=MathHelpers::SafeDivide(risk,MathMax(ctx.atr,1e-6),0.0);
-      if(atrRisk<0.80)
+      if(atrRisk<0.90)
         {
-         double targetRisk=MathMax(1.00*ctx.atr,MathMax(2.0*ctx.point,1e-6));
+         double targetRisk=MathMax(0.95*ctx.atr,MathMax(2.0*ctx.point,1e-6));
          if(dir==TRADE_DIR_LONG) candidate.plan.stopLoss=candidate.plan.entryPrice-targetRisk;
          else candidate.plan.stopLoss=candidate.plan.entryPrice+targetRisk;
          risk=MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss);
          atrRisk=MathHelpers::SafeDivide(risk,MathMax(ctx.atr,1e-6),0.0);
         }
-      if(atrRisk>1.85)
+      if(atrRisk>1.70)
         {
          m_audit.slTooWideReject++;
          m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP;
@@ -422,16 +449,27 @@ public:
          return false;
         }
 
-      double tp1R=(breakoutQuality>=0.70?1.20:(breakoutQuality>=0.55?1.10:1.00));
+      double tp1R=(breakoutQuality>=0.72?1.22:(breakoutQuality>=0.58?1.10:0.98));
       double tp1ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + tp1R*risk : candidate.plan.entryPrice - tp1R*risk);
-      double tp1ByBox = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + 0.95*boxWidth : candidate.plan.entryPrice - 0.95*boxWidth);
-      candidate.plan.takeProfit1 = (dir == TRADE_DIR_LONG ? MathMax(tp1ByR, tp1ByBox) : MathMin(tp1ByR, tp1ByBox));
+      double tp1ByBox = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + (0.72 + 0.30*breakoutQuality)*boxWidth : candidate.plan.entryPrice - (0.72 + 0.30*breakoutQuality)*boxWidth);
+      candidate.plan.takeProfit1 = (dir == TRADE_DIR_LONG ? MathMin(tp1ByR, tp1ByBox) : MathMax(tp1ByR, tp1ByBox));
 
       double measuredMove = boxWidth;
-      double tp2R=(breakoutQuality>=0.72?2.80:(breakoutQuality>=0.62?2.40:2.00));
-      double tp2ByMeasured = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + (1.6 + breakoutQuality) * measuredMove : candidate.plan.entryPrice - (1.6 + breakoutQuality) * measuredMove);
+      double tp2R=(breakoutQuality>=0.72?2.35:(breakoutQuality>=0.58?2.15:1.90));
+      double tp2ByMeasured = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + (1.35 + 0.70*breakoutQuality) * measuredMove : candidate.plan.entryPrice - (1.35 + 0.70*breakoutQuality) * measuredMove);
       double tp2ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + tp2R * risk : candidate.plan.entryPrice - tp2R * risk);
-      candidate.plan.takeProfit2 = (dir == TRADE_DIR_LONG ? MathMax(tp2ByR, tp2ByMeasured) : MathMin(tp2ByR, tp2ByMeasured));
+      candidate.plan.takeProfit2 = (dir == TRADE_DIR_LONG ? MathMin(tp2ByR, tp2ByMeasured) : MathMax(tp2ByR, tp2ByMeasured));
+
+      double tp1Dist=MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice);
+      double tp2Dist=MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice);
+      if(tp1Dist<=risk*0.88 || tp2Dist<=tp1Dist || tp2Dist<=risk*1.75)
+        {
+         m_audit.lastRejectReason=CANDIDATE_REASON_RR_TOO_LOW;
+         m_audit.rrTooLowReject++;
+         m_audit.failRr++;
+         Reject(candidate,SUPPRESS_OTHER,m_audit.lastRejectReason);
+         return false;
+        }
 
       candidate.plan.strategy = STRATEGY_COMPRESSION_BREAKOUT;
       candidate.plan.direction = dir;
