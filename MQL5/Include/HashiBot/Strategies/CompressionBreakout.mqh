@@ -270,8 +270,8 @@ public:
          if(m_audit.rrTooLowReject>top){ top=m_audit.rrTooLowReject; nextHint="TP_RR_TOO_AMBITIOUS"; }
          if(m_audit.scoreReject>top){ nextHint="SCORE_TOO_PERMISSIVE"; }
         }
-      return StringFormat("[COMPRESSION_PROFITABILITY_SUMMARY] called=%d boxReady=%d boxFormed=%d breakoutConfirmed=%d planBuilt=%d accepted=%d rejected=%d selected=%d acceptedLong=%d acceptedShort=%d tierAPlus=%d tierA=%d tierRetest=%d cleanBreakoutAccepted=%d continuationAccepted=%d retestAccepted=%d weakBreakoutReject=%d fakeoutRiskReject=%d lateEntryReject=%d spreadBurdenReject=%d poorBoxQualityReject=%d slTooWideReject=%d slTooTightReject=%d rrTooLowReject=%d scoreReject=%d avgBreakoutQuality=%.2f avgBreakoutDistanceAtr=%.2f avgBoxWidthAtr=%.2f avgSlAtr=%.2f avgRiskR=%.2f avgScore=%.2f nextHint=%s",
-                          m_audit.called,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.expBreakoutConfirmed,m_audit.expPricePlanOk,m_audit.accepted,m_audit.rejected,m_audit.selected,m_audit.acceptedLong,m_audit.acceptedShort,m_audit.tierAPlus,m_audit.tierA,m_audit.tierRetest,m_audit.cleanBreakoutAccepted,m_audit.continuationAccepted,m_audit.retestAccepted,m_audit.weakBreakoutReject,m_audit.fakeoutRiskReject,m_audit.lateEntryReject,m_audit.spreadBurdenReject,m_audit.poorBoxQualityReject,m_audit.slTooWideReject,m_audit.slTooTightReject,m_audit.rrTooLowReject,m_audit.scoreReject,avgBreakoutQuality,avgBreakoutDistanceAtr,avgBoxWidthAtr,avgSlAtr,avgRiskR,avgScore,nextHint);
+      return StringFormat("[COMPRESSION_PROFITABILITY_SUMMARY] called=%d boxReady=%d boxFormed=%d breakoutDetected=%d cleanBreakoutPath=%d continuationPath=%d retestPath=%d planBuilt=%d accepted=%d rejected=%d selected=%d acceptedLong=%d acceptedShort=%d tierAPlus=%d tierA=%d tierRetest=%d weakBreakoutReject=%d fakeoutRiskReject=%d lateEntryReject=%d spreadBurdenReject=%d poorBoxQualityReject=%d slTooWideReject=%d slTooTightReject=%d rrTooLowReject=%d scoreReject=%d avgBreakoutQuality=%.2f avgBreakoutDistanceAtr=%.2f avgBoxWidthAtr=%.2f avgSlAtr=%.2f avgRiskR=%.2f avgScore=%.2f nextHint=%s",
+                          m_audit.called,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.expBreakoutConfirmed,m_audit.cleanBreakoutAccepted,m_audit.continuationAccepted,m_audit.retestAccepted,m_audit.expPricePlanOk,m_audit.accepted,m_audit.rejected,m_audit.selected,m_audit.acceptedLong,m_audit.acceptedShort,m_audit.tierAPlus,m_audit.tierA,m_audit.tierRetest,m_audit.weakBreakoutReject,m_audit.fakeoutRiskReject,m_audit.lateEntryReject,m_audit.spreadBurdenReject,m_audit.poorBoxQualityReject,m_audit.slTooWideReject,m_audit.slTooTightReject,m_audit.rrTooLowReject,m_audit.scoreReject,avgBreakoutQuality,avgBreakoutDistanceAtr,avgBoxWidthAtr,avgSlAtr,avgRiskR,avgScore,nextHint);
      }
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
@@ -381,7 +381,7 @@ public:
       m_audit.expBodyOk++;
       m_audit.expCloseLocationOk++;
       m_audit.breakoutPass++;
-      if(fakeoutReject || fakeoutRisk>=0.74)
+      if(fakeoutReject || fakeoutRisk>=0.80)
         {
          m_audit.fakeoutRiskCount++;
          m_audit.fakeoutRiskReject++;
@@ -389,7 +389,8 @@ public:
          Reject(candidate,SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason);
          return false;
         }
-      if(fakeoutRisk>=0.62) m_audit.fakeoutRiskCount++;
+      if(fakeoutRisk>=0.70) m_audit.fakeoutRiskCount++;
+      if(weakBreakout && breakoutQ<0.26){ m_audit.weakBreakoutReject++; m_audit.lastRejectReason="WEAK_BREAKOUT_REJECT"; Reject(candidate,SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
 
       candidate.setupFound=true;
       candidate.direction = dir;
@@ -416,24 +417,24 @@ public:
       double breakoutDistanceAtr=MathHelpers::SafeDivide(breakoutDistance,MathMax(ctx.atr,1e-6),0.0);
       double boxWidthAtr=MathHelpers::SafeDivide(boxWidth,MathMax(ctx.atr,1e-6),0.0);
       double spreadBurden=MathHelpers::SafeDivide(ctx.spreadPoints*ctx.point,MathMax(breakoutDistance,1e-6),0.0);
-      if(spreadBurden>0.72)
+      if(spreadBurden>1.05)
         {
          m_audit.spreadBurdenReject++;
          m_audit.lastRejectReason="SPREAD_BURDEN_REJECT";
          Reject(candidate,SUPPRESS_SPREAD,m_audit.lastRejectReason);
          return false;
         }
-      bool weakProfile=((breakoutDistanceAtr<0.07 && breakoutQuality<0.64) || (breakoutDistanceAtr<0.12 && entryQ<0.52));
-      bool farProfile=((breakoutDistanceAtr>0.96 && breakoutQuality<0.64) || breakoutDistanceAtr>1.20);
-      if(breakoutDistanceAtr>1.45 || (breakoutDistanceAtr>1.25 && breakoutQuality<0.58))
+      bool weakProfile=((breakoutDistanceAtr<0.05 && breakoutQuality<0.54) || (breakoutDistanceAtr<0.09 && entryQ<0.42));
+      bool farProfile=((breakoutDistanceAtr>1.15 && breakoutQuality<0.58) || breakoutDistanceAtr>1.40);
+      if(breakoutDistanceAtr>1.70 || (breakoutDistanceAtr>1.45 && breakoutQuality<0.52))
         {
          m_audit.lateEntryReject++;
          m_audit.lastRejectReason="LATE_ENTRY_REJECT";
          Reject(candidate,SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason);
          return false;
         }
-      bool poorBoxPenalty=(boxWidthAtr>2.85 || (boxWidthAtr>2.40 && breakoutQuality<0.62));
-      if((boxWidthAtr>3.2 && breakoutQuality<0.58) || (boxWidthAtr>3.8))
+      bool poorBoxPenalty=(boxWidthAtr>3.10 || (boxWidthAtr>2.65 && breakoutQuality<0.56));
+      if((boxWidthAtr>3.7 && breakoutQuality<0.48) || (boxWidthAtr>4.4))
         {
          m_audit.poorBoxQualityReject++;
          m_audit.lastRejectReason="POOR_BOX_QUALITY_REJECT";
@@ -442,12 +443,12 @@ public:
         }
       candidate.score.scoreUnique = StrategyTypes::BuildUnifiedQualityScore(regimeScore, boxQuality, volExpansionProxy, breakoutQuality, rrProxy, (regime.suppression.isSuppressed ? 1.0 : 0.0));
       candidate.score.scoreSuppression = (regime.suppression.isSuppressed ? 1.0 : 0.0);
-      bool pathClean=(breakoutQuality>=0.74 && breakoutDistanceAtr>=0.18 && breakoutDistanceAtr<=0.85 && fakeoutRisk<=0.53);
-      bool pathContinuation=(!pathClean && breakoutDistanceAtr>=0.14 && breakoutDistanceAtr<=1.10 && breakoutQ>=0.48 && followThroughScore>=0.42);
-      bool pathRetest=(!pathClean && !pathContinuation && breakoutDistanceAtr>=0.08 && breakoutDistanceAtr<=0.62 && entryQ>=0.44 && fakeoutRisk<=0.68);
-      bool tierAPlus=(pathClean && spreadBurden<=0.42 && boxWidthAtr<=2.85);
-      bool tierA=(pathContinuation && spreadBurden<=0.56 && boxWidthAtr<=3.10);
-      bool tierRetest=(pathRetest && spreadBurden<=0.62 && boxWidthAtr<=3.20);
+      bool pathClean=((breakoutQuality>=0.66 && breakoutDistanceAtr>=0.12 && breakoutDistanceAtr<=1.05 && fakeoutRisk<=0.60 && followThroughScore>=0.46) || (breakoutQ>=0.68 && breakoutDistanceAtr>=0.10 && breakoutDistanceAtr<=0.95 && fakeoutRisk<=0.58));
+      bool pathContinuation=(!pathClean && breakoutDistanceAtr>=0.07 && breakoutDistanceAtr<=1.35 && (breakoutQ>=0.40 || followThroughScore>=0.38 || entryQ>=0.46) && fakeoutRisk<=0.72);
+      bool pathRetest=(!pathClean && !pathContinuation && breakoutDistanceAtr>=0.04 && breakoutDistanceAtr<=0.95 && entryQ>=0.36 && fakeoutRisk<=0.76 && (followThroughScore>=0.30 || breakoutQ>=0.34));
+      bool tierAPlus=(pathClean && spreadBurden<=0.62 && boxWidthAtr<=3.20);
+      bool tierA=(pathContinuation && spreadBurden<=0.82 && boxWidthAtr<=3.70);
+      bool tierRetest=(pathRetest && spreadBurden<=0.92 && boxWidthAtr<=3.90);
       if(!tierAPlus && !tierA && !tierRetest)
         {
          m_audit.scoreReject++;
@@ -491,7 +492,7 @@ public:
       if(risk <= 0.0)
         { m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
       double atrRisk=MathHelpers::SafeDivide(risk,MathMax(ctx.atr,1e-6),0.0);
-      if(atrRisk<0.62)
+      if(atrRisk<0.70)
         {
          m_audit.slTooTightReject++;
          m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP;
@@ -499,7 +500,7 @@ public:
          Reject(candidate,SUPPRESS_OTHER,m_audit.lastRejectReason);
          return false;
         }
-      if(atrRisk>2.35)
+      if(atrRisk>2.90)
         {
          m_audit.slTooWideReject++;
          m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP;
@@ -508,20 +509,20 @@ public:
          return false;
         }
 
-      double tp1R=(tierAPlus?1.10:(tierA?1.00:0.98));
+      double tp1R=(tierAPlus?1.10:(tierA?0.96:0.88));
       double tp1ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + tp1R*risk : candidate.plan.entryPrice - tp1R*risk);
       double tp1ByBox = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + (0.64 + 0.24*breakoutQuality)*boxWidth : candidate.plan.entryPrice - (0.64 + 0.24*breakoutQuality)*boxWidth);
       candidate.plan.takeProfit1 = (dir == TRADE_DIR_LONG ? MathMin(tp1ByR, tp1ByBox) : MathMax(tp1ByR, tp1ByBox));
 
       double measuredMove = boxWidth;
-      double tp2R=(tierAPlus?2.35:(tierA?1.80:1.65));
+      double tp2R=(tierAPlus?2.30:(tierA?1.65:1.45));
       double tp2ByMeasured = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + (1.10 + 0.52*breakoutQuality) * measuredMove : candidate.plan.entryPrice - (1.10 + 0.52*breakoutQuality) * measuredMove);
       double tp2ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + tp2R * risk : candidate.plan.entryPrice - tp2R * risk);
       candidate.plan.takeProfit2 = (dir == TRADE_DIR_LONG ? MathMin(tp2ByR, tp2ByMeasured) : MathMax(tp2ByR, tp2ByMeasured));
 
       double tp1Dist=MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice);
       double tp2Dist=MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice);
-      if(tp1Dist<=risk*0.84 || tp2Dist<=tp1Dist || tp2Dist<=risk*(tierAPlus?1.95:(tierA?1.50:1.40)))
+      if(tp1Dist<=risk*0.78 || tp2Dist<=tp1Dist || tp2Dist<=risk*(tierAPlus?1.80:(tierA?1.35:1.20)))
         {
          m_audit.lastRejectReason=CANDIDATE_REASON_RR_TOO_LOW;
          m_audit.rrTooLowReject++;
@@ -529,7 +530,7 @@ public:
          Reject(candidate,SUPPRESS_OTHER,m_audit.lastRejectReason);
          return false;
         }
-      if(tp2Dist>risk*(tierAPlus?2.80:(tierA?2.10:2.00)))
+      if(tp2Dist>risk*(tierAPlus?2.90:(tierA?2.00:1.80)))
         {
          m_audit.tpRrTooAmbitiousReject++;
          m_audit.rrTooLowReject++;
@@ -544,9 +545,9 @@ public:
       double pathBoost=(tierAPlus?0.05:(tierA?0.02:0.00));
       candidate.score.totalScore = MathMax(candidate.plan.confidence, candidate.score.scoreUnique);
       candidate.score.totalScore = MathHelpers::Clamp(candidate.score.totalScore + pathBoost - 0.20*fakeoutRisk - (weakBreakout?0.08:0.0) - (weakProfile?0.05:0.0) - (farProfile?0.06:0.0) - ((spreadBurden>0.48)?0.05:0.0) - (poorBoxPenalty?0.05:0.0),0.0,1.0);
-      if(tierAPlus) candidate.score.totalScore=MathMax(candidate.score.totalScore,0.64);
-      else if(tierA) candidate.score.totalScore=MathMax(candidate.score.totalScore,0.57);
-      else candidate.score.totalScore=MathMax(candidate.score.totalScore,0.54);
+      if(tierAPlus) candidate.score.totalScore=MathMax(candidate.score.totalScore,0.60);
+      else if(tierA) candidate.score.totalScore=MathMax(candidate.score.totalScore,0.52);
+      else candidate.score.totalScore=MathMax(candidate.score.totalScore,0.48);
 
       bool directionPass=(candidate.direction==TRADE_DIR_LONG || candidate.direction==TRADE_DIR_SHORT) && (candidate.plan.direction==TRADE_DIR_LONG || candidate.plan.direction==TRADE_DIR_SHORT);
       bool pricePass=(candidate.plan.entryPrice>0.0);
@@ -595,7 +596,7 @@ public:
          candidateAcceptCalled=true;
          candidate.rejectReason=CANDIDATE_REASON_OK;
          candidate.reason=CANDIDATE_REASON_OK;
-         if(m_audit.expValid<=20)
+         if(m_audit.expValid<=30)
             Print(StringFormat("[COMPRESSION_ACCEPTED_PLAN] path=%s side=%s tier=%s breakoutQuality=%.2f breakoutDistanceAtr=%.2f boxWidthAtr=%.2f slAtr=%.2f rr=%.2f score=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",
                                acceptedPath,StrategyTypes::DirectionName(candidate.plan.direction),(tierAPlus?"A_PLUS":(tierA?"A":"RETEST")),breakoutQuality,breakoutDistanceAtr,boxWidthAtr,atrRisk,candidate.plan.riskR,candidate.score.totalScore,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2));
         }
@@ -611,7 +612,7 @@ public:
          Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason);
         }
       bool nearValid=(m_audit.expBoxReady>0 || m_audit.expBoxFormed>0 || breakoutConfirmed || candidate.direction!=TRADE_DIR_NONE || candidate.setupFound || candidate.plan.entryPrice!=0.0 || candidate.plan.stopLoss!=0.0 || candidate.plan.takeProfit1!=0.0 || candidate.plan.takeProfit2!=0.0 || candidate.plan.riskR>0.0 || candidate.score.totalScore>0.0);
-      if(nearValid && m_audit.nearValidSnapshots<20)
+      if(nearValid && m_audit.nearValidSnapshots<30)
         {
          m_audit.nearValidSnapshots++;
          if(finalReason=="BOX_NOT_READY") m_audit.nearFailBoxReady++;
@@ -625,7 +626,7 @@ public:
          Print(StringFormat("[COMPRESSION_FAILURE_SNAPSHOT] n=%d barTime=%s boxReady=%s boxFormed=%s breakoutConfirmed=%s direction=%d setupFound=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f reason=%s finalReason=%s priceFieldsPass=%s sltpPass=%s rrPass=%s scorePass=%s candidateAcceptCalled=%s returnValue=%s boxHigh=%.5f boxLow=%.5f boxWidth=%.5f insideBars=%d touches=%d close=%.5f bid=%.5f ask=%.5f atr=%.5f spread=%.2f",
                            (int)m_audit.nearValidSnapshots,TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),(m_audit.expBoxReady>0?"true":"false"),(m_audit.expBoxFormed>0?"true":"false"),(breakoutConfirmed?"true":"false"),(int)candidate.plan.direction,(candidate.setupFound?"true":"false"),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,candidate.rejectReason,finalReason,(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(candidateAcceptCalled?"true":"false"),(finalValid?"true":"false"),boxHigh,boxLow,boxWidth,(int)MathRound(insideRatio*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),ctx.currentClose,ctx.bid,ctx.ask,ctx.atr,ctx.spreadPoints));
         }
-      if(!finalValid && nearValid && m_audit.nearValidSnapshots<=20)
+      if(!finalValid && nearValid && m_audit.nearValidSnapshots<=30)
          Print(StringFormat("[COMPRESSION_REJECT_NEAR_VALID] reason=%s side=%s path=%s breakoutQuality=%.2f breakoutDistanceAtr=%.2f boxWidthAtr=%.2f slAtr=%.2f rr=%.2f score=%.2f spreadBurden=%.2f",
                             MapRejectReason(finalReason),StrategyTypes::DirectionName(candidate.plan.direction),acceptedPath,breakoutQuality,breakoutDistanceAtr,boxWidthAtr,atrRisk,candidate.plan.riskR,candidate.score.totalScore,spreadBurden));
             Print(StringFormat("[COMPRESSION_ACCEPT_ATTEMPT] marker=A4.20 called=1 boxReady=true boxFormed=true breakoutConfirmed=%s breakoutSide=%s boxHigh=%.5f boxLow=%.5f boxWidth=%.5f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f compressionScore=%.2f breakoutQuality=%.2f fakeoutRisk=%.2f retestAllowance=%.2f accepted=%s reason=%s",
