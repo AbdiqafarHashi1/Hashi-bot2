@@ -480,7 +480,7 @@ bool IsRealCandidatePlan(const TradePlan &plan,string &reason)
   {
    reason="ok";
    if(plan.strategy!=STRATEGY_TREND_CONTINUATION && plan.strategy!=STRATEGY_COMPRESSION_BREAKOUT && plan.strategy!=STRATEGY_MICRO_SCALPER){ reason="unknown_strategy"; return false; }
-   if(StringLen(plan.symbol)<=0){ reason="symbol_empty"; return false; }
+   if(StringLen(_Symbol)<=0){ reason="symbol_empty"; return false; }
    if(plan.direction!=TRADE_DIR_LONG && plan.direction!=TRADE_DIR_SHORT){ reason="invalid_direction"; return false; }
    if(plan.entryPrice<=0.0){ reason="entry_non_positive"; return false; }
    if(plan.stopLoss<=0.0){ reason="sl_non_positive"; return false; }
