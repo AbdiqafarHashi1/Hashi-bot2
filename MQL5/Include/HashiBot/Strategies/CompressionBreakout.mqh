@@ -7,7 +7,8 @@
 #define COMP_MIN_MARKET_QUALITY      0.40
 #define COMP_MAX_CHOPPINESS          65.0
 #define COMP_MIN_BARS                10
-#define COMP_LOOKBACK                16
+#define COMP_LOOKBACK                24
+#define COMP_INNER_MIN_BARS          8
 
 // Future profile placeholders
 #define COMP_PROP_STRICT_BOX         0.75
@@ -50,42 +51,54 @@ private:
 
    bool DetectBox(const MarketContext &ctx,double &boxHigh,double &boxLow,double &boxWidth,int &usedBars,double &insideRatio,double &touchScore)
      {
-      usedBars = MathMin(ctx.barsLoaded, COMP_LOOKBACK);
+      usedBars = MathMin(ctx.barsLoaded-1, COMP_LOOKBACK);
       if(usedBars < COMP_MIN_BARS)
          return false;
 
       int validBars=0;
-      boxHigh = -DBL_MAX;
-      boxLow = DBL_MAX;
-      for(int i = 1; i < usedBars; i++)
+      for(int i = 1; i <= usedBars; i++)
         {
          if(ctx.recentHigh[i] <= 0.0 || ctx.recentLow[i] <= 0.0 || ctx.recentHigh[i] < ctx.recentLow[i])
             continue;
-         if(ctx.recentHigh[i] > boxHigh) boxHigh = ctx.recentHigh[i];
-         if(ctx.recentLow[i] < boxLow) boxLow = ctx.recentLow[i];
          validBars++;
         }
-      if(validBars < COMP_MIN_BARS-1 || boxHigh<=0.0 || boxLow<=0.0 || boxHigh<=boxLow)
+      if(validBars < COMP_MIN_BARS)
          return false;
 
-      boxWidth = boxHigh - boxLow;
-      int insideCount = 0;
-      int touches = 0;
-      for(int j = 1; j < usedBars; j++)
+      int bestStart=-1,bestEnd=-1;
+      double bestWidth=DBL_MAX,bestHigh=0.0,bestLow=0.0;
+      int minWin=MathMin(12, usedBars);
+      for(int win=minWin; win<=usedBars; win++)
         {
-         if(ctx.recentHigh[j] <= 0.0 || ctx.recentLow[j] <= 0.0 || ctx.recentHigh[j] < ctx.recentLow[j])
-            continue;
-         bool inside = (ctx.recentHigh[j] <= boxHigh && ctx.recentLow[j] >= boxLow);
-         if(inside) insideCount++;
-
-         double nearTop = MathAbs(ctx.recentHigh[j] - boxHigh);
-         double nearBottom = MathAbs(ctx.recentLow[j] - boxLow);
-         if(nearTop <= boxWidth * 0.10) touches++;
-         if(nearBottom <= boxWidth * 0.10) touches++;
+         for(int start=1; start<=usedBars-win+1; start++)
+           {
+            double hi=-DBL_MAX,lo=DBL_MAX; int ok=0;
+            for(int j=start; j<start+win; j++)
+              {
+               if(ctx.recentHigh[j] <= 0.0 || ctx.recentLow[j] <= 0.0 || ctx.recentHigh[j] < ctx.recentLow[j])
+                  continue;
+               hi=MathMax(hi,ctx.recentHigh[j]); lo=MathMin(lo,ctx.recentLow[j]); ok++;
+              }
+            if(ok < COMP_INNER_MIN_BARS || hi<=lo) continue;
+            double w=hi-lo;
+            if(w<bestWidth){bestWidth=w;bestStart=start;bestEnd=start+win-1;bestHigh=hi;bestLow=lo;}
+           }
         }
+      if(bestStart<0) return false;
 
-      insideRatio = MathHelpers::SafeDivide((double)insideCount, (double)validBars, 0.0);
-      touchScore = MathHelpers::Clamp(MathHelpers::SafeDivide((double)touches, (double)(validBars * 2), 0.0), 0.0, 1.0);
+      boxHigh=bestHigh; boxLow=bestLow; boxWidth=bestWidth; usedBars=bestEnd-bestStart+1;
+      int inside=0,touches=0,count=0;
+      for(int j=bestStart; j<=bestEnd; j++)
+        {
+         if(ctx.recentHigh[j] <= 0.0 || ctx.recentLow[j] <= 0.0 || ctx.recentHigh[j] < ctx.recentLow[j]) continue;
+         count++;
+         if(ctx.recentHigh[j] <= boxHigh && ctx.recentLow[j] >= boxLow) inside++;
+         if(MathAbs(ctx.recentHigh[j]-boxHigh) <= boxWidth*0.12) touches++;
+         if(MathAbs(ctx.recentLow[j]-boxLow) <= boxWidth*0.12) touches++;
+        }
+      if(count<COMP_INNER_MIN_BARS) return false;
+      insideRatio=MathHelpers::SafeDivide((double)inside,(double)count,0.0);
+      touchScore=MathHelpers::Clamp(MathHelpers::SafeDivide((double)touches,(double)(count*2),0.0),0.0,1.0);
       return true;
      }
 
@@ -96,7 +109,7 @@ private:
       entryQ = 0.0;
 
       double atr = ctx.atr;
-      double bufferAtr=(MQLInfoInteger(MQL_TESTER)>0?0.015:0.040);
+      double bufferAtr=(MQLInfoInteger(MQL_TESTER)>0?0.008:0.015);
       double buffer = MathMax(ctx.point * 2.0, bufferAtr * atr);
       double body = MathAbs(ctx.currentClose - ctx.currentOpen);
       double range = ctx.currentHigh - ctx.currentLow;
@@ -104,18 +117,18 @@ private:
          return false;
 
       double bodyQ = MathHelpers::Clamp(body / range, 0.0, 1.0);
-      double minBody=(m_profile==PROFILE_PROP_FIRM?0.25:0.16);
+      double minBody=(m_profile==PROFILE_PROP_FIRM?0.16:0.10);
       if(bodyQ < minBody)
          return false; // weak/doji
 
       double upperWick = ctx.currentHigh - MathMax(ctx.currentOpen, ctx.currentClose);
       double lowerWick = MathMin(ctx.currentOpen, ctx.currentClose) - ctx.currentLow;
-      bool wickDominant = (MathMax(upperWick, lowerWick) > body * 2.5);
+      bool wickDominant = (MathMax(upperWick, lowerWick) > body * 3.2);
 
       bool closeOutsideUp = (ctx.currentClose > boxHigh + buffer && ctx.currentHigh > boxHigh);
       bool closeOutsideDown = (ctx.currentClose < boxLow - buffer && ctx.currentLow < boxLow);
-      bool wickPierceUp = (ctx.currentHigh > boxHigh + 0.5*buffer && ctx.currentClose >= boxHigh - 0.15*atr && ctx.currentClose >= ctx.currentOpen);
-      bool wickPierceDown = (ctx.currentLow < boxLow - 0.5*buffer && ctx.currentClose <= boxLow + 0.15*atr && ctx.currentClose <= ctx.currentOpen);
+      bool wickPierceUp = (ctx.currentHigh > boxHigh + 0.5*buffer && ctx.currentClose >= boxHigh - 0.10*atr && ctx.currentClose >= ctx.currentOpen);
+      bool wickPierceDown = (ctx.currentLow < boxLow - 0.5*buffer && ctx.currentClose <= boxLow + 0.10*atr && ctx.currentClose <= ctx.currentOpen);
       bool buyBreak = closeOutsideUp || wickPierceUp;
       bool sellBreak = closeOutsideDown || wickPierceDown;
       if(!(buyBreak || sellBreak))
@@ -124,12 +137,12 @@ private:
          return false; // wick-dominant needs stronger close outside
 
       // spread vs box width filter
-      if(ctx.spreadPoints * ctx.point > boxWidth * 0.20)
+      if(ctx.spreadPoints * ctx.point > boxWidth * 0.30)
          return false;
 
       // overextended breakout vs ATR
       double breakoutDist = (buyBreak ? (ctx.currentClose - boxHigh) : (boxLow - ctx.currentClose));
-      if(atr > 0.0 && breakoutDist > 2.4 * atr)
+      if(atr > 0.0 && breakoutDist > 2.8 * atr)
          return false;
       if(atr > 0.0 && closeOutsideUp==false && closeOutsideDown==false && breakoutDist < 0.01 * atr)
          return false;
@@ -138,7 +151,7 @@ private:
         {
          dir = TRADE_DIR_LONG;
          double closeLoc = MathHelpers::Clamp(MathHelpers::SafeDivide(ctx.currentClose - ctx.currentLow, range, 0.0), 0.0, 1.0);
-         double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.62:0.50);
+         double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.56:0.42);
          if(closeLoc < minCloseLoc)
             return false;
          breakoutQ = MathHelpers::Clamp(0.5 * bodyQ + 0.5 * closeLoc, 0.0, 1.0);
@@ -147,7 +160,7 @@ private:
         {
          dir = TRADE_DIR_SHORT;
          double closeLoc = MathHelpers::Clamp(MathHelpers::SafeDivide(ctx.currentHigh - ctx.currentClose, range, 0.0), 0.0, 1.0);
-         double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.62:0.50);
+         double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.56:0.42);
          if(closeLoc < minCloseLoc)
             return false;
          breakoutQ = MathHelpers::Clamp(0.5 * bodyQ + 0.5 * closeLoc, 0.0, 1.0);
@@ -180,8 +193,8 @@ public:
                            (m_audit.failBody>=m_audit.failCloseLocation && m_audit.failBody>=m_audit.failSltp && m_audit.failBody>=m_audit.failRr?"bodyFail":
                            (m_audit.failCloseLocation>=m_audit.failSltp && m_audit.failCloseLocation>=m_audit.failRr?"closeLocationFail":
                            (m_audit.failSltp>=m_audit.failRr?"sltpFail":"rrFail")))))));
-         return StringFormat("[COMPRESSION_EXPOSURE_SUMMARY] called=%d boxReady=%d boxFormed=%d boxReadyFail=%d boxFormedFail=%d rangeTooWide=%d breakoutConfirmed=%d breakoutNotConfirmed=%d sltpPass=%d rrPass=%d valid=%d selected=%d lostToMicro=%d topReject=%s",
-                             m_audit.called,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.failBoxReady,m_audit.failBoxFormed,m_audit.failRange,m_audit.expBreakoutConfirmed,m_audit.failBreakout,m_audit.slTpPass,m_audit.expRrOk,m_audit.expValid,0,0,topReject);
+         return StringFormat("[COMPRESSION_FREQUENCY_SUMMARY] called=%d boxReady=%d boxFormed=%d breakoutLong=%d breakoutShort=%d breakoutConfirmed=%d planBuilt=%d accepted=%d addedToArbitration=%d selected=%d topRejectReason=%s",
+                             m_audit.called,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.expBodyOk,m_audit.expCloseLocationOk,m_audit.expBreakoutConfirmed,m_audit.expPricePlanOk,m_audit.expValid,m_audit.expValid,0,topReject);
         }
 
 
@@ -268,16 +281,16 @@ public:
       int minBoxAge=(m_profile==PROFILE_PROP_FIRM?9:(testerMode?5:7));
       if(boxAge < minBoxAge)
         { gateDuration=1; m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
-      double minInside=(m_profile==PROFILE_PROP_FIRM?0.44:(testerMode?0.10:0.22));
-      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.14:(testerMode?0.02:0.05));
+      double minInside=(m_profile==PROFILE_PROP_FIRM?0.34:(testerMode?0.08:0.14));
+      double minTouch=(m_profile==PROFILE_PROP_FIRM?0.08:(testerMode?0.01:0.03));
       if(insideRatio < minInside || touchScore < minTouch)
         { gateAtrContraction=1; m_audit.lastRejectReason="BOX_NOT_READY"; diagReason=m_audit.lastRejectReason; m_audit.failBoxReady++; Print(StringFormat("[COMPRESSION_BOX_DIAG] enoughBars=%s atrReady=%s boxReady=false boxFormed=true boxHigh=%.5f boxLow=%.5f boxWidth=%.5f boxWidthAtr=%.2f insideBars=%d requiredInsideBars=%d touches=%d requiredTouches=%d rangeTooWide=false breakoutConfirmed=false reason=%s",(ctx.barsLoaded>=minBars?"true":"false"),(ctx.atr>0.0?"true":"false"),boxHigh,boxLow,boxWidth,(ctx.atr>0?boxWidth/ctx.atr:0.0),(int)MathRound(insideRatio*(boxAge-1)),(int)MathCeil(minInside*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),(int)MathCeil(minTouch*((boxAge-1)*2)),diagReason)); Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
       m_audit.expBoxReady++;
       m_audit.boxReadyPass++;
 
-      if(boxWidth < MathMax(ctx.atr * (testerMode?0.08:0.14), ctx.spreadPoints * ctx.point * 1.3))
+      if(boxWidth < MathMax(ctx.atr * (testerMode?0.06:0.10), ctx.spreadPoints * ctx.point * 1.2))
         { m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_SPREAD,m_audit.lastRejectReason); return false; } // too narrow
-      if(boxWidth > ctx.atr * (testerMode?5.6:4.4))
+      if(boxWidth > ctx.atr * (testerMode?7.5:6.0))
         { m_audit.lastRejectReason="RANGE_TOO_WIDE"; m_audit.failRange++; Reject(candidate, SUPPRESS_VOLATILITY,m_audit.lastRejectReason); return false; } // too wide
       m_audit.expRangeOk++;
       m_audit.boxWidthPass++;
