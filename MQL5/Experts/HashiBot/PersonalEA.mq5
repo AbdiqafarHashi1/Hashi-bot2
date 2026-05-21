@@ -218,6 +218,13 @@ long g_rejectPayoffAsymmetry=0,g_drawdownLockLevel=0;
 long g_phaseABarsEvaluated=0,g_phaseANoCandidate=0;
 long g_invalidSpreadEvents=0,g_marketDataInvalidEvents=0;
 long g_invalidSpreadLogs=0,g_marketDataCheckLogs=0;
+const int HASHIBOT_ATTR_CAP=512;
+ulong g_attrPositionIds[HASHIBOT_ATTR_CAP],g_attrOrderIds[HASHIBOT_ATTR_CAP],g_attrDealIds[HASHIBOT_ATTR_CAP];
+int g_attrStrategyBuckets[HASHIBOT_ATTR_CAP];
+string g_attrSymbols[HASHIBOT_ATTR_CAP],g_attrDirections[HASHIBOT_ATTR_CAP];
+double g_attrEntries[HASHIBOT_ATTR_CAP],g_attrSL[HASHIBOT_ATTR_CAP],g_attrTP1[HASHIBOT_ATTR_CAP],g_attrTP2[HASHIBOT_ATTR_CAP],g_attrVolumes[HASHIBOT_ATTR_CAP];
+datetime g_attrBarTimes[HASHIBOT_ATTR_CAP];
+int g_attrCount=0;
 
 void LogMarketDataCheck(const string symbol,const double bid,const double ask,const double point,const double spreadPoints,const double maxSpreadPoints,const bool valid,const string reason)
   {
@@ -347,26 +354,89 @@ int StrategyFromEncodedComment(const string comment)
    if(code==(int)STRATEGY_COMPRESSION_BREAKOUT) return 2;
    if(code==(int)STRATEGY_EXPANSION_MOMENTUM) return 3;
    if(code==(int)STRATEGY_MICRO_SCALPER) return 4;
+  return -1;
+  }
+
+void ResetAttributionMaps()
+  {
+   g_attrCount=0;
+   ArrayInitialize(g_attrPositionIds,0);
+   ArrayInitialize(g_attrOrderIds,0);
+   ArrayInitialize(g_attrDealIds,0);
+   ArrayInitialize(g_attrStrategyBuckets,-1);
+  }
+
+void StoreOpenAttribution(const int bucket,const string symbol,const string direction,const ulong orderId,const ulong dealId,const ulong positionId,const double entry,const double sl,const double tp1,const double tp2,const double volume,const datetime barTime)
+  {
+   if(bucket<0 || bucket>4) return;
+   int idx=(g_attrCount<HASHIBOT_ATTR_CAP?g_attrCount:(g_attrCount%HASHIBOT_ATTR_CAP));
+   g_attrStrategyBuckets[idx]=bucket;
+   g_attrSymbols[idx]=symbol;
+   g_attrDirections[idx]=direction;
+   g_attrOrderIds[idx]=orderId;
+   g_attrDealIds[idx]=dealId;
+   g_attrPositionIds[idx]=positionId;
+   g_attrEntries[idx]=entry; g_attrSL[idx]=sl; g_attrTP1[idx]=tp1; g_attrTP2[idx]=tp2; g_attrVolumes[idx]=volume;
+   g_attrBarTimes[idx]=barTime;
+   g_attrCount++;
+  }
+
+int FindStrategyBucketByPositionId(const ulong positionId)
+  {
+   if(positionId==0) return -1;
+   int limit=MathMin(g_attrCount,HASHIBOT_ATTR_CAP);
+   for(int i=0;i<limit;i++) if(g_attrPositionIds[i]==positionId && g_attrStrategyBuckets[i]>=0) return g_attrStrategyBuckets[i];
    return -1;
   }
 
-int ResolveStrategyBucketFromDeal(const long magic,const string comment,const ulong order,const ulong positionId)
+int FindStrategyBucketByOrderOrDealId(const ulong orderId,const ulong dealId)
   {
+   int limit=MathMin(g_attrCount,HASHIBOT_ATTR_CAP);
+   for(int i=0;i<limit;i++)
+     {
+      if(orderId>0 && g_attrOrderIds[i]==orderId && g_attrStrategyBuckets[i]>=0) return g_attrStrategyBuckets[i];
+      if(dealId>0 && g_attrDealIds[i]==dealId && g_attrStrategyBuckets[i]>=0) return g_attrStrategyBuckets[i];
+     }
+  return -1;
+  }
+
+ulong ResolvePositionIdFromHistory(const ulong orderId,const ulong dealId)
+  {
+   if(!HistorySelect(0,TimeCurrent())) return 0;
+   int total=(int)HistoryDealsTotal();
+   for(int i=total-1;i>=0;i--)
+     {
+      ulong d=HistoryDealGetTicket(i);
+      if(d==0) continue;
+      ulong hOrder=(ulong)HistoryDealGetInteger(d,DEAL_ORDER);
+      if((orderId>0 && hOrder==orderId) || (dealId>0 && d==dealId))
+         return (ulong)HistoryDealGetInteger(d,DEAL_POSITION_ID);
+     }
+   return 0;
+  }
+
+int ResolveStrategyBucketFromDeal(const long magic,const string comment,const ulong order,const ulong positionId,const ulong deal,string &attributionSource)
+  {
+   int byPosition=FindStrategyBucketByPositionId(positionId);
+   if(byPosition>=0){ attributionSource="PositionMap"; return byPosition; }
+   int byOrder=FindStrategyBucketByOrderOrDealId(order,deal);
+   if(byOrder>=0){ attributionSource="OrderMap"; return byOrder; }
    if((long)MagicNumber>0 && magic==(long)MagicNumber)
      {
       int fromComment=StrategyFromEncodedComment(comment);
-      if(fromComment>=0) return fromComment;
-      if(StringFind(comment,"MicroScalper")>=0 || StringFind(comment,"micro")>=0) return 4;
-      if(StringFind(comment,"Compression")>=0 || StringFind(comment,"compression")>=0) return 2;
-      if(StringFind(comment,"Trend")>=0 || StringFind(comment,"trend")>=0) return 0;
-      if(StringFind(comment,"Pullback")>=0 || StringFind(comment,"pullback")>=0) return 1;
-      if(StringFind(comment,"Expansion")>=0 || StringFind(comment,"expansion")>=0) return 3;
-      if(StringFind(comment,TradeCommentPrefix)>=0) return 4;
+      if(fromComment>=0){ attributionSource="DealComment"; return fromComment; }
+      if(StringFind(comment,"strategy=MicroScalper")>=0 || StringFind(comment,"MicroScalper")>=0 || StringFind(comment,"micro")>=0){ attributionSource="DealComment"; return 4; }
+      if(StringFind(comment,"strategy=CompressionBreakout")>=0 || StringFind(comment,"Compression")>=0 || StringFind(comment,"compression")>=0){ attributionSource="DealComment"; return 2; }
+      if(StringFind(comment,"strategy=TrendContinuation")>=0 || StringFind(comment,"Trend")>=0 || StringFind(comment,"trend")>=0){ attributionSource="DealComment"; return 0; }
+      if(StringFind(comment,"strategy=PullbackContinuation")>=0 || StringFind(comment,"Pullback")>=0 || StringFind(comment,"pullback")>=0){ attributionSource="DealComment"; return 1; }
+      if(StringFind(comment,"strategy=ExpansionMomentum")>=0 || StringFind(comment,"Expansion")>=0 || StringFind(comment,"expansion")>=0){ attributionSource="DealComment"; return 3; }
+      if(StringFind(comment,TradeCommentPrefix)>=0){ attributionSource="DealComment"; return 4; }
      }
+   attributionSource="Unknown";
    return -1;
   }
 
-void UpdateAttributionFromDeal(const ulong deal,const string source,long &openDeals,long &closeDeals,long &attributedClosed,long &unknownClosed,double &netProfit)
+void UpdateAttributionFromDeal(const ulong deal,const string source,long &openDeals,long &closeDeals,long &attributedClosed,long &unknownClosed,long &positionMapHits,long &orderMapHits,long &commentHits,long &unknownHits,double &netProfit)
   {
    const long entryType=(long)HistoryDealGetInteger(deal,DEAL_ENTRY);
    if(entryType==DEAL_ENTRY_IN) { openDeals++; return; }
@@ -380,12 +450,16 @@ void UpdateAttributionFromDeal(const ulong deal,const string source,long &openDe
    ulong order=(ulong)HistoryDealGetInteger(deal,DEAL_ORDER);
    long magic=(long)HistoryDealGetInteger(deal,DEAL_MAGIC);
    string comment=HistoryDealGetString(deal,DEAL_COMMENT);
-   int bucket=ResolveStrategyBucketFromDeal(magic,comment,order,positionId);
+   string attributionSource="Unknown";
+   int bucket=ResolveStrategyBucketFromDeal(magic,comment,order,positionId,deal,attributionSource);
    string strategyName=(bucket>=0?StrategyResultName(bucket):"UnknownStrategy");
    string result=(net>0.0?"WIN":(net<0.0?"LOSS":"BREAKEVEN"));
    if(bucket>=0)
      {
       attributedClosed++;
+      if(attributionSource=="PositionMap") positionMapHits++;
+      else if(attributionSource=="OrderMap") orderMapHits++;
+      else if(attributionSource=="DealComment") commentHits++;
       g_closedCount[bucket]++;
       g_netPnl[bucket]+=net;
       if(net>0.0) g_sumR[bucket]+=net;
@@ -396,17 +470,17 @@ void UpdateAttributionFromDeal(const ulong deal,const string source,long &openDe
       else if(bucket==3){ if(net>0.0) g_winExpansion++; else if(net<0.0) g_lossExpansion++; }
       else if(bucket==4){ if(net>0.0) g_winMicro++; else if(net<0.0) g_lossMicro++; }
      }
-   else unknownClosed++;
+   else { unknownClosed++; unknownHits++; }
    netProfit+=net;
-   Print(StringFormat("[TRADE_RESULT] strategy=%s positionId=%I64d deal=%I64d order=%I64d entryType=%d profit=%.2f commission=%.2f swap=%.2f net=%.2f result=%s source=%s",strategyName,positionId,deal,order,entryType,profit,commission,swap,net,result,source));
+   Print(StringFormat("[TRADE_RESULT] strategy=%s source=%s attributionSource=%s positionId=%I64d deal=%I64d order=%I64d entryType=%d profit=%.2f commission=%.2f swap=%.2f net=%.2f result=%s",strategyName,source,attributionSource,positionId,deal,order,entryType,profit,commission,swap,net,result));
   }
 
-void RebuildClosedResultsFromHistory(const string source,long &testerDeals,long &openDeals,long &closeDeals,long &attributedClosed,long &unknownClosed,double &netProfit)
+void RebuildClosedResultsFromHistory(const string source,long &testerDeals,long &openDeals,long &closeDeals,long &attributedClosed,long &unknownClosed,long &positionMapHits,long &orderMapHits,long &commentHits,long &unknownHits,double &netProfit)
   {
    for(int i=0;i<5;i++){ g_closedCount[i]=0; g_netPnl[i]=0.0; g_sumR[i]=0.0; }
    g_winTrend=0; g_winPullback=0; g_winCompression=0; g_winExpansion=0; g_winMicro=0;
    g_lossTrend=0; g_lossPullback=0; g_lossCompression=0; g_lossExpansion=0; g_lossMicro=0;
-   testerDeals=0; openDeals=0; closeDeals=0; attributedClosed=0; unknownClosed=0; netProfit=0.0;
+   testerDeals=0; openDeals=0; closeDeals=0; attributedClosed=0; unknownClosed=0; positionMapHits=0; orderMapHits=0; commentHits=0; unknownHits=0; netProfit=0.0;
    if(!HistorySelect(0,TimeCurrent())) return;
    int total=(int)HistoryDealsTotal();
    testerDeals=total;
@@ -414,7 +488,7 @@ void RebuildClosedResultsFromHistory(const string source,long &testerDeals,long 
      {
       ulong deal=HistoryDealGetTicket(i);
       if(deal==0) continue;
-      UpdateAttributionFromDeal(deal,source,openDeals,closeDeals,attributedClosed,unknownClosed,netProfit);
+      UpdateAttributionFromDeal(deal,source,openDeals,closeDeals,attributedClosed,unknownClosed,positionMapHits,orderMapHits,commentHits,unknownHits,netProfit);
      }
   }
 
@@ -838,6 +912,10 @@ bool ExecuteSelectedPlan(const TradePlan &plan,string &blocker)
    RiskDecision sendRisk=g_execRisk; sendRisk.approvedLots=volume; string execReason=""; g_testerOrdersAttempted++; orderAttempted=true; g_execProofOrderAttempted=true;
    bool submitted=g_order.Submit(plan, sendRisk, g_execCtx, (testerMode?EXEC_MODE_TESTER_SIM:executionMode), true, false, false, true, MagicNumber, maxSlippagePoints, TradeCommentPrefix, g_execTradeState, execReason);
    orderSuccess=submitted; g_execProofOrderSuccess=submitted; retcode=(int)g_order.LastRetcode(); lastErr=GetLastError();
+   ulong openOrder=(ulong)g_order.LastOrder();
+   ulong openDeal=(ulong)g_order.LastDeal();
+   ulong openPosition=ResolvePositionIdFromHistory(openOrder,openDeal);
+   StoreOpenAttribution(StrategyBucket(plan.strategy),g_execSymbol,DirName(plan.direction),openOrder,openDeal,openPosition,plan.entryPrice,plan.stopLoss,plan.takeProfit1,plan.takeProfit2,volume,g_execCtx.barTime);
    Print(StringFormat("[TRADE_OPEN_ATTRIBUTION] symbol=%s timeframe=%s barTime=%s strategy=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f riskPercent=%.2f approvedLot=%.2f order=%I64d deal=%I64d retcode=%d comment=%s",
                       g_execSymbol,TfName(),TimeToString(g_execCtx.barTime,TIME_DATE|TIME_MINUTES),StrategyName(plan.strategy),DirName(plan.direction),
                       plan.entryPrice,plan.stopLoss,plan.takeProfit1,plan.takeProfit2,plan.riskR,g_execScore,g_risk.RiskPercent(),volume,g_order.LastOrder(),g_order.LastDeal(),retcode,TradeCommentPrefix));
@@ -1621,7 +1699,7 @@ bool RunDeterministicExecutionSelfTest()
    return reg;
   }
 
-int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_arb.Configure(EnableSecondaryStrategy,EnableArbitrator,InpVerboseDiagnostics); g_risk.Init(PROFILE_PERSONAL);
+int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_arb.Configure(EnableSecondaryStrategy,EnableArbitrator,InpVerboseDiagnostics); g_risk.Init(PROFILE_PERSONAL); ResetAttributionMaps();
    g_effectiveRiskPerTradePct=(RiskPercentPerTrade>0.0?RiskPercentPerTrade:0.20);
    g_effectiveMaxOpenRiskPct=(testerSimMaxOpenRiskPct>0.0?testerSimMaxOpenRiskPct:0.75);
    g_effectiveMaxTradesPerDay=(MaxTradesPerDay>0?MaxTradesPerDay:14);
@@ -1683,9 +1761,9 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
    long riskApprovedCount=MathMax(0L,g_pipelineRiskReached-g_finalRiskRejected);
    Print(StringFormat("[TEST_SUMMARY] candidates=%d validPlans=%d selected=%d accepted=%d executeSelectedPlanCalled=%d riskReached=%d riskApproved=%d riskRejected=%d orderValidateReached=%d orderManagerReached=%d ordersAttempted=%d ordersSuccessful=%d topReason=%s",
                       g_starveRawCandidates,g_starveValidPlans,g_starveSelected,g_pipelineAcceptedCount,g_pipelineExecuteSelectedPlanCalled,g_pipelineRiskReached,riskApprovedCount,g_finalRiskRejected,g_pipelineOrderValidateReached,g_pipelineOrderManagerReached,g_pipelineOrdersAttempted,g_pipelineOrdersSuccessful,topReason));
-   long testerDeals=0,openDeals=0,closeDeals=0,attributedClosed=0,unknownClosed=0;
+   long testerDeals=0,openDeals=0,closeDeals=0,attributedClosed=0,unknownClosed=0,positionMapHits=0,orderMapHits=0,commentHits=0,unknownHits=0;
    double historyNetProfit=0.0;
-   RebuildClosedResultsFromHistory("HistoryRebuild",testerDeals,openDeals,closeDeals,attributedClosed,unknownClosed,historyNetProfit);
+   RebuildClosedResultsFromHistory("HistoryRebuild",testerDeals,openDeals,closeDeals,attributedClosed,unknownClosed,positionMapHits,orderMapHits,commentHits,unknownHits,historyNetProfit);
    int resultBuckets[4]={0,2,4,-1};
    double portfolioGrossProfit=0.0,portfolioGrossLoss=0.0,portfolioNet=0.0,portfolioBest=0.0,portfolioWorst=0.0;
    long portfolioOpened=0,portfolioClosed=0,portfolioWins=0,portfolioLosses=0;
@@ -1732,8 +1810,8 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
    double portfolioWinRate=((portfolioWins+portfolioLosses)>0?100.0*(double)portfolioWins/(double)(portfolioWins+portfolioLosses):0.0);
    Print(StringFormat("[PORTFOLIO_RESULT_SUMMARY] opened=%d closed=%d wins=%d losses=%d winRate=%.2f grossProfit=%.2f grossLoss=%.2f netProfit=%.2f profitFactor=%.2f maxDrawdownApprox=NA topWinningStrategy=%s topLosingStrategy=%s",
                       portfolioOpened,portfolioClosed,portfolioWins,portfolioLosses,portfolioWinRate,portfolioGrossProfit,portfolioGrossLoss,portfolioNet,pf,topStrategy,bottomStrategy));
-   Print(StringFormat("[RESULT_ATTRIBUTION_CHECK] testerDeals=%d openDeals=%d closeDeals=%d attributedClosed=%d unknownClosed=%d strategyClosedTotal=%d portfolioClosed=%d netProfit=%.2f",
-                      testerDeals,openDeals,closeDeals,attributedClosed,unknownClosed,(g_closedCount[0]+g_closedCount[1]+g_closedCount[2]+g_closedCount[3]+g_closedCount[4]),portfolioClosed,portfolioNet));
+   Print(StringFormat("[RESULT_ATTRIBUTION_CHECK] testerDeals=%d openDeals=%d closeDeals=%d attributedClosed=%d unknownClosed=%d positionMapHits=%d orderMapHits=%d commentHits=%d unknownHits=%d strategyClosedTotal=%d portfolioClosed=%d netProfit=%.2f",
+                      testerDeals,openDeals,closeDeals,attributedClosed,unknownClosed,positionMapHits,orderMapHits,commentHits,unknownHits,(g_closedCount[0]+g_closedCount[1]+g_closedCount[2]+g_closedCount[3]+g_closedCount[4]),portfolioClosed,portfolioNet));
    Print(StringFormat("[STRATEGY_ACCEPTANCE_SUMMARY] microSelected=%d microAccepted=%d microRejected=%d microTopReason=%s trendSelected=%d trendAccepted=%d trendRejected=%d trendTopReason=%s compressionSelected=%d compressionAccepted=%d compressionRejected=%d compressionTopReason=%s",
                       g_microSelected,g_microAcceptedFinal,g_microRejectedFinal,g_microTopReason,g_trendSelected,g_trendAcceptedFinal,g_trendRejectedFinal,g_trendTopReason,g_compressionSelected,g_compressionAcceptedFinal,g_compressionRejectedFinal,g_compressionTopReason));
    if(InpVerboseDiagnostics) Print(StringFormat("[STRATEGY_TOTALS] trendRaw=%d trendValid=%d trendSelected=%d compressionRaw=%d compressionValid=%d compressionSelected=%d microRaw=%d microValid=%d microSelected=%d",
