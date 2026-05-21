@@ -178,7 +178,7 @@ public:
       if(ctx.barsLoaded < 7){ m_audit.lastRejectReason="BOX_NOT_READY"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
       m_audit.expBarsReady++;
       m_audit.enoughBarsPass++;
-      if(ctx.spreadPoints <= 0.0){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_SPREAD,m_audit.lastRejectReason); return false; }
+      if(ctx.spreadPoints <= 0.0){ m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_PRICE_FIELDS; Reject(candidate, SUPPRESS_SPREAD,m_audit.lastRejectReason); return false; }
       m_audit.expSpreadOk++;
       m_audit.spreadPass++;
 
@@ -194,7 +194,7 @@ public:
       if(ctx.marketQuality < minMq)
         { m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_MARKET_QUALITY,m_audit.lastRejectReason); return false; }
       if(ctx.atr <= 0.0)
-        { m_audit.lastRejectReason="ATR_INVALID"; Reject(candidate, SUPPRESS_VOLATILITY,m_audit.lastRejectReason); return false; }
+        { m_audit.lastRejectReason="BOX_NOT_READY"; m_audit.failBoxReady++; Reject(candidate, SUPPRESS_VOLATILITY,m_audit.lastRejectReason); return false; }
       m_audit.expIndicatorsReady++;
       m_audit.expAtrOk++;
       if(ctx.choppiness > maxChop)
@@ -261,7 +261,7 @@ public:
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + entryQ) / 4.0, 0.0, 1.0);
 
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, (testerMode?0.90:1.0), candidate.plan))
-        { gatePlan=1; m_audit.lastRejectReason="INVALID_SLTP"; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+        { gatePlan=1; m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
       m_audit.expPricePlanOk++;
 
       // SL around opposite/inside box edge with ATR/spread buffer
@@ -273,7 +273,7 @@ public:
 
       double risk = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
       if(risk <= 0.0)
-        { m_audit.lastRejectReason="INVALID_SLTP"; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+        { m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
 
       // TP1 = box height or 1R, TP2 = 2R/measured move
       double tp1ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + risk : candidate.plan.entryPrice - risk);
@@ -289,19 +289,44 @@ public:
       candidate.plan.direction = dir;
       candidate.plan.riskR = MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice), MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6), 0.0);
       candidate.score.totalScore = candidate.plan.confidence;
-      if(candidate.plan.entryPrice<=0.0 || candidate.plan.stopLoss<=0.0 || candidate.plan.takeProfit1<=0.0 || candidate.plan.takeProfit2<=0.0)
-        { m_audit.lastRejectReason="INVALID_PRICE_FIELDS"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
-      candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
-      if(!candidate.isValid)
-        { m_audit.lastRejectReason="INVALID_SLTP"; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
 
-      m_audit.slTpPass++; m_audit.expSltpOk++; m_audit.expRrOk++; m_audit.expValid++;
-      m_audit.rawCreated++;
-      StrategyTypes::CandidateAccept(candidate,"OK");
-      candidate.rejectReason="OK";
-      Print(StringFormat("[COMPRESSION_BOX_DIAG] enoughBars=%s atrReady=%s boxReady=true boxFormed=true boxHigh=%.5f boxLow=%.5f boxWidth=%.5f boxWidthAtr=%.2f insideBars=%d requiredInsideBars=%d touches=%d requiredTouches=%d rangeTooWide=false breakoutConfirmed=%s reason=OK",(ctx.barsLoaded>=minBars?"true":"false"),(ctx.atr>0.0?"true":"false"),boxHigh,boxLow,boxWidth,(ctx.atr>0?boxWidth/ctx.atr:0.0),(int)MathRound(insideRatio*(boxAge-1)),(int)MathCeil(minInside*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),(int)MathCeil(minTouch*((boxAge-1)*2)),(breakoutConfirmed?"true":"false")));
-      Print(StringFormat("[COMPRESSION_FINAL_VALIDATION] boxReady=true boxFormed=true breakoutConfirmed=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",(breakoutConfirmed?"true":"false"),((candidate.direction==TRADE_DIR_LONG||candidate.direction==TRADE_DIR_SHORT)?"true":"false"),(candidate.plan.entryPrice>0.0?"true":"false"),((candidate.plan.stopLoss>0.0&&candidate.plan.takeProfit1>0.0&&candidate.plan.takeProfit2>0.0)?"true":"false"),(candidate.plan.riskR>0.0?"true":"false"),(candidate.score.totalScore>0.0?"true":"false"),(candidate.isValid?"true":"false"),candidate.rejectReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
-      return true;
+      bool directionPass=(candidate.direction==TRADE_DIR_LONG || candidate.direction==TRADE_DIR_SHORT) && (candidate.plan.direction==TRADE_DIR_LONG || candidate.plan.direction==TRADE_DIR_SHORT);
+      bool pricePass=(candidate.plan.entryPrice>0.0);
+      bool slTpPass=(candidate.plan.stopLoss>0.0 && candidate.plan.takeProfit1>0.0 && candidate.plan.takeProfit2>0.0);
+      bool rrPass=(candidate.plan.riskR>0.0 && MathIsValidNumber(candidate.plan.riskR));
+      bool scorePass=(MathIsValidNumber(candidate.score.totalScore) && candidate.score.totalScore>0.0);
+      string structuralReason=CANDIDATE_REASON_OK;
+      bool structuralPass=StrategyTypes::IsCandidateStructurallyValid(candidate, structuralReason);
+
+      string finalReason=CANDIDATE_REASON_OK;
+      if(!directionPass) finalReason="DIRECTION_MISSING";
+      else if(!pricePass) finalReason=CANDIDATE_REASON_INVALID_PRICE_FIELDS;
+      else if(!slTpPass) finalReason=CANDIDATE_REASON_INVALID_SLTP;
+      else if(!rrPass) finalReason=CANDIDATE_REASON_RR_TOO_LOW;
+      else if(!scorePass) finalReason="INVALID_SCORE";
+      else if(!structuralPass) finalReason=structuralReason;
+
+      bool finalValid=(finalReason==CANDIDATE_REASON_OK);
+      if(finalValid)
+        {
+         m_audit.slTpPass++; m_audit.expSltpOk++; m_audit.expRrOk++; m_audit.expValid++;
+         m_audit.rawCreated++;
+         StrategyTypes::CandidateAccept(candidate,CANDIDATE_REASON_OK);
+         candidate.rejectReason=CANDIDATE_REASON_OK;
+         candidate.reason=CANDIDATE_REASON_OK;
+        }
+      else
+        {
+         m_audit.lastRejectReason=finalReason;
+         if(finalReason=="BOX_NOT_READY") m_audit.failBoxReady++;
+         else if(finalReason=="BOX_NOT_FORMED") m_audit.failBoxFormed++;
+         else if(finalReason==CANDIDATE_REASON_INVALID_SLTP) m_audit.failSltp++;
+         else if(finalReason==CANDIDATE_REASON_RR_TOO_LOW) m_audit.failRr++;
+         Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason);
+        }
+      Print(StringFormat("[COMPRESSION_CANDIDATE_BUILD] boxReady=%s boxFormed=%s breakoutConfirmed=%s directionPass=%s pricePass=%s sltpPass=%s rrPass=%s accepted=%s reason=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f","true","true",(breakoutConfirmed?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(finalValid?"true":"false"),finalReason,(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
+      Print(StringFormat("[COMPRESSION_FINAL_VALIDATION] boxReady=true boxFormed=true breakoutConfirmed=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",(breakoutConfirmed?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
+      return finalValid;
      }
 
    string Describe(const StrategyCandidate &candidate)

@@ -150,8 +150,8 @@ public:
       string ExposureSummary() const
         {
          string topReject=(m_audit.failNoSetup>=m_audit.failInvalidPrice && m_audit.failNoSetup>=m_audit.failInvalidSltp && m_audit.failNoSetup>=m_audit.failRr?"NO_SETUP":
-                           (m_audit.failInvalidPrice>=m_audit.failInvalidSltp && m_audit.failInvalidPrice>=m_audit.failRr?"INVALID_PRICE_FIELDS":
-                           (m_audit.failInvalidSltp>=m_audit.failRr?"INVALID_SLTP":"RR_TOO_LOW")));
+                           (m_audit.failInvalidPrice>=m_audit.failInvalidSltp && m_audit.failInvalidPrice>=m_audit.failRr?CANDIDATE_REASON_INVALID_PRICE_FIELDS:
+                           (m_audit.failInvalidSltp>=m_audit.failRr?CANDIDATE_REASON_INVALID_SLTP:CANDIDATE_REASON_RR_TOO_LOW)));
          return StringFormat("[TREND_EXPOSURE_SUMMARY] called=%d structurePass=%d momentumPass=%d reclaimPass=%d directionPass=%d pricePass=%d sltpPass=%d rrPass=%d valid=%d selected=%d lostToMicro=%d topReject=%s",
                              m_audit.called,m_audit.structurePass,m_audit.momentumPass,m_audit.reclaimPass,m_audit.directionPass,m_audit.pricePass,m_audit.slTpPass,m_audit.rrPass,m_audit.expValid,m_audit.selected,m_audit.lostToMicro,topReject);
         }
@@ -168,7 +168,7 @@ public:
       bool pseudoTrend=(testerMode && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow) && regime.confidence>=0.33);
       if(!(regimeTrend || pseudoTrend))
         {
-         m_audit.lastRejectReason="NO_SETUP";
+         m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
          m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason);
          return false;
@@ -212,7 +212,7 @@ public:
       bool structureOK = (dir == TRADE_DIR_LONG ? HasBullStructure(ctx, structureScore) : HasBearStructure(ctx, structureScore));
       if(!structureOK)
         {
-         m_audit.lastRejectReason="NO_SETUP";
+         m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
          m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason);
          return false;
@@ -225,7 +225,7 @@ public:
       bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast - 0.15*ctx.atr) : (ctx.currentClose <= ctx.emaFast + 0.15*ctx.atr));
       if(!emaOk)
         {
-         m_audit.lastRejectReason="NO_SETUP";
+         m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
          m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason); // momentum mismatch
          return false;
@@ -235,7 +235,7 @@ public:
 
       double entryQuality = 0.0;
       double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
-      if(bodyAtr>(testerMode?1.70:1.45)){ m_audit.lastRejectReason="NO_SETUP"; Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason); return false; }
+      if(bodyAtr>(testerMode?1.70:1.45)){ m_audit.lastRejectReason="RECLAIM_NOT_CONFIRMED"; m_audit.failNoSetup++; Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason); return false; }
       bool reclaimOk=HasReclaimTrigger(ctx, dir, entryQuality);
       if(reclaimOk) m_audit.reclaimPass++;
 
@@ -245,7 +245,7 @@ public:
       bool altPathOk=(reclaimOk && slopeOk);
       if(!momentumPathOk && !altPathOk)
         {
-         m_audit.lastRejectReason="NO_SETUP";
+         m_audit.lastRejectReason=(reclaimOk?"MOMENTUM_NOT_CONFIRMED":"RECLAIM_NOT_CONFIRMED");
          m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason);
          return false;
@@ -272,7 +272,7 @@ public:
       double atrMult=(testerMode?1.20:1.45);
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_TREND_CONTINUATION, dir, ctx, atrMult, candidate.plan))
         {
-         m_audit.lastRejectReason="INVALID_SLTP";
+         m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP;
          m_audit.failInvalidSltp++;
          Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason); // invalid trade plan
          return false;
@@ -294,14 +294,14 @@ public:
       double risk = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
       if(risk <= 0.0)
         {
-         m_audit.lastRejectReason="INVALID_SLTP";
+         m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP;
          m_audit.failInvalidSltp++;
          Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
          return false;
         }
       if(risk <= MathMax(2.0*ctx.point,1e-6))
         {
-         m_audit.lastRejectReason="INVALID_SLTP";
+         m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP;
          m_audit.failInvalidSltp++;
          Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
          return false;
@@ -327,36 +327,38 @@ public:
       bool slTpPass=(candidate.plan.stopLoss>0.0 && candidate.plan.takeProfit1>0.0 && candidate.plan.takeProfit2>0.0);
       candidate.plan.riskR = MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice), MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6), 0.0);
       bool rrPass=(candidate.plan.riskR>0.0 && MathIsValidNumber(candidate.plan.riskR));
-      string structuralReason="OK";
+      string structuralReason=CANDIDATE_REASON_OK;
       bool structuralPass=StrategyTypes::IsCandidateStructurallyValid(candidate, structuralReason);
       candidate.score.totalScore = candidate.plan.confidence;
       bool scorePass=(MathIsValidNumber(candidate.score.totalScore) && candidate.score.totalScore>0.0);
 
-      string finalReason="OK";
-      if(!directionPass) finalReason="INVALID_DIRECTION";
-      else if(!pricePass) finalReason="INVALID_ENTRY_PRICE";
-      else if(!slTpPass) finalReason="INVALID_SLTP";
-      else if(!rrPass) finalReason="INVALID_RR";
+      string finalReason=CANDIDATE_REASON_OK;
+      if(!directionPass) finalReason="DIRECTION_MISSING";
+      else if(!pricePass) finalReason=CANDIDATE_REASON_INVALID_PRICE_FIELDS;
+      else if(!slTpPass) finalReason=CANDIDATE_REASON_INVALID_SLTP;
+      else if(!rrPass) finalReason=CANDIDATE_REASON_RR_TOO_LOW;
       else if(!scorePass) finalReason="INVALID_SCORE";
       else if(!structuralPass) finalReason=structuralReason;
 
-      bool finalValid=(finalReason=="OK");
+      bool finalValid=(finalReason==CANDIDATE_REASON_OK);
       if(finalValid)
         {
          m_audit.slTpPass++; m_audit.rrPass++; m_audit.expValid++; m_audit.rawCreated++;
-         StrategyTypes::CandidateAccept(candidate,"OK");
-         candidate.rejectReason="OK";
-         candidate.reason="OK";
+         StrategyTypes::CandidateAccept(candidate,CANDIDATE_REASON_OK);
+         candidate.rejectReason=CANDIDATE_REASON_OK;
+         candidate.reason=CANDIDATE_REASON_OK;
         }
       else
         {
          m_audit.lastRejectReason=finalReason;
-         if(finalReason=="INVALID_ENTRY_PRICE") m_audit.failInvalidPrice++;
-         else if(finalReason=="INVALID_SLTP" || finalReason==CANDIDATE_REASON_INVALID_SLTP) m_audit.failInvalidSltp++;
-         else if(finalReason=="INVALID_RR") m_audit.failRr++;
+         if(finalReason==CANDIDATE_REASON_INVALID_PRICE_FIELDS) m_audit.failInvalidPrice++;
+         else if(finalReason==CANDIDATE_REASON_INVALID_SLTP) m_audit.failInvalidSltp++;
+         else if(finalReason==CANDIDATE_REASON_RR_TOO_LOW) m_audit.failRr++;
          else m_audit.failNoSetup++;
          Reject(candidate, SUPPRESS_OTHER, finalReason);
         }
+      Print(StringFormat("[TREND_CANDIDATE_BUILD] structurePass=%s momentumPass=%s reclaimPass=%s directionPass=%s pricePass=%s sltpPass=%s rrPass=%s accepted=%s reason=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
+                         (structureOK?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(finalValid?"true":"false"),finalReason,(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       Print(StringFormat("[TREND_FINAL_VALIDATION] setupFound=%s momentumPass=%s reclaimPass=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
                          (finalValid?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       return finalValid;
