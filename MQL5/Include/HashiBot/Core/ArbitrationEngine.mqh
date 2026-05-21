@@ -57,6 +57,11 @@ private:
 
    void AddCandidateIfValid(const StrategyCandidate &c)
      {
+      if(!c.isValid) return;
+      if(c.rejectReason != CANDIDATE_REASON_OK) return;
+      if(c.direction == TRADE_DIR_NONE || c.plan.direction == TRADE_DIR_NONE) return;
+      if(c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0 || c.plan.takeProfit2<=0.0) return;
+      if(c.plan.riskR<=0.0) return;
       if(m_candidateCount >= HASHIBOT_MAX_CANDIDATES)
          return;
       m_candidates[m_candidateCount] = c;
@@ -292,12 +297,12 @@ public:
       if(reason==SUPPRESS_OTHER) return "other";
      return "none";
      }
-   void PrintStrategyEngineResult(const string strategy,const bool called,const bool enabled,const bool eligible,const bool rawCandidate,const bool validCandidate,const string rejectStage,const string rejectReason,const StrategyCandidate &c,const MarketContext &ctx) const
+   void PrintStrategyEngineResult(const string strategy,const bool called,const bool enabled,const StrategyCandidate &c,const MarketContext &ctx) const
      {
-      double rr=(validCandidate?RRNetAfterSpread(c,ctx):0.0);
-      Print(StringFormat("[STRATEGY_ENGINE_RESULT] strategy=%s called=%s enabled=%s eligible=%s candidateValid=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f rejectReason=%s",
-                         strategy,(called?"true":"false"),(enabled?"true":"false"),(eligible?"true":"false"),(validCandidate?"true":"false"),
-                         StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,rr,c.score.totalScore,rejectReason));
+      double rr=(c.isValid?RRNetAfterSpread(c,ctx):0.0);
+      Print(StringFormat("[STRATEGY_RESULT] strategy=%s called=%s enabled=%s setupFound=%s valid=%s reason=%s detail=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
+                         strategy,(called?"true":"false"),(enabled?"true":"false"),(c.setupFound?"true":"false"),(c.isValid?"true":"false"),
+                         c.rejectReason,c.reason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,rr,c.score.totalScore));
      }
 
    ArbitrationResult Evaluate(const MarketContext &ctx,const RegimeState &regime)
@@ -335,7 +340,7 @@ public:
             else { trendValid=true; AddCandidateIfValid(c); }
            }
          else { m_invalidByStrategy[b]++; trendRejectStage="VALIDATION"; trendRejectReason=(c.rejectReason!=""?c.rejectReason:(vreason==""?"NO_SETUP":vreason)); if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=TrendContinuation",StrategyTypes::StrategyName(c.strategy),trendRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
-         PrintStrategyEngineResult("TrendContinuation",true,true,true,trendAnalyzed,trendValid,trendRejectStage,trendRejectReason,c,ctx);
+         PrintStrategyEngineResult("TrendContinuation",true,true,c,ctx);
       }
       Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=TrendContinuation moduleCalled=%s enoughBars=%s indicatorsReady=%s regimePass=%s triggerPass=%s rawCandidateCreated=%s candidateValid=%s reason=%s",
                          "true",(trendEnoughBars?"true":"false"),(trendIndicatorsReady?"true":"false"),(trendRegimeOk?"true":"false"),
@@ -364,7 +369,7 @@ public:
             else { compValid=true; AddCandidateIfValid(c); }
            }
          else { m_invalidByStrategy[b]++; compRejectStage="VALIDATION"; compRejectReason=(vreason==""?"NO_SETUP":vreason); if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=CompressionBreakout",StrategyTypes::StrategyName(c.strategy),compRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
-         PrintStrategyEngineResult("CompressionBreakout",true,true,true,compAnalyzed,compValid,compRejectStage,compRejectReason,c,ctx);
+         PrintStrategyEngineResult("CompressionBreakout",true,true,c,ctx);
       }
       Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=CompressionBreakout moduleCalled=%s enoughBars=%s atrReady=%s boxReady=%s compressionDetected=%s breakoutDetected=%s rawCandidateCreated=%s candidateValid=%s reason=%s",
                          "true",(compEnoughBars?"true":"false"),(compAtrReady?"true":"false"),(compBoxReady?"true":"false"),
@@ -387,6 +392,11 @@ public:
           }
          else { m_invalidByStrategy[b]++; if(vreason=="") vreason=c.rejectReason; if(vreason=="micro_no_momentum_setup") vreason="NO_MOMENTUM_SETUP"; if(vreason=="") vreason="NO_SETUP"; Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=MicroScalper",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
       }
+      PrintStrategyEngineResult("MicroScalper",true,true,c,ctx);
+      Print(StringFormat("[STRATEGY_BATCH_SUMMARY] trendCalled=true trendValid=%s trendReason=%s compressionCalled=true compressionValid=%s compressionReason=%s microCalled=true microValid=%s microReason=%s validCandidateCount=%d",
+                         (m_trendRawCreated>0?"true":"false"),m_trend.LastRejectReason(),
+                         (m_compRawCreated>0?"true":"false"),m_compression.LastRejectReason(),
+                         (m_microRawCreated>0?"true":"false"),c.rejectReason,m_candidateCount));
 
       if(!m_enableSecondaryStrategy)
         {
@@ -424,7 +434,7 @@ public:
       if(m_verboseDiagnostics) Print(StringFormat("[MICRO_DIAG] called=%d raw=%d valid=%d selected=%d topReject=%s",m_microModuleCalled,m_microRawCreated,m_microValidCreated,0,(m_microRawCreated>m_microValidCreated?"candidate_invalid":"none")));
       PrintStrategyTriggerAudit();
       if(m_candidateCount == 0)
-        { result.noTrade = true; result.reason = "no_candidates"; Print("[ARB] no_valid_winner reason=no_valid_candidates"); return result; }
+        { result.noTrade = true; result.reason = CANDIDATE_REASON_NO_VALID_CANDIDATES; Print("[ARB] no_valid_winner reason=no_valid_candidates"); return result; }
       if(regime.suppression.isSuppressed)
         { result.noTrade = true; if(result.reason == "") result.reason = "suppressed"; return result; }
 
@@ -471,7 +481,7 @@ public:
       result.winnerType = result.winningStrategy;
       result.grade = result.winningGrade;
       result.plan = m_candidates[winner].plan;
-      result.reason = "ok";
+      result.reason = CANDIDATE_REASON_OK;
       return result;
      }
 

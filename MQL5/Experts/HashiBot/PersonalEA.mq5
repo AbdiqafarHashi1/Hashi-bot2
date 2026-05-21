@@ -593,79 +593,10 @@ bool ResolveSelectedPlan(const MarketContext &ctx,const ArbitrationResult &arb,T
   }
 bool BuildScalperFallbackPlan(const MarketContext &ctx,TradePlan &plan,double &score,string &reason)
   {
-   g_microModuleCalled++;
-   score = 0.0; reason="";
-   if(!enableMicroScalperMode){ reason="micro_disabled"; g_microGateProfile++; g_scalperFallbackRejected++; return false; }
-   if(!scalperAllowFallback){ reason="scalper_fallback_disabled"; g_microGateProfile++; g_scalperFallbackRejected++; return false; }
-   if(ctx.currentClose<=0.0 || ctx.atr<=0.0){ reason="scalper_invalid_prices"; g_scalperFallbackRejected++; return false; }
-   if(ctx.spreadPoints > microMaxSpreadPoints){ reason="scalper_spread_too_high"; g_microGateSpread++; g_scalperFallbackRejected++; return false; }
-   if(ctx.atr <= scalperMinAtrPercent*ctx.currentClose){ reason="scalper_atr_too_low"; g_microGateAtr++; g_scalperFallbackRejected++; return false; }
-   if(!(ctx.marketQuality>=scalperMinMarketQuality && ctx.choppiness<=scalperMaxChoppiness)){ reason="scalper_regime_or_quality_gate"; g_microGateRegime++; g_scalperFallbackRejected++; return false; }
-
-   double atrSafe=(ctx.atr>0.00001?(double)ctx.atr:0.00001);
-   double emaGapNorm=(double)MathAbs(ctx.emaFast-ctx.emaSlow)/atrSafe;
-   double bodyNorm=(double)MathAbs(ctx.currentClose-ctx.currentOpen)/atrSafe;
-   if(bodyNorm<microMinBodyAtr){ reason="scalper_body_too_small"; g_microGateBody++; g_scalperFallbackRejected++; return false; }
-   bool bullishTrend=(ctx.emaFast>ctx.emaSlow && ctx.currentClose>=ctx.emaFast);
-   bool bearishTrend=(ctx.emaFast<ctx.emaSlow && ctx.currentClose<=ctx.emaFast);
-   bool bullishMomentum=(ctx.currentClose>ctx.currentOpen && ctx.roc>0.0);
-   bool bearishMomentum=(ctx.currentClose<ctx.currentOpen && ctx.roc<0.0);
-   double recentHigh = -DBL_MAX;
-   double recentLow = DBL_MAX;
-   int lookback = microLookbackBars;
-   if(lookback > ctx.barsLoaded) lookback = ctx.barsLoaded;
-   if(lookback < 1) lookback = 1;
-   for(int i=0; i<lookback; i++)
-     {
-      double high = ctx.recentHigh[i];
-      double low = ctx.recentLow[i];
-      if(high > recentHigh) recentHigh = high;
-      if(low < recentLow) recentLow = low;
-     }
-
-   bool bullishBreakOrPullback=(ctx.currentClose>=recentHigh-microBreakoutBufferAtr*ctx.atr || (ctx.currentLow<=ctx.emaFast && ctx.currentClose>ctx.emaFast));
-   bool bearishBreakOrPullback=(ctx.currentClose<=recentLow+microBreakoutBufferAtr*ctx.atr || (ctx.currentHigh>=ctx.emaFast && ctx.currentClose<ctx.emaFast));
-
-   TradeDirection d=TRADE_DIR_NONE;
-   if(bullishTrend && bullishMomentum && bullishBreakOrPullback) d=TRADE_DIR_LONG;
-   else if(bearishTrend && bearishMomentum && bearishBreakOrPullback) d=TRADE_DIR_SHORT;
-   else { reason="scalper_ambiguous_or_no_momentum"; g_microGateMomentum++; g_microGateDirection++; g_scalperFallbackRejected++; return false; }
-
-   double e=(d==TRADE_DIR_LONG?(ctx.ask>0?ctx.ask:ctx.currentClose):(ctx.bid>0?ctx.bid:ctx.currentClose));
-   double longSwingCandidate=(double)(e-microStopAtr*ctx.atr);
-   double shortSwingCandidate=(double)(e+microStopAtr*ctx.atr);
-   double swingSL=(d==TRADE_DIR_LONG
-                   ?((recentLow<longSwingCandidate)?recentLow:longSwingCandidate)
-                   :((recentHigh>shortSwingCandidate)?recentHigh:shortSwingCandidate));
-   double atrSL=(d==TRADE_DIR_LONG?e-microStopAtr*ctx.atr:e+microStopAtr*ctx.atr);
-   double sl=(d==TRADE_DIR_LONG
-              ?((swingSL<atrSL)?swingSL:atrSL)
-              :((swingSL>atrSL)?swingSL:atrSL));
-   double risk=MathAbs(e-sl);
-   if(risk<=0.0){ reason="scalper_invalid_risk"; g_microGatePlan++; g_scalperFallbackRejected++; return false; }
-
-   plan.Reset(); plan.strategy=STRATEGY_NONE; plan.direction=d; plan.entryPrice=e; plan.stopLoss=sl;
-   plan.takeProfit1=(d==TRADE_DIR_LONG?e+microTp1R*risk:e-microTp1R*risk);
-   plan.takeProfit2=(d==TRADE_DIR_LONG?e+microTp2R*risk:e-microTp2R*risk);
-   g_microCandCreated++;
-
-   double spreadDenom=(MaxSpreadPoints>1.0?(double)MaxSpreadPoints:1.0);
-   double spreadPenaltyRaw=((double)ctx.spreadPoints/spreadDenom)*0.25;
-   double spreadPenalty=(spreadPenaltyRaw<0.25?spreadPenaltyRaw:0.25);
-   double rocNorm=MathAbs(ctx.roc); if(rocNorm>1.0) rocNorm=1.0;
-   double emaNorm=emaGapNorm; if(emaNorm>1.0) emaNorm=1.0;
-   double bodyNormCapped=bodyNorm; if(bodyNormCapped>1.0) bodyNormCapped=1.0;
-   double mqNorm=(double)ctx.marketQuality; if(mqNorm>1.0) mqNorm=1.0;
-   double rawScore=0.30+0.18*emaNorm+0.18*bodyNormCapped+0.16*rocNorm+0.20*mqNorm-spreadPenalty;
-   if(rawScore<0.0) rawScore=0.0;
-   if(rawScore>0.95) rawScore=0.95;
-   score=rawScore;
-   plan.confidence=score;
-   if(score<scalperMinScore){ reason="scalper_score_too_low"; g_microGatePlan++; g_scalperFallbackRejected++; return false; }
-   g_microValidPlans++;
-
-   g_scalperFallbackAccepted++; g_scalperCandidatesAccepted++; reason="scalper_fallback_ok";
-   return true;
+   reason="NO_VALID_CANDIDATES";
+   Print("[PIPELINE_BLOCKED] reason=FAKE_FALLBACK_DISABLED");
+   g_scalperFallbackRejected++;
+   return false;
   }
 
 

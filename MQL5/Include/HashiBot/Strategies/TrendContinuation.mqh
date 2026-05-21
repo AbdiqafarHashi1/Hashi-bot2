@@ -29,11 +29,8 @@ private:
       candidate.suppression.isSuppressed = true;
       candidate.suppression.reasonCount = 1;
       candidate.suppression.reasons[0] = reason;
-      candidate.direction = TRADE_DIR_NONE;
-      candidate.plan.Reset();
+      StrategyTypes::CandidateReject(candidate,rejectReason,rejectReason);
       candidate.plan.strategy = STRATEGY_TREND_CONTINUATION;
-      candidate.rejectReason = rejectReason;
-      candidate.isValid = false;
      }
 
    double CandleBodyQuality(const MarketContext &ctx)
@@ -310,8 +307,8 @@ public:
       candidate.plan.strategy = STRATEGY_TREND_CONTINUATION;
       candidate.plan.direction = dir;
       candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
-      if(candidate.isValid){ m_audit.slTpPass++; m_audit.rawCreated++; }
-      else { m_audit.lastRejectReason="INVALID_SLTP"; candidate.rejectReason=m_audit.lastRejectReason; }
+      if(candidate.isValid){ m_audit.slTpPass++; m_audit.rawCreated++; StrategyTypes::CandidateAccept(candidate,"OK"); candidate.rejectReason="OK"; }
+      else { m_audit.lastRejectReason="INVALID_SLTP"; StrategyTypes::CandidateReject(candidate,m_audit.lastRejectReason,"trend_plan_invalid"); candidate.plan.strategy=STRATEGY_TREND_CONTINUATION; }
       return candidate.isValid;
      }
 

@@ -17,23 +17,23 @@ public:
       out.reason = "micro_diag";
       out.rejectReason = "NO_SETUP";
 
-      if(ctx.barsLoaded < 12) { out.rejectReason = "micro_not_enough_bars"; return false; }
-      if(ctx.atr <= 0.0 || ctx.emaFast <= 0.0 || ctx.emaSlow <= 0.0) { out.rejectReason = "micro_indicators_not_ready"; return false; }
-      if(ctx.spreadPoints <= 0.0 || ctx.spreadPoints > 85.0) { out.rejectReason = "micro_spread_too_high"; return false; }
-      if(ctx.choppiness > 72.0) { out.rejectReason = "micro_extreme_chop"; return false; }
+      if(ctx.barsLoaded < 12) { StrategyTypes::CandidateReject(out,"NO_SETUP","micro_not_enough_bars"); out.plan.strategy=STRATEGY_MICRO_SCALPER; return false; }
+      if(ctx.atr <= 0.0 || ctx.emaFast <= 0.0 || ctx.emaSlow <= 0.0) { StrategyTypes::CandidateReject(out,"NO_SETUP","micro_indicators_not_ready"); out.plan.strategy=STRATEGY_MICRO_SCALPER; return false; }
+      if(ctx.spreadPoints <= 0.0 || ctx.spreadPoints > 85.0) { StrategyTypes::CandidateReject(out,"SPREAD_TOO_HIGH","micro_spread_too_high"); out.plan.strategy=STRATEGY_MICRO_SCALPER; return false; }
+      if(ctx.choppiness > 72.0) { StrategyTypes::CandidateReject(out,"NO_SETUP","micro_extreme_chop"); out.plan.strategy=STRATEGY_MICRO_SCALPER; return false; }
 
       double close0 = ctx.previousClose;
       double open0  = ctx.previousOpen;
       double high0  = ctx.previousHigh;
       double low0   = ctx.previousLow;
-      if(close0 <= 0.0 || open0 <= 0.0 || high0 <= 0.0 || low0 <= 0.0) { out.rejectReason = "micro_closed_bar_missing"; return false; }
+      if(close0 <= 0.0 || open0 <= 0.0 || high0 <= 0.0 || low0 <= 0.0) { StrategyTypes::CandidateReject(out,"INVALID_PRICE_FIELDS","micro_closed_bar_missing"); out.plan.strategy=STRATEGY_MICRO_SCALPER; return false; }
 
       bool bullish = (close0 > open0 && close0 >= ctx.recentClose[2]);
       bool bearish = (close0 < open0 && close0 <= ctx.recentClose[2]);
       bool longBias = (close0 > ctx.emaFast || ctx.emaFast > ctx.emaSlow) && bullish;
       bool shortBias = (close0 < ctx.emaFast || ctx.emaFast < ctx.emaSlow) && bearish;
 
-      if(!longBias && !shortBias) { out.rejectReason = "NO_MOMENTUM_SETUP"; return false; }
+      if(!longBias && !shortBias) { StrategyTypes::CandidateReject(out,"NO_MOMENTUM_SETUP","micro_no_momentum_setup"); out.plan.strategy=STRATEGY_MICRO_SCALPER; return false; }
 
       double entry = (longBias ? (ctx.ask > 0.0 ? ctx.ask : ctx.currentClose) : (ctx.bid > 0.0 ? ctx.bid : ctx.currentClose));
       double atrStop = ctx.atr * 0.95;
@@ -41,7 +41,7 @@ public:
       double recentSwingShort = MathMax(high0, ctx.recentHigh[2]);
       double sl = longBias ? MathMin(entry - atrStop, recentSwingLong - 0.5 * ctx.point) : MathMax(entry + atrStop, recentSwingShort + 0.5 * ctx.point);
       double risk = MathAbs(entry - sl);
-      if(risk <= MathMax(2.0 * ctx.point, 1e-6)) { out.rejectReason = "STOP_TOO_SMALL"; return false; }
+      if(risk <= MathMax(2.0 * ctx.point, 1e-6)) { StrategyTypes::CandidateReject(out,"STOP_TOO_SMALL","micro_stop_too_small"); out.plan.strategy=STRATEGY_MICRO_SCALPER; return false; }
 
       double rr = (regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN) ? 1.5 : 1.2;
       double tp1 = longBias ? (entry + risk * rr) : (entry - risk * rr);
@@ -66,8 +66,9 @@ public:
       out.score.scoreSuppression = 0.0;
       out.reason = (out.direction == TRADE_DIR_LONG ? "micro_long_closed_bar" : "micro_short_closed_bar");
       out.isValid = StrategyTypes::IsTradePlanComplete(out.plan);
-      if(!out.isValid) out.rejectReason = "INVALID_SLTP";
-      else if(out.plan.riskR < 1.0) { out.isValid = false; out.rejectReason = "RR_TOO_LOW"; out.direction = TRADE_DIR_NONE; out.plan.Reset(); out.plan.strategy = STRATEGY_MICRO_SCALPER; }
+      if(!out.isValid) { StrategyTypes::CandidateReject(out,"INVALID_SLTP","micro_plan_incomplete"); out.plan.strategy=STRATEGY_MICRO_SCALPER; }
+      else if(out.plan.riskR < 1.0) { StrategyTypes::CandidateReject(out,"RR_TOO_LOW","micro_rr_below_1"); out.plan.strategy = STRATEGY_MICRO_SCALPER; }
+      else { StrategyTypes::CandidateAccept(out,"OK"); out.rejectReason="OK"; }
       return out.isValid;
      }
   };

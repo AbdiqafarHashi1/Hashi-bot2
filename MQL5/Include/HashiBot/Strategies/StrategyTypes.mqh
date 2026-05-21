@@ -15,6 +15,18 @@
 
 namespace StrategyTypes
   {
+   #define CANDIDATE_REASON_OK "OK"
+   #define CANDIDATE_REASON_DISABLED "DISABLED"
+   #define CANDIDATE_REASON_NO_SETUP "NO_SETUP"
+   #define CANDIDATE_REASON_INVALID_DIRECTION "INVALID_DIRECTION"
+   #define CANDIDATE_REASON_INVALID_PRICE_FIELDS "INVALID_PRICE_FIELDS"
+   #define CANDIDATE_REASON_INVALID_SLTP "INVALID_SLTP"
+   #define CANDIDATE_REASON_STOP_TOO_SMALL "STOP_TOO_SMALL"
+   #define CANDIDATE_REASON_RR_TOO_LOW "RR_TOO_LOW"
+   #define CANDIDATE_REASON_SPREAD_TOO_HIGH "SPREAD_TOO_HIGH"
+   #define CANDIDATE_REASON_MARKET_DATA_INVALID "MARKET_DATA_INVALID"
+   #define CANDIDATE_REASON_NOT_ELIGIBLE "NOT_ELIGIBLE"
+   #define CANDIDATE_REASON_NO_VALID_CANDIDATES "NO_VALID_CANDIDATES"
    string StrategyName(const StrategyType strategy)
      {
       switch(strategy)
@@ -116,6 +128,41 @@ namespace StrategyTypes
       double sp = MathHelpers::Clamp(suppressionPenalty, 0.0, 1.0);
       double score = 0.24 * rf + 0.24 * sq + 0.16 * vq + 0.16 * eq + 0.20 * rq - 0.20 * sp;
       return MathHelpers::Clamp(score, 0.0, 1.0);
+     }
+
+
+   bool IsCandidateStructurallyValid(const StrategyCandidate &c,string &reason)
+     {
+      reason = CANDIDATE_REASON_OK;
+      if(c.strategy == STRATEGY_NONE) { reason = CANDIDATE_REASON_NOT_ELIGIBLE; return false; }
+      if(c.direction == TRADE_DIR_NONE || c.plan.direction == TRADE_DIR_NONE) { reason = CANDIDATE_REASON_INVALID_DIRECTION; return false; }
+      if(c.plan.entryPrice <= 0.0 || c.plan.stopLoss <= 0.0 || c.plan.takeProfit1 <= 0.0 || c.plan.takeProfit2 <= 0.0) { reason = CANDIDATE_REASON_INVALID_PRICE_FIELDS; return false; }
+      if(!IsTradePlanComplete(c.plan)) { reason = CANDIDATE_REASON_INVALID_SLTP; return false; }
+      return true;
+     }
+
+   void CandidateReject(StrategyCandidate &c,const string reason,const string detail="")
+     {
+      c.setupFound = false;
+      c.direction = TRADE_DIR_NONE;
+      c.plan.direction = TRADE_DIR_NONE;
+      c.plan.entryPrice = 0.0;
+      c.plan.stopLoss = 0.0;
+      c.plan.takeProfit1 = 0.0;
+      c.plan.takeProfit2 = 0.0;
+      c.plan.riskR = 0.0;
+      c.score.totalScore = 0.0;
+      c.isValid = false;
+      c.rejectReason = reason;
+      c.reason = detail;
+     }
+
+   void CandidateAccept(StrategyCandidate &c,const string detail="")
+     {
+      c.setupFound = true;
+      c.isValid = true;
+      c.rejectReason = CANDIDATE_REASON_OK;
+      c.reason = detail;
      }
 
    void InitCandidateBase(StrategyCandidate &c,const StrategyType strategy)
