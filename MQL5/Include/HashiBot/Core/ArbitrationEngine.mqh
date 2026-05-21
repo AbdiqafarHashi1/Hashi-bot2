@@ -341,6 +341,7 @@ public:
       bool trendSpreadOk=(ctx.spreadPoints>0.0 && ctx.spreadPoints<=maxSpread); if(trendSpreadOk) m_trendSpreadOk++;
       bool trendIndicatorsReady=(ctx.atr>0.0 && ctx.emaFast>0.0 && ctx.emaSlow>0.0); if(trendIndicatorsReady) m_trendIndicatorsReady++;
       bool trendRegimeOk=(regime.regime==REGIME_TREND_UP || regime.regime==REGIME_TREND_DOWN || ((MQLInfoInteger(MQL_TESTER)>0) && regime.confidence>=0.40 && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow))); if(trendRegimeOk) m_trendRegimeOk++;
+      Print("[PERSONALEA_CALL_STRATEGY] strategy=TrendContinuation marker=A4.15");
       bool trendAnalyzed=m_trend.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
          string trendRejectStage="NONE",trendRejectReason="none"; bool trendValid=false;
@@ -375,6 +376,7 @@ public:
       bool compAtrReady=(ctx.atr>0.0); if(compAtrReady) m_compAtrReady++;
       bool compBoxReady=(ctx.barsLoaded>=10); if(compBoxReady) m_compBoxReady++;
       bool compCompressionDetected=(regime.regime==REGIME_COMPRESSION || regime.regime==REGIME_EXPANSION || ((MQLInfoInteger(MQL_TESTER)>0) && regime.confidence>=0.35)); if(compCompressionDetected) m_compCompressionDetected++;
+      Print("[PERSONALEA_CALL_STRATEGY] strategy=CompressionBreakout marker=A4.15");
       bool compAnalyzed=m_compression.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
          string compRejectStage="NONE",compRejectReason="none"; bool compValid=false;
@@ -403,6 +405,7 @@ public:
                          (c.isValid?"true":"false"),(c.suppression.reasonCount>0?SuppressionReasonName(c.suppression.reasons[0]):"ok")));
       Print("[ARB_DISABLED] strategy=ExpansionMomentum reason=phase_a_two_strategy_only");
       m_microModuleCalled++;
+      Print("[PERSONALEA_CALL_STRATEGY] strategy=MicroScalper marker=A4.15");
       bool microAnalyzed=m_micro.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c);
       if(microAnalyzed) m_microRawCreated++;
       {

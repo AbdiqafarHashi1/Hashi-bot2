@@ -192,6 +192,8 @@ public:
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
+      bool breakoutConfirmed=false;
+      Print(StringFormat("[COMPRESSION_ANALYZE_ENTER] called=1 symbol=%s timeframe=%s bars=%d file=CompressionBreakout.mqh marker=A4.15",ctx.symbol,EnumToString(ctx.timeframe),ctx.barsLoaded));
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_COMPRESSION_BREAKOUT);
       m_audit.called++;
       m_audit.lastRejectReason="none";
@@ -227,7 +229,6 @@ public:
       double boxHigh=0.0, boxLow=0.0, boxWidth=0.0, insideRatio=0.0, touchScore=0.0;
       int boxAge=0;
       string diagReason="none";
-      bool breakoutConfirmed=false;
       TradeDirection dir = TRADE_DIR_NONE;
       double breakoutQ = 0.0, entryQ = 0.0;
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
@@ -389,6 +390,9 @@ public:
             Print(StringFormat("[COMPRESSION_ACCEPT_ATTEMPT] called=1 boxReady=true boxFormed=true breakoutConfirmed=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
                          (breakoutConfirmed?"true":"false"),StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
       Print(StringFormat("[COMPRESSION_FINAL_VALIDATION] boxReady=true boxFormed=true breakoutConfirmed=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",(breakoutConfirmed?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
+      Print(StringFormat("[COMPRESSION_ANALYZE_EXIT] accepted=%s returnPoint=R_FINAL reason=%s boxReady=%s boxFormed=%s breakoutConfirmed=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
+                         (finalValid?"true":"false"),finalReason,(m_audit.expBoxReady>0?"true":"false"),(m_audit.expBoxFormed>0?"true":"false"),(breakoutConfirmed?"true":"false"),
+                         StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       return finalValid;
      }
 
