@@ -189,6 +189,8 @@ long g_lifeTp1Hits=0,g_lifeTp2Hits=0,g_lifeBreakEvenMoves=0,g_lifeTrailUpdates=0
 long g_winTrend=0,g_winPullback=0,g_winCompression=0,g_winExpansion=0,g_winMicro=0;
 long g_lossTrend=0,g_lossPullback=0,g_lossCompression=0,g_lossExpansion=0,g_lossMicro=0;
 double g_netPnl[5],g_sumR[5]; long g_closedCount[5],g_rejectTopReason[5][8];
+long g_breakevenCount[5],g_consecWinsMax[5],g_consecLossesMax[5],g_currConsecWins[5],g_currConsecLosses[5];
+double g_grossProfit[5],g_grossLoss[5],g_totalCommission[5],g_totalSwap[5],g_largestWin[5],g_largestLoss[5],g_maxConsecProfit[5],g_maxConsecLossAmount[5],g_currConsecProfit[5],g_currConsecLossAmount[5];
 int g_consecutiveLosses=0; double g_dayStartEquity=0.0;
 long g_scaleEvaluated=0,g_scaleAccepted=0,g_scaleRejected=0,g_scaleSubmitted=0;
 long g_pipeWinnerSel[5],g_pipePlanOk[5],g_pipePlanRej[5],g_pipeRiskOk[5],g_pipeRiskRej[5],g_pipePortOk[5],g_pipePortRej[5],g_pipeSubmitOk[5],g_pipeSubmitRej[5],g_pipeLifecycleOk[5],g_pipeLifecycleRej[5];
@@ -344,6 +346,16 @@ string StrategyResultName(const int bucket)
    return "UnknownStrategy";
   }
 
+void ResetPerformanceStats()
+  {
+   for(int i=0;i<5;i++)
+     {
+      g_breakevenCount[i]=0; g_consecWinsMax[i]=0; g_consecLossesMax[i]=0; g_currConsecWins[i]=0; g_currConsecLosses[i]=0;
+      g_grossProfit[i]=0.0; g_grossLoss[i]=0.0; g_totalCommission[i]=0.0; g_totalSwap[i]=0.0;
+      g_largestWin[i]=0.0; g_largestLoss[i]=0.0; g_maxConsecProfit[i]=0.0; g_maxConsecLossAmount[i]=0.0; g_currConsecProfit[i]=0.0; g_currConsecLossAmount[i]=0.0;
+     }
+  }
+
 
 int StrategyFromEncodedComment(const string comment)
   {
@@ -466,8 +478,33 @@ void UpdateAttributionFromDeal(const ulong deal,const string source,long &openDe
       else if(attributionSource=="DealComment") commentHits++;
       g_closedCount[bucket]++;
       g_netPnl[bucket]+=net;
+      g_totalCommission[bucket]+=commission;
+      g_totalSwap[bucket]+=swap;
       if(net>0.0) g_sumR[bucket]+=net;
       else if(net<0.0) g_sumR[bucket]-=MathAbs(net);
+      if(net>0.0)
+        {
+         g_grossProfit[bucket]+=net;
+         if(net>g_largestWin[bucket]) g_largestWin[bucket]=net;
+         g_currConsecWins[bucket]++;
+         g_currConsecLosses[bucket]=0;
+         if(g_currConsecWins[bucket]>g_consecWinsMax[bucket]) g_consecWinsMax[bucket]=g_currConsecWins[bucket];
+         g_currConsecProfit[bucket]+=net;
+         g_currConsecLossAmount[bucket]=0.0;
+         if(g_currConsecProfit[bucket]>g_maxConsecProfit[bucket]) g_maxConsecProfit[bucket]=g_currConsecProfit[bucket];
+        }
+      else if(net<0.0)
+        {
+         g_grossLoss[bucket]+=net;
+         if(net<g_largestLoss[bucket]) g_largestLoss[bucket]=net;
+         g_currConsecLosses[bucket]++;
+         g_currConsecWins[bucket]=0;
+         if(g_currConsecLosses[bucket]>g_consecLossesMax[bucket]) g_consecLossesMax[bucket]=g_currConsecLosses[bucket];
+         g_currConsecLossAmount[bucket]+=net;
+         g_currConsecProfit[bucket]=0.0;
+         if(g_currConsecLossAmount[bucket]<g_maxConsecLossAmount[bucket]) g_maxConsecLossAmount[bucket]=g_currConsecLossAmount[bucket];
+        }
+      else g_breakevenCount[bucket]++;
       if(bucket==0){ if(net>0.0) g_winTrend++; else if(net<0.0) g_lossTrend++; }
       else if(bucket==1){ if(net>0.0) g_winPullback++; else if(net<0.0) g_lossPullback++; }
       else if(bucket==2){ if(net>0.0) g_winCompression++; else if(net<0.0) g_lossCompression++; }
@@ -484,6 +521,7 @@ void RebuildClosedResultsFromHistory(const string source,long &testerDeals,long 
    for(int i=0;i<5;i++){ g_closedCount[i]=0; g_netPnl[i]=0.0; g_sumR[i]=0.0; }
    g_winTrend=0; g_winPullback=0; g_winCompression=0; g_winExpansion=0; g_winMicro=0;
    g_lossTrend=0; g_lossPullback=0; g_lossCompression=0; g_lossExpansion=0; g_lossMicro=0;
+   ResetPerformanceStats();
    testerDeals=0; openDeals=0; closeDeals=0; attributedClosed=0; unknownClosed=0; positionMapHits=0; orderMapHits=0; commentHits=0; unknownHits=0; netProfit=0.0;
    if(!HistorySelect(0,TimeCurrent())) return;
    int total=(int)HistoryDealsTotal();
@@ -1793,8 +1831,8 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
    double historyNetProfit=0.0;
    RebuildClosedResultsFromHistory("HistoryRebuild",testerDeals,openDeals,closeDeals,attributedClosed,unknownClosed,positionMapHits,orderMapHits,commentHits,unknownHits,historyNetProfit);
    int resultBuckets[4]={0,2,4,-1};
-   double portfolioGrossProfit=0.0,portfolioGrossLoss=0.0,portfolioNet=0.0,portfolioBest=0.0,portfolioWorst=0.0;
-   long portfolioOpened=0,portfolioClosed=0,portfolioWins=0,portfolioLosses=0;
+   double portfolioGrossProfit=0.0,portfolioGrossLoss=0.0,portfolioNet=0.0,portfolioBest=0.0,portfolioWorst=0.0,portfolioCommission=0.0,portfolioSwap=0.0;
+   long portfolioOpened=0,portfolioClosed=0,portfolioWins=0,portfolioLosses=0,portfolioBreakeven=0;
    double topNet=-1.0e10,bottomNet=1.0e10; string topStrategy="UnknownStrategy",bottomStrategy="UnknownStrategy";
    for(int rbi=0;rbi<4;rbi++)
      {
@@ -1802,7 +1840,6 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
       long opened=(b>=0?g_pipeSubmitOk[b]:0);
       long closed=(b>=0?g_closedCount[b]:0);
       long wins=0,losses=0;
-      double sumWin=0.0,sumLoss=0.0;
       if(b>=0)
         {
          if(b==0){ wins=g_winTrend; losses=g_lossTrend; }
@@ -1811,21 +1848,32 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
          else if(b==3){ wins=g_winExpansion; losses=g_lossExpansion; }
          else if(b==4){ wins=g_winMicro; losses=g_lossMicro; }
          if((wins+losses)>g_closedCount[b]) losses=MathMax(0,g_closedCount[b]-wins);
-         sumWin=MathMax(0.0,g_netPnl[b]);
-         sumLoss=MathAbs(MathMin(0.0,g_netPnl[b]));
         }
       double net=(b>=0?g_netPnl[b]:0.0);
-      double grossProfit=MathMax(0.0,net);
-      double grossLoss=MathAbs(MathMin(0.0,net));
+      long breakeven=(b>=0?g_breakevenCount[b]:unknownClosed);
+      double grossProfit=(b>=0?g_grossProfit[b]:0.0);
+      double grossLoss=(b>=0?g_grossLoss[b]:0.0);
+      double totalCommission=(b>=0?g_totalCommission[b]:0.0);
+      double totalSwap=(b>=0?g_totalSwap[b]:0.0);
+      double largestWin=(b>=0?g_largestWin[b]:0.0);
+      double largestLoss=(b>=0?g_largestLoss[b]:0.0);
+      long maxConsecutiveWins=(b>=0?g_consecWinsMax[b]:0);
+      long maxConsecutiveLosses=(b>=0?g_consecLossesMax[b]:0);
+      double maxConsecutiveProfit=(b>=0?g_maxConsecProfit[b]:0.0);
+      double maxConsecutiveLossAmount=(b>=0?g_maxConsecLossAmount[b]:0.0);
       double avg=(closed>0?net/(double)closed:0.0);
-      double winRate=((wins+losses)>0?100.0*(double)wins/(double)(wins+losses):0.0);
-      double bestTrade=(wins>0?sumWin/(double)wins:0.0);
-      double worstTrade=(losses>0?(-sumLoss/(double)losses):0.0);
+      double winRate=(closed>0?100.0*(double)wins/(double)closed:0.0);
+      double bestTrade=(wins>0?grossProfit/(double)wins:0.0);
+      double worstTrade=(losses>0?grossLoss/(double)losses:0.0);
+      double pf=(grossLoss<0.0?grossProfit/MathAbs(grossLoss):(grossProfit>0.0?999.0:0.0));
+      double expectancy=(closed>0?net/(double)closed:0.0);
+      double payoffRatio=(worstTrade<0.0?bestTrade/MathAbs(worstTrade):(bestTrade>0.0?999.0:0.0));
+      double avgNetPerTrade=(closed>0?net/(double)closed:0.0);
       string name=StrategyResultName(b);
       if(b>=0)
         {
-         portfolioOpened+=opened; portfolioClosed+=closed; portfolioWins+=wins; portfolioLosses+=losses;
-         portfolioGrossProfit+=grossProfit; portfolioGrossLoss+=grossLoss; portfolioNet+=net;
+         portfolioOpened+=opened; portfolioClosed+=closed; portfolioWins+=wins; portfolioLosses+=losses; portfolioBreakeven+=breakeven;
+         portfolioGrossProfit+=grossProfit; portfolioGrossLoss+=grossLoss; portfolioNet+=net; portfolioCommission+=totalCommission; portfolioSwap+=totalSwap;
          if((portfolioWins+portfolioLosses)==(wins+losses)){ portfolioBest=bestTrade; portfolioWorst=worstTrade; }
          else { portfolioBest=MathMax(portfolioBest,bestTrade); portfolioWorst=MathMin(portfolioWorst,worstTrade); }
          if(net>topNet){ topNet=net; topStrategy=name; }
@@ -1833,11 +1881,52 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
         }
       Print(StringFormat("[STRATEGY_RESULT_SUMMARY] strategy=%s opened=%d closed=%d wins=%d losses=%d winRate=%.2f grossProfit=%.2f grossLoss=%.2f netProfit=%.2f avgProfit=%.2f bestTrade=%.2f worstTrade=%.2f",
                          name,opened,closed,wins,losses,winRate,grossProfit,grossLoss,net,avg,bestTrade,worstTrade));
+      Print(StringFormat("[STRATEGY_PERFORMANCE_SUMMARY] strategy=%s opened=%d closed=%d wins=%d losses=%d breakeven=%d winRate=%.2f grossProfit=%.2f grossLoss=%.2f netProfit=%.2f avgWin=%.2f avgLoss=%.2f largestWin=%.2f largestLoss=%.2f profitFactor=%.2f expectancy=%.2f payoffRatio=%.2f maxConsecutiveWins=%d maxConsecutiveLosses=%d maxConsecutiveProfit=%.2f maxConsecutiveLossAmount=%.2f totalCommission=%.2f totalSwap=%.2f avgNetPerTrade=%.2f",
+                         name,opened,closed,wins,losses,breakeven,winRate,grossProfit,grossLoss,net,bestTrade,worstTrade,largestWin,largestLoss,pf,expectancy,payoffRatio,maxConsecutiveWins,maxConsecutiveLosses,maxConsecutiveProfit,maxConsecutiveLossAmount,totalCommission,totalSwap,avgNetPerTrade));
+      string hint="protect_strategy";
+      if(closed<20) hint="sample_too_small";
+      else if(maxConsecutiveLosses>=6) hint="loss_cluster_risk";
+      else if(net>0.0 && winRate<45.0) hint="trend_following_profile_check_RR";
+      else if(pf<1.0 && payoffRatio<1.0) hint="RR_problem";
+      else if(pf<1.0 && winRate>=55.0) hint="averageLossTooLarge_or_TPTooSmall";
+      else if(pf<1.0 && winRate<45.0) hint="entryQuality_or_filterProblem";
+      else if(pf>=1.1 && expectancy>0.0) hint="protect_strategy";
+      Print(StringFormat("[STRATEGY_DIAGNOSIS_HINT] strategy=%s hint=%s reason=closed=%d,pf=%.2f,winRate=%.2f,payoff=%.2f,maxConsecLosses=%d,net=%.2f",name,hint,closed,pf,winRate,payoffRatio,maxConsecutiveLosses,net));
      }
-   double pf=(portfolioGrossLoss>0.0?portfolioGrossProfit/portfolioGrossLoss:(portfolioGrossProfit>0.0?2.0:0.0));
+   double pf=(portfolioGrossLoss<0.0?portfolioGrossProfit/MathAbs(portfolioGrossLoss):(portfolioGrossProfit>0.0?999.0:0.0));
    double portfolioWinRate=((portfolioWins+portfolioLosses)>0?100.0*(double)portfolioWins/(double)(portfolioWins+portfolioLosses):0.0);
    Print(StringFormat("[PORTFOLIO_RESULT_SUMMARY] opened=%d closed=%d wins=%d losses=%d winRate=%.2f grossProfit=%.2f grossLoss=%.2f netProfit=%.2f profitFactor=%.2f maxDrawdownApprox=NA topWinningStrategy=%s topLosingStrategy=%s",
                       portfolioOpened,portfolioClosed,portfolioWins,portfolioLosses,portfolioWinRate,portfolioGrossProfit,portfolioGrossLoss,portfolioNet,pf,topStrategy,bottomStrategy));
+   double portfolioAvgWin=(portfolioWins>0?portfolioGrossProfit/(double)portfolioWins:0.0);
+   double portfolioAvgLoss=(portfolioLosses>0?portfolioGrossLoss/(double)portfolioLosses:0.0);
+   double portfolioPayoff=(portfolioAvgLoss<0.0?portfolioAvgWin/MathAbs(portfolioAvgLoss):(portfolioAvgWin>0.0?999.0:0.0));
+   double portfolioExpectancy=(portfolioClosed>0?portfolioNet/(double)portfolioClosed:0.0);
+   double portfolioAvgNet=(portfolioClosed>0?portfolioNet/(double)portfolioClosed:0.0);
+   Print(StringFormat("[STRATEGY_PERFORMANCE_SUMMARY] strategy=Portfolio opened=%d closed=%d wins=%d losses=%d breakeven=%d winRate=%.2f grossProfit=%.2f grossLoss=%.2f netProfit=%.2f avgWin=%.2f avgLoss=%.2f largestWin=%.2f largestLoss=%.2f profitFactor=%.2f expectancy=%.2f payoffRatio=%.2f maxConsecutiveWins=NA maxConsecutiveLosses=NA maxConsecutiveProfit=NA maxConsecutiveLossAmount=NA totalCommission=%.2f totalSwap=%.2f avgNetPerTrade=%.2f",
+                      portfolioOpened,portfolioClosed,portfolioWins,portfolioLosses,portfolioBreakeven,portfolioWinRate,portfolioGrossProfit,portfolioGrossLoss,portfolioNet,portfolioAvgWin,portfolioAvgLoss,portfolioBest,portfolioWorst,pf,portfolioExpectancy,portfolioPayoff,portfolioCommission,portfolioSwap,portfolioAvgNet));
+   int rankBuckets[3]={0,2,4};
+   for(int i=0;i<3;i++) for(int j=i+1;j<3;j++)
+     {
+      int bi=rankBuckets[i],bj=rankBuckets[j];
+      double ni=g_netPnl[bi],nj=g_netPnl[bj];
+      double pfi=(g_grossLoss[bi]<0.0?g_grossProfit[bi]/MathAbs(g_grossLoss[bi]):(g_grossProfit[bi]>0.0?999.0:0.0));
+      double pfj=(g_grossLoss[bj]<0.0?g_grossProfit[bj]/MathAbs(g_grossLoss[bj]):(g_grossProfit[bj]>0.0?999.0:0.0));
+      double ei=(g_closedCount[bi]>0?ni/(double)g_closedCount[bi]:0.0),ej=(g_closedCount[bj]>0?nj/(double)g_closedCount[bj]:0.0);
+      double lpi=MathAbs(g_maxConsecLossAmount[bi]),lpj=MathAbs(g_maxConsecLossAmount[bj]);
+      double wri=(g_closedCount[bi]>0?100.0*(double)(bi==0?g_winTrend:(bi==2?g_winCompression:g_winMicro))/(double)g_closedCount[bi]:0.0);
+      double wrj=(g_closedCount[bj]>0?100.0*(double)(bj==0?g_winTrend:(bj==2?g_winCompression:g_winMicro))/(double)g_closedCount[bj]:0.0);
+      bool swap=(nj>ni) || (nj==ni && pfj>pfi) || (nj==ni && pfj==pfi && ej>ei) || (nj==ni && pfj==pfi && ej==ei && lpj<lpi) || (nj==ni && pfj==pfi && ej==ei && lpj==lpi && wrj>wri);
+      if(swap){ int t=rankBuckets[i]; rankBuckets[i]=rankBuckets[j]; rankBuckets[j]=t; }
+     }
+   for(int i=0;i<3;i++)
+     {
+      int b=rankBuckets[i];
+      long wins=(b==0?g_winTrend:(b==2?g_winCompression:g_winMicro));
+      double wr=(g_closedCount[b]>0?100.0*(double)wins/(double)g_closedCount[b]:0.0);
+      double pfv=(g_grossLoss[b]<0.0?g_grossProfit[b]/MathAbs(g_grossLoss[b]):(g_grossProfit[b]>0.0?999.0:0.0));
+      double ex=(g_closedCount[b]>0?g_netPnl[b]/(double)g_closedCount[b]:0.0);
+      Print(StringFormat("[STRATEGY_PERFORMANCE_RANKING] rank=%d strategy=%s netProfit=%.2f profitFactor=%.2f expectancy=%.2f winRate=%.2f closed=%d",i+1,StrategyResultName(b),g_netPnl[b],pfv,ex,wr,g_closedCount[b]));
+     }
    Print(StringFormat("[RESULT_ATTRIBUTION_CHECK] testerDeals=%d openDeals=%d closeDeals=%d attributedClosed=%d unknownClosed=%d positionMapHits=%d orderMapHits=%d commentHits=%d unknownHits=%d strategyClosedTotal=%d portfolioClosed=%d netProfit=%.2f",
                       testerDeals,openDeals,closeDeals,attributedClosed,unknownClosed,positionMapHits,orderMapHits,commentHits,unknownHits,(g_closedCount[0]+g_closedCount[1]+g_closedCount[2]+g_closedCount[3]+g_closedCount[4]),portfolioClosed,portfolioNet));
    Print(StringFormat("[STRATEGY_ACCEPTANCE_SUMMARY] microSelected=%d microAccepted=%d microRejected=%d microTopReason=%s trendSelected=%d trendAccepted=%d trendRejected=%d trendTopReason=%s compressionSelected=%d compressionAccepted=%d compressionRejected=%d compressionTopReason=%s",

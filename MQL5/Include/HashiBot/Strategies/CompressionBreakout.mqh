@@ -24,8 +24,9 @@ private:
       long failBoxReady,failBoxFormed,failRange,failBreakout,failBody,failCloseLocation,failSltp,failRr;
       long nearValidSnapshots,directionAssigned,priceFieldsPass,rrPass,scorePass,candidateAcceptCalled;
       long nearFailBoxReady,nearFailBoxFormed,nearFailBreakout,nearFailDirection,nearFailPrice,nearFailSltp,nearFailRr,nearFailScore;
+      long fakeoutRiskCount,weakBreakoutReject,slTooWideReject,rrTooLowReject,scoreReject,rejected;
       string lastRejectReason;
-      void Reset(){ called=enoughBarsPass=atrReadyPass=boxReadyPass=boxWidthPass=compressionPass=breakoutPass=spreadPass=slTpPass=rawCreated=0; expBarsReady=expIndicatorsReady=expSpreadOk=expRegimeOk=expAtrOk=expBoxReady=expBoxFormed=expRangeOk=expBreakoutConfirmed=expBodyOk=expCloseLocationOk=expPricePlanOk=expSltpOk=expRrOk=expValid=0; failBoxReady=failBoxFormed=failRange=failBreakout=failBody=failCloseLocation=failSltp=failRr=0; nearValidSnapshots=directionAssigned=priceFieldsPass=rrPass=scorePass=candidateAcceptCalled=0; nearFailBoxReady=nearFailBoxFormed=nearFailBreakout=nearFailDirection=nearFailPrice=nearFailSltp=nearFailRr=nearFailScore=0; lastRejectReason="none"; }
+      void Reset(){ called=enoughBarsPass=atrReadyPass=boxReadyPass=boxWidthPass=compressionPass=breakoutPass=spreadPass=slTpPass=rawCreated=0; expBarsReady=expIndicatorsReady=expSpreadOk=expRegimeOk=expAtrOk=expBoxReady=expBoxFormed=expRangeOk=expBreakoutConfirmed=expBodyOk=expCloseLocationOk=expPricePlanOk=expSltpOk=expRrOk=expValid=0; failBoxReady=failBoxFormed=failRange=failBreakout=failBody=failCloseLocation=failSltp=failRr=0; nearValidSnapshots=directionAssigned=priceFieldsPass=rrPass=scorePass=candidateAcceptCalled=0; nearFailBoxReady=nearFailBoxFormed=nearFailBreakout=nearFailDirection=nearFailPrice=nearFailSltp=nearFailRr=nearFailScore=0; fakeoutRiskCount=weakBreakoutReject=slTooWideReject=rrTooLowReject=scoreReject=rejected=0; lastRejectReason="none"; }
      };
    string MapRejectReason(const string reason) const
      {
@@ -45,7 +46,8 @@ private:
       candidate.suppression.reasons[0] = reason;
       StrategyTypes::CandidateReject(candidate,rejectReason,rejectReason);
       candidate.plan.strategy = STRATEGY_COMPRESSION_BREAKOUT;
-      Print(StringFormat("[COMPRESSION_ACCEPT_ATTEMPT] marker=A4.15 called=1 boxReady=false boxFormed=false breakoutConfirmed=false direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=false reason=%s",
+      m_audit.rejected++;
+      Print(StringFormat("[COMPRESSION_ACCEPT_ATTEMPT] marker=A4.20 called=1 boxReady=false boxFormed=false breakoutConfirmed=false direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=false reason=%s",
                          StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,MapRejectReason(rejectReason)));
      }
 
@@ -102,11 +104,14 @@ private:
       return true;
      }
 
-   bool BreakoutSignal(const MarketContext &ctx,const double boxHigh,const double boxLow,const double boxWidth,TradeDirection &dir,double &breakoutQ,double &entryQ)
+   bool BreakoutSignal(const MarketContext &ctx,const double boxHigh,const double boxLow,const double boxWidth,TradeDirection &dir,double &breakoutQ,double &entryQ,double &fakeoutRisk,double &spreadQuality,bool &weakBreakout)
      {
       dir = TRADE_DIR_NONE;
       breakoutQ = 0.0;
       entryQ = 0.0;
+      fakeoutRisk=0.0;
+      spreadQuality=0.0;
+      weakBreakout=false;
 
       double atr = ctx.atr;
       double bufferAtr=(MQLInfoInteger(MQL_TESTER)>0?0.008:0.015);
@@ -124,6 +129,7 @@ private:
       double upperWick = ctx.currentHigh - MathMax(ctx.currentOpen, ctx.currentClose);
       double lowerWick = MathMin(ctx.currentOpen, ctx.currentClose) - ctx.currentLow;
       bool wickDominant = (MathMax(upperWick, lowerWick) > body * 3.2);
+      double wickPenalty=MathHelpers::Clamp(MathHelpers::SafeDivide(MathMax(upperWick,lowerWick),MathMax(body,1e-6),0.0)/5.0,0.0,1.0);
 
       bool closeOutsideUp = (ctx.currentClose > boxHigh + buffer && ctx.currentHigh > boxHigh);
       bool closeOutsideDown = (ctx.currentClose < boxLow - buffer && ctx.currentLow < boxLow);
@@ -137,12 +143,14 @@ private:
          return false; // wick-dominant needs stronger close outside
 
       // spread vs box width filter
-      if(ctx.spreadPoints * ctx.point > boxWidth * 0.30)
+      double spreadToBox=MathHelpers::SafeDivide(ctx.spreadPoints*ctx.point,MathMax(boxWidth,1e-6),0.0);
+      spreadQuality=MathHelpers::Clamp(1.0-spreadToBox/0.30,0.0,1.0);
+      if(spreadToBox > 0.30)
          return false;
 
       // overextended breakout vs ATR
       double breakoutDist = (buyBreak ? (ctx.currentClose - boxHigh) : (boxLow - ctx.currentClose));
-      if(atr > 0.0 && breakoutDist > 2.8 * atr)
+      if(atr > 0.0 && breakoutDist > 2.6 * atr)
          return false;
       if(atr > 0.0 && closeOutsideUp==false && closeOutsideDown==false && breakoutDist < 0.01 * atr)
          return false;
@@ -154,7 +162,9 @@ private:
          double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.56:0.42);
          if(closeLoc < minCloseLoc)
             return false;
-         breakoutQ = MathHelpers::Clamp(0.5 * bodyQ + 0.5 * closeLoc, 0.0, 1.0);
+         double edgeStrength=MathHelpers::Clamp(MathHelpers::SafeDivide(ctx.currentClose-(boxHigh+buffer),MathMax(atr,1e-6),0.0),0.0,1.0);
+         weakBreakout=(edgeStrength<0.06 || closeLoc<0.48 || bodyQ<0.18);
+         breakoutQ = MathHelpers::Clamp(0.35 * bodyQ + 0.35 * closeLoc + 0.20 * edgeStrength + 0.10 * spreadQuality - 0.10 * wickPenalty, 0.0, 1.0);
         }
       else
         {
@@ -163,10 +173,13 @@ private:
          double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.56:0.42);
          if(closeLoc < minCloseLoc)
             return false;
-         breakoutQ = MathHelpers::Clamp(0.5 * bodyQ + 0.5 * closeLoc, 0.0, 1.0);
+         double edgeStrength=MathHelpers::Clamp(MathHelpers::SafeDivide((boxLow-buffer)-ctx.currentClose,MathMax(atr,1e-6),0.0),0.0,1.0);
+         weakBreakout=(edgeStrength<0.06 || closeLoc<0.48 || bodyQ<0.18);
+         breakoutQ = MathHelpers::Clamp(0.35 * bodyQ + 0.35 * closeLoc + 0.20 * edgeStrength + 0.10 * spreadQuality - 0.10 * wickPenalty, 0.0, 1.0);
         }
 
-      entryQ = breakoutQ;
+      fakeoutRisk=MathHelpers::Clamp(0.45*(1.0-breakoutQ)+0.25*wickPenalty+0.30*(1.0-spreadQuality),0.0,1.0);
+      entryQ = MathHelpers::Clamp(0.65*breakoutQ + 0.35*(1.0-fakeoutRisk),0.0,1.0);
       return true;
      }
 
@@ -211,6 +224,11 @@ public:
       return StringFormat("[COMPRESSION_PROVEN_BLOCKER_SUMMARY] called=%d nearValidSnapshots=%d boxReady=%d boxFormed=%d breakoutConfirmed=%d directionAssigned=%d priceFieldsPass=%d sltpPass=%d rrPass=%d scorePass=%d candidateAcceptCalled=%d finalValid=%d topFinalReason=%s",
                          m_audit.called,m_audit.nearValidSnapshots,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.expBreakoutConfirmed,m_audit.directionAssigned,m_audit.priceFieldsPass,m_audit.slTpPass,m_audit.rrPass,m_audit.scorePass,m_audit.candidateAcceptCalled,m_audit.expValid,topReason);
      }
+   string ProfitabilitySummary() const
+     {
+      return StringFormat("[COMPRESSION_PROFITABILITY_SUMMARY] called=%d boxReady=%d boxFormed=%d breakoutConfirmed=%d planBuilt=%d accepted=%d rejected=%d fakeoutRiskCount=%d weakBreakoutReject=%d slTooWideReject=%d rrTooLowReject=%d scoreReject=%d",
+                          m_audit.called,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.expBreakoutConfirmed,m_audit.expPricePlanOk,m_audit.expValid,m_audit.rejected,m_audit.fakeoutRiskCount,m_audit.weakBreakoutReject,m_audit.slTooWideReject,m_audit.rrTooLowReject,m_audit.scoreReject);
+     }
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
@@ -250,7 +268,8 @@ public:
       int boxAge=0;
       string diagReason="none";
       TradeDirection dir = TRADE_DIR_NONE;
-      double breakoutQ = 0.0, entryQ = 0.0;
+      double breakoutQ = 0.0, entryQ = 0.0,fakeoutRisk=0.0,spreadQuality=0.0;
+      bool weakBreakout=false;
       bool boxProxyFallback=false;
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
         {
@@ -295,7 +314,7 @@ public:
       m_audit.expRangeOk++;
       m_audit.boxWidthPass++;
 
-      if(!BreakoutSignal(ctx, boxHigh, boxLow, boxWidth, dir, breakoutQ, entryQ))
+      if(!BreakoutSignal(ctx, boxHigh, boxLow, boxWidth, dir, breakoutQ, entryQ,fakeoutRisk,spreadQuality,weakBreakout))
         {
          if(testerMode && boxProxyFallback)
            {
@@ -305,8 +324,9 @@ public:
             if(longBreak || shortBreak)
               {
                dir=(longBreak?TRADE_DIR_LONG:TRADE_DIR_SHORT);
-               breakoutQ=0.58;
-               entryQ=MathMax(entryQ,0.58);
+               breakoutQ=0.56;
+               entryQ=MathMax(entryQ,0.56);
+               fakeoutRisk=MathMax(fakeoutRisk,0.45);
               }
            }
          if(dir==TRADE_DIR_NONE)
@@ -317,6 +337,14 @@ public:
       m_audit.expBodyOk++;
       m_audit.expCloseLocationOk++;
       m_audit.breakoutPass++;
+      if(weakBreakout)
+        {
+         m_audit.weakBreakoutReject++;
+         m_audit.lastRejectReason="WEAK_BREAKOUT_REJECT";
+         Reject(candidate,SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason);
+         return false;
+        }
+      if(fakeoutRisk>=0.62) m_audit.fakeoutRiskCount++;
 
       candidate.setupFound=true;
       candidate.direction = dir;
@@ -338,10 +366,11 @@ public:
       candidate.score.scoreVol = volExpansionProxy;
       candidate.score.scoreEntry = entryQ;
       double rrProxy = MathHelpers::Clamp(MathHelpers::SafeDivide(boxWidth, MathMax(ctx.atr,1e-6), 0.0) / 2.0, 0.0, 1.0);
-      candidate.score.scoreUnique = StrategyTypes::BuildUnifiedQualityScore(regimeScore, boxQuality, volExpansionProxy, entryQ, rrProxy, (regime.suppression.isSuppressed ? 1.0 : 0.0));
+      double breakoutQuality=MathHelpers::Clamp(0.30*boxQuality + 0.32*breakoutQ + 0.18*entryQ + 0.10*volExpansionProxy + 0.10*spreadQuality - 0.20*fakeoutRisk,0.0,1.0);
+      candidate.score.scoreUnique = StrategyTypes::BuildUnifiedQualityScore(regimeScore, boxQuality, volExpansionProxy, breakoutQuality, rrProxy, (regime.suppression.isSuppressed ? 1.0 : 0.0));
       candidate.score.scoreSuppression = (regime.suppression.isSuppressed ? 1.0 : 0.0);
 
-      candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + entryQ) / 4.0, 0.0, 1.0);
+      candidate.plan.confidence = MathHelpers::Clamp((regimeScore + boxQuality + breakoutQ + breakoutQuality) / 4.0, 0.0, 1.0);
 
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_COMPRESSION_BREAKOUT, dir, ctx, (testerMode?0.90:1.0), candidate.plan))
         {
@@ -366,7 +395,7 @@ public:
       m_audit.expPricePlanOk++;
 
       // SL around opposite/inside box edge with ATR/spread buffer
-      double buffer = MathMax(0.20 * ctx.atr, ctx.spreadPoints * ctx.point * 1.5);
+      double buffer = MathMax(0.24 * ctx.atr, ctx.spreadPoints * ctx.point * 1.8);
       if(dir == TRADE_DIR_LONG)
          candidate.plan.stopLoss = MathMin(candidate.plan.stopLoss, boxLow - buffer);
       else
@@ -375,21 +404,40 @@ public:
       double risk = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
       if(risk <= 0.0)
         { m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP; m_audit.failSltp++; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+      double atrRisk=MathHelpers::SafeDivide(risk,MathMax(ctx.atr,1e-6),0.0);
+      if(atrRisk<0.80)
+        {
+         double targetRisk=MathMax(1.00*ctx.atr,MathMax(2.0*ctx.point,1e-6));
+         if(dir==TRADE_DIR_LONG) candidate.plan.stopLoss=candidate.plan.entryPrice-targetRisk;
+         else candidate.plan.stopLoss=candidate.plan.entryPrice+targetRisk;
+         risk=MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss);
+         atrRisk=MathHelpers::SafeDivide(risk,MathMax(ctx.atr,1e-6),0.0);
+        }
+      if(atrRisk>1.85)
+        {
+         m_audit.slTooWideReject++;
+         m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP;
+         m_audit.failSltp++;
+         Reject(candidate,SUPPRESS_OTHER,m_audit.lastRejectReason);
+         return false;
+        }
 
-      // TP1 = box height or 1R, TP2 = 2R/measured move
-      double tp1ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + risk : candidate.plan.entryPrice - risk);
-      double tp1ByBox = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + boxWidth : candidate.plan.entryPrice - boxWidth);
+      double tp1R=(breakoutQuality>=0.70?1.20:(breakoutQuality>=0.55?1.10:1.00));
+      double tp1ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + tp1R*risk : candidate.plan.entryPrice - tp1R*risk);
+      double tp1ByBox = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + 0.95*boxWidth : candidate.plan.entryPrice - 0.95*boxWidth);
       candidate.plan.takeProfit1 = (dir == TRADE_DIR_LONG ? MathMax(tp1ByR, tp1ByBox) : MathMin(tp1ByR, tp1ByBox));
 
       double measuredMove = boxWidth;
-      double tp2ByMeasured = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + 2.0 * measuredMove : candidate.plan.entryPrice - 2.0 * measuredMove);
-      double tp2ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + 2.0 * risk : candidate.plan.entryPrice - 2.0 * risk);
+      double tp2R=(breakoutQuality>=0.72?2.80:(breakoutQuality>=0.62?2.40:2.00));
+      double tp2ByMeasured = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + (1.6 + breakoutQuality) * measuredMove : candidate.plan.entryPrice - (1.6 + breakoutQuality) * measuredMove);
+      double tp2ByR = (dir == TRADE_DIR_LONG ? candidate.plan.entryPrice + tp2R * risk : candidate.plan.entryPrice - tp2R * risk);
       candidate.plan.takeProfit2 = (dir == TRADE_DIR_LONG ? MathMax(tp2ByR, tp2ByMeasured) : MathMin(tp2ByR, tp2ByMeasured));
 
       candidate.plan.strategy = STRATEGY_COMPRESSION_BREAKOUT;
       candidate.plan.direction = dir;
       candidate.plan.riskR = MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice), MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6), 0.0);
       candidate.score.totalScore = MathMax(candidate.plan.confidence, candidate.score.scoreUnique);
+      candidate.score.totalScore = MathHelpers::Clamp(candidate.score.totalScore - 0.18*fakeoutRisk,0.0,1.0);
       if(breakoutConfirmed && candidate.score.totalScore<0.58)
          candidate.score.totalScore=0.58;
 
@@ -431,6 +479,8 @@ public:
          else if(finalReason=="BOX_NOT_FORMED") m_audit.failBoxFormed++;
          else if(finalReason==CANDIDATE_REASON_INVALID_SLTP) m_audit.failSltp++;
          else if(finalReason==CANDIDATE_REASON_RR_TOO_LOW) m_audit.failRr++;
+         if(finalReason==CANDIDATE_REASON_RR_TOO_LOW) m_audit.rrTooLowReject++;
+         else if(finalReason=="SCORE_INVALID") m_audit.scoreReject++;
          Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason);
         }
       bool nearValid=(m_audit.expBoxReady>0 || m_audit.expBoxFormed>0 || breakoutConfirmed || candidate.direction!=TRADE_DIR_NONE || candidate.setupFound || candidate.plan.entryPrice!=0.0 || candidate.plan.stopLoss!=0.0 || candidate.plan.takeProfit1!=0.0 || candidate.plan.takeProfit2!=0.0 || candidate.plan.riskR>0.0 || candidate.score.totalScore>0.0);
@@ -448,12 +498,13 @@ public:
          Print(StringFormat("[COMPRESSION_FAILURE_SNAPSHOT] n=%d barTime=%s boxReady=%s boxFormed=%s breakoutConfirmed=%s direction=%d setupFound=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f reason=%s finalReason=%s priceFieldsPass=%s sltpPass=%s rrPass=%s scorePass=%s candidateAcceptCalled=%s returnValue=%s boxHigh=%.5f boxLow=%.5f boxWidth=%.5f insideBars=%d touches=%d close=%.5f bid=%.5f ask=%.5f atr=%.5f spread=%.2f",
                            (int)m_audit.nearValidSnapshots,TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),(m_audit.expBoxReady>0?"true":"false"),(m_audit.expBoxFormed>0?"true":"false"),(breakoutConfirmed?"true":"false"),(int)candidate.plan.direction,(candidate.setupFound?"true":"false"),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,candidate.rejectReason,finalReason,(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(candidateAcceptCalled?"true":"false"),(finalValid?"true":"false"),boxHigh,boxLow,boxWidth,(int)MathRound(insideRatio*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),ctx.currentClose,ctx.bid,ctx.ask,ctx.atr,ctx.spreadPoints));
         }
-            Print(StringFormat("[COMPRESSION_ACCEPT_ATTEMPT] marker=A4.15 called=1 boxReady=true boxFormed=true breakoutConfirmed=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
-                         (breakoutConfirmed?"true":"false"),StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),MapRejectReason(finalReason)));
+            Print(StringFormat("[COMPRESSION_ACCEPT_ATTEMPT] marker=A4.20 called=1 boxReady=true boxFormed=true breakoutConfirmed=%s breakoutSide=%s boxHigh=%.5f boxLow=%.5f boxWidth=%.5f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f compressionScore=%.2f breakoutQuality=%.2f fakeoutRisk=%.2f retestAllowance=%.2f accepted=%s reason=%s",
+                         (breakoutConfirmed?"true":"false"),StrategyTypes::DirectionName(candidate.plan.direction),boxHigh,boxLow,boxWidth,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,breakoutQuality,fakeoutRisk,(atrRisk>=1.0?0.70:0.45),(finalValid?"true":"false"),MapRejectReason(finalReason)));
       Print(StringFormat("[COMPRESSION_FINAL_VALIDATION] boxReady=true boxFormed=true breakoutConfirmed=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",(breakoutConfirmed?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       Print(StringFormat("[COMPRESSION_ANALYZE_EXIT] accepted=%s returnPoint=R_FINAL reason=%s boxReady=%s boxFormed=%s breakoutConfirmed=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
                          (finalValid?"true":"false"),finalReason,(m_audit.expBoxReady>0?"true":"false"),(m_audit.expBoxFormed>0?"true":"false"),(breakoutConfirmed?"true":"false"),
                          StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
+      Print(ProfitabilitySummary());
       return finalValid;
      }
 
