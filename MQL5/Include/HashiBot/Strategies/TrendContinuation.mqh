@@ -26,6 +26,15 @@ private:
       string lastRejectReason;
       void Reset(){ called=structurePass=momentumPass=reclaimPass=directionPass=pricePass=slTpPass=rrPass=rawCreated=0; expValid=selected=lostToMicro=0; failNoSetup=failInvalidPrice=failInvalidSltp=failRr=0; nearValidSnapshots=candidateAcceptCalled=scorePass=0; nearFailNoSetup=nearFailInvalidPrice=nearFailInvalidSltp=nearFailRr=nearFailDirection=nearFailScore=0; lastRejectReason="none"; }
      };
+   string MapRejectReason(const string reason) const
+     {
+      if(reason==CANDIDATE_REASON_INVALID_DIRECTION) return "DIRECTION_MISSING";
+      if(reason==CANDIDATE_REASON_INVALID_PRICE_FIELDS) return "ENTRY_MISSING";
+      if(reason==CANDIDATE_REASON_INVALID_SLTP) return "SL_MISSING";
+      if(reason==CANDIDATE_REASON_RR_TOO_LOW) return "RR_TOO_LOW";
+      if(reason=="SCORE_INVALID"||reason=="INVALID_SCORE") return "SCORE_INVALID";
+      return reason;
+     }
    ProfileType                   m_profile;
    TrendAuditCounters            m_audit;
    void Reject(StrategyCandidate &candidate,const SuppressionReason reason,const string rejectReason)
@@ -35,8 +44,8 @@ private:
       candidate.suppression.reasons[0] = reason;
       StrategyTypes::CandidateReject(candidate,rejectReason,rejectReason);
       candidate.plan.strategy = STRATEGY_TREND_CONTINUATION;
-      Print(StringFormat("[TREND_ACCEPT_ATTEMPT] called=1 setupFound=false path=none direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=false reason=%s",
-                         StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,rejectReason));
+      Print(StringFormat("[TREND_ACCEPT_ATTEMPT] marker=A4.15 called=1 setupFound=false path=none direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=false reason=%s",
+                         StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,MapRejectReason(rejectReason)));
      }
 
    double CandleBodyQuality(const MarketContext &ctx)
@@ -176,7 +185,7 @@ public:
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
-      Print(StringFormat("[TREND_ANALYZE_ENTER] called=1 symbol=%s timeframe=%s bars=%d file=TrendContinuation.mqh marker=A4.15",ctx.symbol,EnumToString(ctx.timeframe),ctx.barsLoaded));
+      Print(StringFormat("[TREND_ANALYZE_ENTER] marker=A4.15 called=1 symbol=%s bars=%d",ctx.symbol,ctx.barsLoaded));
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_TREND_CONTINUATION);
       m_audit.called++;
       m_audit.lastRejectReason="none";
@@ -185,7 +194,8 @@ public:
       bool testerMode=(MQLInfoInteger(MQL_TESTER)>0);
       bool regimeTrend=(regime.regime == REGIME_TREND_UP || regime.regime == REGIME_TREND_DOWN);
       bool pseudoTrend=(testerMode && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow) && regime.confidence>=0.33);
-      if(!(regimeTrend || pseudoTrend))
+      bool regimeGatePass=(regimeTrend || pseudoTrend);
+      if(!regimeGatePass && !testerMode)
         {
          m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
          m_audit.failNoSetup++;
@@ -195,19 +205,7 @@ public:
       double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:(testerMode?0.33:0.36));
       double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:(testerMode?0.28:0.32));
       double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:(testerMode?62.0:58.0));
-      if(regime.confidence < minRegimeConf)
-        {
-         m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
-         m_audit.failNoSetup++; Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
-         return false;
-        }
-      if(ctx.marketQuality < minMq)
-        {
-         m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
-         m_audit.failNoSetup++; Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
-         return false;
-        }
-      if(ctx.choppiness > maxChop)
+      if((regime.confidence < minRegimeConf || ctx.marketQuality < minMq || ctx.choppiness > maxChop) && !testerMode)
         {
          m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
          m_audit.failNoSetup++; Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
@@ -239,30 +237,24 @@ public:
       m_audit.structurePass++;
 
       bool emaOk = (dir == TRADE_DIR_LONG ? (ctx.emaFast > ctx.emaSlow) : (ctx.emaFast < ctx.emaSlow));
-      double minRoc=(testerMode?0.0:0.0008);
+      double minRoc=(testerMode?0.0:0.0004);
       bool rocOk = (dir == TRADE_DIR_LONG ? (ctx.roc > minRoc) : (ctx.roc < -minRoc));
-      bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast - 0.15*ctx.atr) : (ctx.currentClose <= ctx.emaFast + 0.15*ctx.atr));
-      if(!emaOk)
-        {
-         m_audit.lastRejectReason="STRUCTURE_NOT_FOUND";
-         m_audit.failNoSetup++;
-         Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason); // momentum mismatch
-         return false;
-        }
+      bool priceVsEma = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.emaFast - 0.20*ctx.atr) : (ctx.currentClose <= ctx.emaFast + 0.20*ctx.atr));
+      bool closeMomentum = (dir == TRADE_DIR_LONG ? (ctx.currentClose >= ctx.previousClose) : (ctx.currentClose <= ctx.previousClose));
       bool bodyContinuation=(dir==TRADE_DIR_LONG?ctx.currentClose>=ctx.currentOpen:ctx.currentClose<=ctx.currentOpen);
-      bool momentumPathOk=(rocOk && priceVsEma && bodyContinuation);
+      bool momentumPathOk=((emaOk && priceVsEma && bodyContinuation) || (emaOk && priceVsEma && rocOk) || (priceVsEma && rocOk && closeMomentum));
 
       double entryQuality = 0.0;
       string setupPath="none";
       double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
-      if(bodyAtr>(testerMode?1.70:1.45)){ m_audit.lastRejectReason="RECLAIM_NOT_CONFIRMED"; m_audit.failNoSetup++; Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason); return false; }
+      if(bodyAtr>(testerMode?2.40:1.90)){ m_audit.lastRejectReason="RECLAIM_NOT_CONFIRMED"; m_audit.failNoSetup++; Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason); return false; }
       bool reclaimOk=HasReclaimTrigger(ctx, dir, entryQuality);
       if(reclaimOk){ m_audit.reclaimPass++; setupPath="reclaim"; }
 
       double emaSlopeAtr = MathHelpers::SafeDivide(MathAbs(ctx.emaFast - ctx.emaSlow), MathMax(ctx.atr, 1e-6), 0.0);
       double minSlope=(m_profile==PROFILE_PROP_FIRM?0.12:(testerMode?0.035:0.055));
       bool slopeOk=(emaSlopeAtr >= minSlope);
-      bool reclaimPathOk=(reclaimOk && (priceVsEma || slopeOk));
+      bool reclaimPathOk=(reclaimOk && (priceVsEma || slopeOk || emaOk));
       if(!momentumPathOk && !reclaimPathOk)
         {
          m_audit.lastRejectReason=(reclaimOk?"MOMENTUM_NOT_CONFIRMED":"RECLAIM_NOT_CONFIRMED");
@@ -415,8 +407,8 @@ public:
          Print(StringFormat("[TREND_FAILURE_SNAPSHOT] n=%d barTime=%s structurePass=%s momentumPass=%s reclaimPass=%s directionPass=%s setupFound=%s direction=%d entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f reason=%s finalReason=%s priceFieldsPass=%s sltpPass=%s rrPass=%s scorePass=%s candidateAcceptCalled=%s returnValue=%s atr=%.5f roc=%.5f slope=%.5f emaFast=%.5f emaSlow=%.5f close=%.5f bid=%.5f ask=%.5f",
                             (int)m_audit.nearValidSnapshots,TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),(structureOK?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(candidate.setupFound?"true":"false"),(int)candidate.plan.direction,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,candidate.rejectReason,finalReason,(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(candidateAcceptCalled?"true":"false"),(finalValid?"true":"false"),ctx.atr,ctx.roc,emaSlopeAtr,ctx.emaFast,ctx.emaSlow,ctx.currentClose,ctx.bid,ctx.ask));
         }
-            Print(StringFormat("[TREND_ACCEPT_ATTEMPT] called=1 setupFound=%s path=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
-                         (setupPass?"true":"false"),setupPath,StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
+            Print(StringFormat("[TREND_ACCEPT_ATTEMPT] marker=A4.15 called=1 setupFound=%s path=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
+                         (setupPass?"true":"false"),setupPath,StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),MapRejectReason(finalReason)));
       Print(StringFormat("[TREND_FINAL_VALIDATION] setupFound=%s momentumPass=%s reclaimPass=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
                          (finalValid?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       Print(StringFormat("[TREND_ANALYZE_EXIT] accepted=%s returnPoint=R_FINAL reason=%s setupFound=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
