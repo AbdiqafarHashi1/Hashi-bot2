@@ -176,6 +176,7 @@ public:
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
+      Print(StringFormat("[TREND_ANALYZE_ENTER] called=1 symbol=%s timeframe=%s bars=%d file=TrendContinuation.mqh marker=A4.15",ctx.symbol,EnumToString(ctx.timeframe),ctx.barsLoaded));
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_TREND_CONTINUATION);
       m_audit.called++;
       m_audit.lastRejectReason="none";
@@ -418,6 +419,9 @@ public:
                          (setupPass?"true":"false"),setupPath,StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
       Print(StringFormat("[TREND_FINAL_VALIDATION] setupFound=%s momentumPass=%s reclaimPass=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
                          (finalValid?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
+      Print(StringFormat("[TREND_ANALYZE_EXIT] accepted=%s returnPoint=R_FINAL reason=%s setupFound=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
+                         (finalValid?"true":"false"),finalReason,(candidate.setupFound?"true":"false"),StrategyTypes::DirectionName(candidate.plan.direction),
+                         candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       return finalValid;
      }
 
