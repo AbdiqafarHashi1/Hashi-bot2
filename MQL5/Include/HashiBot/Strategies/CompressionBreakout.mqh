@@ -280,6 +280,12 @@ public:
 
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
+      static long s_forensicActiveLogs=0;
+      if(s_forensicActiveLogs<5)
+        {
+         s_forensicActiveLogs++;
+         Print(StringFormat("[COMPRESSION_FORENSIC_ACTIVE] called=%d symbol=%s timeframe=%s barTime=%s",(int)s_forensicActiveLogs,ctx.symbol,EnumToString(ctx.timeframe),TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES)));
+        }
       bool breakoutConfirmed=false;
       Print(StringFormat("[COMPRESSION_ANALYZE_ENTER] marker=A4.20G called=1 symbol=%s bars=%d",ctx.symbol,ctx.barsLoaded));
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_COMPRESSION_BREAKOUT);
