@@ -1797,6 +1797,7 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
    Print(StringFormat("[BUILD_SIGNATURE] version=%s expert=PersonalEA symbol=%s timeframe=%s strategyMode=%s verbose=%s emergencyHarness=%s riskPct=%.2f maxSpread=%.1f maxTradesPerDay=%d maxOpenPositions=%d maxPositionsPerSymbol=%d trailing=%s breakeven=%s",
                       "1.14",_Symbol,TfName(),StrategyModeName(),(InpVerboseDiagnostics?"true":"false"),(InpEmergencyTesterMicroHarness?"true":"false"),
                       g_effectiveRiskPerTradePct,MaxSpreadPoints,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,MaxPositionsPerSymbol,(EnableTrailing?"true":"false"),(EnableBreakeven?"true":"false")));
+   Print("[HASHIBOT_BUILD_MARKER] version=A4.20M compressionForensics=enabled file=CompressionBreakout.mqh");
    Print(StringFormat("[STRATEGY_DEBUG_MODE] mode=%s trendEnabled=%s compressionEnabled=%s microEnabled=%s",
                       StrategyModeName(),
                       ((InpStrategyDebugMode==STRATEGY_DEBUG_TREND_ONLY || InpStrategyDebugMode==STRATEGY_DEBUG_TREND_COMPRESSION)?"true":"false"),
@@ -1935,6 +1936,7 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
    Print(g_arb.CompressionExposureSummary());
    Print(g_arb.TrendProvenBlockerSummary());
    Print(g_arb.CompressionProvenBlockerSummary());
+   Print(StringFormat("[COMPRESSION_PROFITABILITY_SUMMARY] source=OnDeinit strategy=CompressionBreakout note=final_summary_path_active selected=%d accepted=%d rejected=%d",g_compressionSelected,g_compressionAcceptedFinal,g_compressionRejectedFinal));
    Print(StringFormat("[TREND_SELECTION_SUMMARY] trendValid=%d trendAddedToArbitration=%d trendSelected=%d trendLostToMicro=%d trendLostToCompression=%d trendRejectedByArbitration=%d topTrendArbReject=%s",
                       g_trendArbValid,g_trendArbAdded,g_trendArbWinner,g_trendArbLostToMicro,g_trendArbLostToCompression,g_trendArbRejected,g_trendTopArbReject));
    Print(StringFormat("[COMPRESSION_SELECTION_SUMMARY] compressionValid=%d compressionAddedToArbitration=%d compressionSelected=%d compressionLostToMicro=%d compressionRejectedByArbitration=%d topCompressionArbReject=%s",
