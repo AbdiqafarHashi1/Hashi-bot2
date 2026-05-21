@@ -1368,8 +1368,8 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    bool marketDataOk=(ctx.bid>0.0 && ctx.ask>0.0 && ctx.point>0.0);
    double spreadPointsNow=(ctx.point>0.0?(ctx.ask-ctx.bid)/ctx.point:0.0);
    if(spreadPointsNow<0.0) spreadPointsNow=0.0;
-   double maxSpreadPointsNow=MaxAllowedSpreadPoints(symbol);
-   bool spreadOk=(spreadPointsNow<=maxSpreadPointsNow);
+   double maxSpreadPointsNow=maxSpreadPoints;
+   spreadOk=(spreadPointsNow<=maxSpreadPointsNow);
    bool genericScorePass=(finalScore>=minFinal);
    bool microScorePass=(chosenScore+rrEpsilon>=microMinScore);
    bool rrGatePass=((rrAccept+rrEpsilon)>=requiredRR);
