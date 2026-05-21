@@ -57,11 +57,23 @@ private:
 
    void AddCandidateIfValid(const StrategyCandidate &c)
      {
-      if(!c.isValid) return;
-      if(c.rejectReason != CANDIDATE_REASON_OK) return;
-      if(c.direction == TRADE_DIR_NONE || c.plan.direction == TRADE_DIR_NONE) return;
-      if(c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0 || c.plan.takeProfit2<=0.0) return;
-      if(c.plan.riskR<=0.0) return;
+      string rejectReason="OK",rejectDetail="";
+      if(!c.isValid) { rejectReason="INVALID_FLAG_FALSE"; rejectDetail="candidate_is_valid_false"; }
+      else if(c.rejectReason != CANDIDATE_REASON_OK || c.reason != "OK") { rejectReason="REJECT_REASON_NOT_OK"; rejectDetail=StringFormat("rejectReason=%s reason=%s",c.rejectReason,c.reason); }
+      else if(c.direction == TRADE_DIR_NONE || c.plan.direction == TRADE_DIR_NONE) { rejectReason="INVALID_DIRECTION_NONE"; rejectDetail="candidate_or_plan_direction_none"; }
+      else if(c.plan.entryPrice<=0.0) { rejectReason="INVALID_ENTRY_PRICE"; rejectDetail="entry_non_positive"; }
+      else if(c.plan.stopLoss<=0.0) { rejectReason="INVALID_STOP_LOSS"; rejectDetail="stop_loss_non_positive"; }
+      else if(c.plan.takeProfit1<=0.0) { rejectReason="INVALID_TP1"; rejectDetail="tp1_non_positive"; }
+      else if(c.plan.takeProfit2<=0.0) { rejectReason="INVALID_TP2"; rejectDetail="tp2_non_positive"; }
+      else if(c.plan.riskR<=0.0) { rejectReason="INVALID_RR"; rejectDetail="risk_reward_non_positive"; }
+      else if(!MathIsValidNumber(c.score.totalScore)) { rejectReason="INVALID_SCORE_NAN"; rejectDetail="score_not_valid_number"; }
+      if(rejectReason!="OK")
+        {
+         Print(StringFormat("[ARBITRATION_REJECT] strategy=%s reason=%s detail=%s valid=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
+                            StrategyTypes::StrategyName(c.strategy),rejectReason,rejectDetail,(c.isValid?"true":"false"),StrategyTypes::DirectionName(c.direction),
+                            c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore));
+         return;
+        }
       if(m_candidateCount >= HASHIBOT_MAX_CANDIDATES)
          return;
       m_candidates[m_candidateCount] = c;
@@ -434,7 +446,16 @@ public:
       if(m_verboseDiagnostics) Print(StringFormat("[MICRO_DIAG] called=%d raw=%d valid=%d selected=%d topReject=%s",m_microModuleCalled,m_microRawCreated,m_microValidCreated,0,(m_microRawCreated>m_microValidCreated?"candidate_invalid":"none")));
       PrintStrategyTriggerAudit();
       if(m_candidateCount == 0)
-        { result.noTrade = true; result.reason = CANDIDATE_REASON_NO_VALID_CANDIDATES; Print("[ARB] no_valid_winner reason=no_valid_candidates"); return result; }
+        {
+         result.hasWinner = false;
+         result.noTrade = true;
+         result.winningStrategy = STRATEGY_NONE;
+         result.winningScore = 0.0;
+         result.plan.Reset();
+         result.reason = CANDIDATE_REASON_NO_VALID_CANDIDATES;
+         Print("[ARB] no_valid_winner reason=no_valid_candidates");
+         return result;
+        }
       if(regime.suppression.isSuppressed)
         { result.noTrade = true; if(result.reason == "") result.reason = "suppressed"; return result; }
 
