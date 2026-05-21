@@ -290,7 +290,14 @@ public:
       if(reason==SUPPRESS_AMBIGUOUS) return "ambiguous";
       if(reason==SUPPRESS_SESSION) return "session";
       if(reason==SUPPRESS_OTHER) return "other";
-      return "none";
+     return "none";
+     }
+   void PrintStrategyEngineResult(const string strategy,const bool called,const bool enabled,const bool eligible,const bool rawCandidate,const bool validCandidate,const string rejectStage,const string rejectReason,const StrategyCandidate &c,const MarketContext &ctx) const
+     {
+      double rr=(validCandidate?RRNetAfterSpread(c,ctx):0.0);
+      Print(StringFormat("[STRATEGY_ENGINE_RESULT] strategy=%s called=%s enabled=%s eligible=%s rawCandidate=%s validCandidate=%s rejectStage=%s rejectReason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
+                         strategy,(called?"true":"false"),(enabled?"true":"false"),(eligible?"true":"false"),(rawCandidate?"true":"false"),(validCandidate?"true":"false"),
+                         rejectStage,rejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,rr,c.score.totalScore));
      }
 
    ArbitrationResult Evaluate(const MarketContext &ctx,const RegimeState &regime)
@@ -315,6 +322,7 @@ public:
       bool trendRegimeOk=(regime.regime==REGIME_TREND_UP || regime.regime==REGIME_TREND_DOWN || ((MQLInfoInteger(MQL_TESTER)>0) && regime.confidence>=0.40 && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow))); if(trendRegimeOk) m_trendRegimeOk++;
       bool trendAnalyzed=m_trend.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
+         string trendRejectStage="NONE",trendRejectReason="none"; bool trendValid=false;
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
          if(c.isValid && ValidateCandidate(c, vreason))
            {
@@ -322,11 +330,12 @@ public:
             m_trendTriggerFound++;
             double rr=RRNetAfterSpread(c,ctx);
             double minRR=(MQLInfoInteger(MQL_TESTER)>0?1.00:1.15);
-            if(rr<minRR) { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,minRR)); }
-            else if(c.score.totalScore<minTopScore) { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=SCORE_TOO_LOW score=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),c.score.totalScore,minTopScore)); }
-            else { AddCandidateIfValid(c); }
+            if(rr<minRR) { m_invalidByStrategy[b]++; trendRejectStage="RR_GATE"; trendRejectReason="RR_TOO_LOW"; Print(StringFormat("[ARB_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,minRR)); }
+            else if(c.score.totalScore<minTopScore) { m_invalidByStrategy[b]++; trendRejectStage="SCORE_GATE"; trendRejectReason="SCORE_TOO_LOW"; Print(StringFormat("[ARB_REJECT] strategy=%s reason=SCORE_TOO_LOW score=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),c.score.totalScore,minTopScore)); }
+            else { trendValid=true; AddCandidateIfValid(c); }
            }
-         else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=CANDIDATE_INVALID_SLTP detail=%s",StrategyTypes::StrategyName(c.strategy),vreason)); }
+         else { m_invalidByStrategy[b]++; trendRejectStage="VALIDATION"; trendRejectReason=(vreason==""?"CANDIDATE_INVALID_SLTP":vreason); Print(StringFormat("[ARB_REJECT] strategy=%s reason=CANDIDATE_INVALID_SLTP detail=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f direction=%s",StrategyTypes::StrategyName(c.strategy),vreason,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,StrategyTypes::DirectionName(c.direction))); }
+         PrintStrategyEngineResult("TrendContinuation",true,true,true,trendAnalyzed,trendValid,trendRejectStage,trendRejectReason,c,ctx);
       }
       Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=TrendContinuation moduleCalled=%s enoughBars=%s indicatorsReady=%s regimePass=%s triggerPass=%s rawCandidateCreated=%s candidateValid=%s reason=%s",
                          "true",(trendEnoughBars?"true":"false"),(trendIndicatorsReady?"true":"false"),(trendRegimeOk?"true":"false"),
@@ -342,6 +351,7 @@ public:
       bool compCompressionDetected=(regime.regime==REGIME_COMPRESSION || regime.regime==REGIME_EXPANSION || ((MQLInfoInteger(MQL_TESTER)>0) && regime.confidence>=0.35)); if(compCompressionDetected) m_compCompressionDetected++;
       bool compAnalyzed=m_compression.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); {
          int b=StrategyBucket(c.strategy); string vreason="";
+         string compRejectStage="NONE",compRejectReason="none"; bool compValid=false;
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
          if(c.isValid && ValidateCandidate(c, vreason))
            {
@@ -349,11 +359,12 @@ public:
             m_compBreakoutDetected++;
             double rr=RRNetAfterSpread(c,ctx);
             double compMinRR=(MQLInfoInteger(MQL_TESTER)>0?0.85:0.95);
-            if(rr<compMinRR) { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,compMinRR)); }
-            else if(c.score.totalScore<minTopScore) { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=SCORE_TOO_LOW score=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),c.score.totalScore,minTopScore)); }
-            else { AddCandidateIfValid(c); }
+            if(rr<compMinRR) { m_invalidByStrategy[b]++; compRejectStage="RR_GATE"; compRejectReason="RR_TOO_LOW"; Print(StringFormat("[ARB_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,compMinRR)); }
+            else if(c.score.totalScore<minTopScore) { m_invalidByStrategy[b]++; compRejectStage="SCORE_GATE"; compRejectReason="SCORE_TOO_LOW"; Print(StringFormat("[ARB_REJECT] strategy=%s reason=SCORE_TOO_LOW score=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),c.score.totalScore,minTopScore)); }
+            else { compValid=true; AddCandidateIfValid(c); }
            }
-         else { m_invalidByStrategy[b]++; Print(StringFormat("[ARB_REJECT] strategy=%s reason=CANDIDATE_INVALID_SLTP detail=%s",StrategyTypes::StrategyName(c.strategy),vreason)); }
+         else { m_invalidByStrategy[b]++; compRejectStage="VALIDATION"; compRejectReason=(vreason==""?"CANDIDATE_INVALID_SLTP":vreason); Print(StringFormat("[ARB_REJECT] strategy=%s reason=CANDIDATE_INVALID_SLTP detail=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f direction=%s",StrategyTypes::StrategyName(c.strategy),vreason,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,StrategyTypes::DirectionName(c.direction))); }
+         PrintStrategyEngineResult("CompressionBreakout",true,true,true,compAnalyzed,compValid,compRejectStage,compRejectReason,c,ctx);
       }
       Print(StringFormat("[ACTIVE_STRATEGY_GATE] strategy=CompressionBreakout moduleCalled=%s enoughBars=%s atrReady=%s boxReady=%s compressionDetected=%s breakoutDetected=%s rawCandidateCreated=%s candidateValid=%s reason=%s",
                          "true",(compEnoughBars?"true":"false"),(compAtrReady?"true":"false"),(compBoxReady?"true":"false"),
