@@ -41,21 +41,27 @@ private:
       if(usedBars < COMP_MIN_BARS)
          return false;
 
-      boxHigh = ctx.recentHigh[1];
-      boxLow = ctx.recentLow[1];
+      int validBars=0;
+      boxHigh = -DBL_MAX;
+      boxLow = DBL_MAX;
       for(int i = 1; i < usedBars; i++)
         {
+         if(ctx.recentHigh[i] <= 0.0 || ctx.recentLow[i] <= 0.0 || ctx.recentHigh[i] < ctx.recentLow[i])
+            continue;
          if(ctx.recentHigh[i] > boxHigh) boxHigh = ctx.recentHigh[i];
          if(ctx.recentLow[i] < boxLow) boxLow = ctx.recentLow[i];
+         validBars++;
         }
-      boxWidth = boxHigh - boxLow;
-      if(boxWidth <= 0.0)
+      if(validBars < COMP_MIN_BARS-1 || boxHigh<=0.0 || boxLow<=0.0 || boxHigh<=boxLow)
          return false;
 
+      boxWidth = boxHigh - boxLow;
       int insideCount = 0;
       int touches = 0;
       for(int j = 1; j < usedBars; j++)
         {
+         if(ctx.recentHigh[j] <= 0.0 || ctx.recentLow[j] <= 0.0 || ctx.recentHigh[j] < ctx.recentLow[j])
+            continue;
          bool inside = (ctx.recentHigh[j] <= boxHigh && ctx.recentLow[j] >= boxLow);
          if(inside) insideCount++;
 
@@ -65,8 +71,8 @@ private:
          if(nearBottom <= boxWidth * 0.10) touches++;
         }
 
-      insideRatio = MathHelpers::SafeDivide((double)insideCount, (double)(usedBars - 1), 0.0);
-      touchScore = MathHelpers::Clamp(MathHelpers::SafeDivide((double)touches, (double)((usedBars - 1) * 2), 0.0), 0.0, 1.0);
+      insideRatio = MathHelpers::SafeDivide((double)insideCount, (double)validBars, 0.0);
+      touchScore = MathHelpers::Clamp(MathHelpers::SafeDivide((double)touches, (double)(validBars * 2), 0.0), 0.0, 1.0);
       return true;
      }
 
@@ -205,7 +211,7 @@ public:
       TradeDirection dir = TRADE_DIR_NONE;
       double breakoutQ = 0.0, entryQ = 0.0;
       if(!DetectBox(ctx, boxHigh, boxLow, boxWidth, boxAge, insideRatio, touchScore))
-        { gateBox=1; m_audit.lastRejectReason="BOX_NOT_FORMED"; diagReason=m_audit.lastRejectReason; m_audit.failBoxFormed++; Print(StringFormat("[COMPRESSION_BOX_DIAG] enoughBars=%s atrReady=%s boxReady=%s boxFormed=false boxHigh=0 boxLow=0 boxWidth=0 boxWidthAtr=0 insideBars=0 requiredInsideBars=0 touches=0 requiredTouches=0 rangeTooWide=false breakoutConfirmed=false reason=%s",(ctx.barsLoaded>=minBars?"true":"false"),(ctx.atr>0.0?"true":"false"),"false",diagReason)); Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
+        { gateBox=1; m_audit.lastRejectReason="BOX_NOT_FORMED"; diagReason=m_audit.lastRejectReason; m_audit.failBoxFormed++; Print(StringFormat("[COMPRESSION_BOX_FAIL_DETAIL] boxReady=true boxFormed=false insideBars=0 requiredInsideBars=0 touches=0 requiredTouches=0 boxHigh=0 boxLow=0 boxWidth=0 atr=%.5f boxWidthAtr=0 minWidthAtr=%.2f maxWidthAtr=%.2f closeLocation=0 failReason=%s",ctx.atr,(testerMode?0.12:0.20),(testerMode?4.2:3.3),diagReason)); Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
       m_audit.expBoxFormed++;
 
       int minBoxAge=(m_profile==PROFILE_PROP_FIRM?10:(testerMode?7:9));
@@ -281,6 +287,8 @@ public:
 
       candidate.plan.strategy = STRATEGY_COMPRESSION_BREAKOUT;
       candidate.plan.direction = dir;
+      candidate.plan.riskR = MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice), MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6), 0.0);
+      candidate.score.totalScore = candidate.plan.confidence;
       if(candidate.plan.entryPrice<=0.0 || candidate.plan.stopLoss<=0.0 || candidate.plan.takeProfit1<=0.0 || candidate.plan.takeProfit2<=0.0)
         { m_audit.lastRejectReason="INVALID_PRICE_FIELDS"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
       candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
@@ -292,6 +300,7 @@ public:
       StrategyTypes::CandidateAccept(candidate,"OK");
       candidate.rejectReason="OK";
       Print(StringFormat("[COMPRESSION_BOX_DIAG] enoughBars=%s atrReady=%s boxReady=true boxFormed=true boxHigh=%.5f boxLow=%.5f boxWidth=%.5f boxWidthAtr=%.2f insideBars=%d requiredInsideBars=%d touches=%d requiredTouches=%d rangeTooWide=false breakoutConfirmed=%s reason=OK",(ctx.barsLoaded>=minBars?"true":"false"),(ctx.atr>0.0?"true":"false"),boxHigh,boxLow,boxWidth,(ctx.atr>0?boxWidth/ctx.atr:0.0),(int)MathRound(insideRatio*(boxAge-1)),(int)MathCeil(minInside*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),(int)MathCeil(minTouch*((boxAge-1)*2)),(breakoutConfirmed?"true":"false")));
+      Print(StringFormat("[COMPRESSION_FINAL_VALIDATION] boxReady=true boxFormed=true breakoutConfirmed=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",(breakoutConfirmed?"true":"false"),((candidate.direction==TRADE_DIR_LONG||candidate.direction==TRADE_DIR_SHORT)?"true":"false"),(candidate.plan.entryPrice>0.0?"true":"false"),((candidate.plan.stopLoss>0.0&&candidate.plan.takeProfit1>0.0&&candidate.plan.takeProfit2>0.0)?"true":"false"),(candidate.plan.riskR>0.0?"true":"false"),(candidate.score.totalScore>0.0?"true":"false"),(candidate.isValid?"true":"false"),candidate.rejectReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
       return true;
      }
 
