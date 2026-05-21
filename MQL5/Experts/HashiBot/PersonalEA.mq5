@@ -218,7 +218,7 @@ long g_rejectPayoffAsymmetry=0,g_drawdownLockLevel=0;
 long g_phaseABarsEvaluated=0,g_phaseANoCandidate=0;
 long g_invalidSpreadEvents=0,g_marketDataInvalidEvents=0;
 long g_invalidSpreadLogs=0,g_marketDataCheckLogs=0;
-const int HASHIBOT_ATTR_CAP=512;
+#define HASHIBOT_ATTR_CAP 512
 ulong g_attrPositionIds[HASHIBOT_ATTR_CAP],g_attrOrderIds[HASHIBOT_ATTR_CAP],g_attrDealIds[HASHIBOT_ATTR_CAP];
 int g_attrStrategyBuckets[HASHIBOT_ATTR_CAP];
 string g_attrSymbols[HASHIBOT_ATTR_CAP],g_attrDirections[HASHIBOT_ATTR_CAP];
