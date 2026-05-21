@@ -85,7 +85,8 @@ private:
       entryQ = 0.0;
 
       double atr = ctx.atr;
-      double buffer = MathMax(ctx.point * 1.5, (MQLInfoInteger(MQL_TESTER)>0?0.03:0.08) * atr);
+      double bufferAtr=(MQLInfoInteger(MQL_TESTER)>0?0.025:0.055);
+      double buffer = MathMax(ctx.point * 2.0, bufferAtr * atr);
       double body = MathAbs(ctx.currentClose - ctx.currentOpen);
       double range = ctx.currentHigh - ctx.currentLow;
       if(range <= 0.0)
@@ -99,17 +100,17 @@ private:
       double upperWick = ctx.currentHigh - MathMax(ctx.currentOpen, ctx.currentClose);
       double lowerWick = MathMin(ctx.currentOpen, ctx.currentClose) - ctx.currentLow;
       bool wickDominant = (MathMax(upperWick, lowerWick) > body * 2.5);
-      if(wickDominant)
-         return false; // wick-only breakout
 
-      // fakeout placeholder: if close remains inside box, reject
-      if(ctx.currentClose <= boxHigh && ctx.currentClose >= boxLow)
-         return false;
-
-      bool buyBreak = (ctx.currentClose > boxHigh + buffer && ctx.currentHigh > boxHigh);
-      bool sellBreak = (ctx.currentClose < boxLow - buffer && ctx.currentLow < boxLow);
+      bool closeOutsideUp = (ctx.currentClose > boxHigh + buffer && ctx.currentHigh > boxHigh);
+      bool closeOutsideDown = (ctx.currentClose < boxLow - buffer && ctx.currentLow < boxLow);
+      bool wickPierceUp = (ctx.currentHigh > boxHigh + 0.5*buffer && ctx.currentClose >= boxHigh - 0.15*atr && ctx.currentClose >= ctx.currentOpen);
+      bool wickPierceDown = (ctx.currentLow < boxLow - 0.5*buffer && ctx.currentClose <= boxLow + 0.15*atr && ctx.currentClose <= ctx.currentOpen);
+      bool buyBreak = closeOutsideUp || wickPierceUp;
+      bool sellBreak = closeOutsideDown || wickPierceDown;
       if(!(buyBreak || sellBreak))
          return false;
+      if(wickDominant && !closeOutsideUp && !closeOutsideDown)
+         return false; // wick-dominant needs stronger close outside
 
       // spread vs box width filter
       if(ctx.spreadPoints * ctx.point > boxWidth * 0.20)
@@ -119,14 +120,14 @@ private:
       double breakoutDist = (buyBreak ? (ctx.currentClose - boxHigh) : (boxLow - ctx.currentClose));
       if(atr > 0.0 && breakoutDist > 1.8 * atr)
          return false;
-      if(atr > 0.0 && breakoutDist < (MQLInfoInteger(MQL_TESTER)>0?0.03:0.08) * atr)
+      if(atr > 0.0 && closeOutsideUp==false && closeOutsideDown==false && breakoutDist < 0.01 * atr)
          return false;
 
       if(buyBreak)
         {
          dir = TRADE_DIR_LONG;
          double closeLoc = MathHelpers::Clamp(MathHelpers::SafeDivide(ctx.currentClose - ctx.currentLow, range, 0.0), 0.0, 1.0);
-         double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.65:0.55);
+         double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.62:0.50);
          if(closeLoc < minCloseLoc)
             return false;
          breakoutQ = MathHelpers::Clamp(0.5 * bodyQ + 0.5 * closeLoc, 0.0, 1.0);
@@ -135,7 +136,7 @@ private:
         {
          dir = TRADE_DIR_SHORT;
          double closeLoc = MathHelpers::Clamp(MathHelpers::SafeDivide(ctx.currentHigh - ctx.currentClose, range, 0.0), 0.0, 1.0);
-         double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.65:0.55);
+         double minCloseLoc=(m_profile==PROFILE_PROP_FIRM?0.62:0.50);
          if(closeLoc < minCloseLoc)
             return false;
          breakoutQ = MathHelpers::Clamp(0.5 * bodyQ + 0.5 * closeLoc, 0.0, 1.0);
