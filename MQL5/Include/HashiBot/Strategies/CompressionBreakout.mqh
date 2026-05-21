@@ -52,6 +52,7 @@ private:
       m_audit.rejected++;
       Print(StringFormat("[COMPRESSION_ACCEPT_ATTEMPT] marker=A4.20 called=1 boxReady=false boxFormed=false breakoutConfirmed=false direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=false reason=%s",
                          StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,MapRejectReason(rejectReason)));
+      Print(ProfitabilitySummary());
      }
 
    bool DetectBox(const MarketContext &ctx,double &boxHigh,double &boxLow,double &boxWidth,int &usedBars,double &insideRatio,double &touchScore)
