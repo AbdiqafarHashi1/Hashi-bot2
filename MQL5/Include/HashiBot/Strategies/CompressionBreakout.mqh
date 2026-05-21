@@ -305,6 +305,7 @@ public:
       m_audit.expCloseLocationOk++;
       m_audit.breakoutPass++;
 
+      candidate.setupFound=true;
       candidate.direction = dir;
       if(candidate.direction!=TRADE_DIR_NONE) m_audit.directionAssigned++;
       if(candidate.direction==TRADE_DIR_NONE)
@@ -396,7 +397,7 @@ public:
       else if(!slTpPass) finalReason=CANDIDATE_REASON_INVALID_SLTP;
       else if(!rrPass) finalReason=CANDIDATE_REASON_RR_TOO_LOW;
       else if(!scorePass) finalReason="SCORE_INVALID";
-      else if(!structuralPass) finalReason=structuralReason;
+      else if(!structuralPass) finalReason=(structuralReason==""?"STRUCTURAL_INVALID":structuralReason);
 
       bool finalValid=(finalReason==CANDIDATE_REASON_OK);
       bool candidateAcceptCalled=false;
