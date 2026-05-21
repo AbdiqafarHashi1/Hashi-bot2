@@ -321,17 +321,45 @@ public:
 
       candidate.plan.strategy = STRATEGY_TREND_CONTINUATION;
       candidate.plan.direction = dir;
-      if(candidate.plan.entryPrice<=0.0 || candidate.plan.stopLoss<=0.0 || candidate.plan.takeProfit1<=0.0 || candidate.plan.takeProfit2<=0.0)
+
+      bool directionPass=(candidate.direction==TRADE_DIR_LONG || candidate.direction==TRADE_DIR_SHORT) && (candidate.plan.direction==TRADE_DIR_LONG || candidate.plan.direction==TRADE_DIR_SHORT);
+      bool pricePass=(candidate.plan.entryPrice>0.0);
+      bool slTpPass=(candidate.plan.stopLoss>0.0 && candidate.plan.takeProfit1>0.0 && candidate.plan.takeProfit2>0.0);
+      candidate.plan.riskR = MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice), MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6), 0.0);
+      bool rrPass=(candidate.plan.riskR>0.0 && MathIsValidNumber(candidate.plan.riskR));
+      string structuralReason="OK";
+      bool structuralPass=StrategyTypes::IsCandidateStructurallyValid(candidate, structuralReason);
+      candidate.score.totalScore = candidate.plan.confidence;
+      bool scorePass=(MathIsValidNumber(candidate.score.totalScore) && candidate.score.totalScore>0.0);
+
+      string finalReason="OK";
+      if(!directionPass) finalReason="INVALID_DIRECTION";
+      else if(!pricePass) finalReason="INVALID_ENTRY_PRICE";
+      else if(!slTpPass) finalReason="INVALID_SLTP";
+      else if(!rrPass) finalReason="INVALID_RR";
+      else if(!scorePass) finalReason="INVALID_SCORE";
+      else if(!structuralPass) finalReason=structuralReason;
+
+      bool finalValid=(finalReason=="OK");
+      if(finalValid)
         {
-         m_audit.lastRejectReason="INVALID_PRICE_FIELDS";
-         m_audit.failInvalidPrice++;
-         Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
-         return false;
+         m_audit.slTpPass++; m_audit.rrPass++; m_audit.expValid++; m_audit.rawCreated++;
+         StrategyTypes::CandidateAccept(candidate,"OK");
+         candidate.rejectReason="OK";
+         candidate.reason="OK";
         }
-      candidate.isValid = StrategyTypes::IsTradePlanComplete(candidate.plan);
-      if(candidate.isValid){ m_audit.slTpPass++; m_audit.rrPass++; m_audit.expValid++; m_audit.rawCreated++; StrategyTypes::CandidateAccept(candidate,"OK"); candidate.rejectReason="OK"; }
-      else { m_audit.lastRejectReason="INVALID_SLTP"; m_audit.failInvalidSltp++; StrategyTypes::CandidateReject(candidate,m_audit.lastRejectReason,"trend_plan_invalid"); candidate.plan.strategy=STRATEGY_TREND_CONTINUATION; }
-      return candidate.isValid;
+      else
+        {
+         m_audit.lastRejectReason=finalReason;
+         if(finalReason=="INVALID_ENTRY_PRICE") m_audit.failInvalidPrice++;
+         else if(finalReason=="INVALID_SLTP" || finalReason==StrategyTypes::CANDIDATE_REASON_INVALID_SLTP) m_audit.failInvalidSltp++;
+         else if(finalReason=="INVALID_RR") m_audit.failRr++;
+         else m_audit.failNoSetup++;
+         Reject(candidate, SUPPRESS_OTHER, finalReason);
+        }
+      Print(StringFormat("[TREND_FINAL_VALIDATION] setupFound=%s momentumPass=%s reclaimPass=%s directionPass=%s pricePass=%s slTpPass=%s rrPass=%s scorePass=%s valid=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
+                         (finalValid?"true":"false"),(momentumPathOk?"true":"false"),(reclaimOk?"true":"false"),(directionPass?"true":"false"),(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(finalValid?"true":"false"),finalReason,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore));
+      return finalValid;
      }
 
    string Describe(const StrategyCandidate &candidate)
