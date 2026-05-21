@@ -1844,6 +1844,8 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
                       g_microSelected,g_microAcceptedFinal,g_microRejectedFinal,g_microTopReason,g_trendSelected,g_trendAcceptedFinal,g_trendRejectedFinal,g_trendTopReason,g_compressionSelected,g_compressionAcceptedFinal,g_compressionRejectedFinal,g_compressionTopReason));
    Print(g_arb.TrendExposureSummary());
    Print(g_arb.CompressionExposureSummary());
+   Print(g_arb.TrendProvenBlockerSummary());
+   Print(g_arb.CompressionProvenBlockerSummary());
    Print(StringFormat("[TREND_SELECTION_SUMMARY] trendValid=%d trendAddedToArbitration=%d trendSelected=%d trendLostToMicro=%d trendLostToCompression=%d trendRejectedByArbitration=%d topTrendArbReject=%s",
                       g_trendArbValid,g_trendArbAdded,g_trendArbWinner,g_trendArbLostToMicro,g_trendArbLostToCompression,g_trendArbRejected,g_trendTopArbReject));
    Print(StringFormat("[COMPRESSION_SELECTION_SUMMARY] compressionValid=%d compressionAddedToArbitration=%d compressionSelected=%d compressionLostToMicro=%d compressionRejectedByArbitration=%d topCompressionArbReject=%s",

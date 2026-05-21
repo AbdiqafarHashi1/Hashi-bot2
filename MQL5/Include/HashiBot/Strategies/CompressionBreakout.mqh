@@ -21,8 +21,10 @@ private:
       long called,enoughBarsPass,atrReadyPass,boxReadyPass,boxWidthPass,compressionPass,breakoutPass,spreadPass,slTpPass,rawCreated;
       long expBarsReady,expIndicatorsReady,expSpreadOk,expRegimeOk,expAtrOk,expBoxReady,expBoxFormed,expRangeOk,expBreakoutConfirmed,expBodyOk,expCloseLocationOk,expPricePlanOk,expSltpOk,expRrOk,expValid;
       long failBoxReady,failBoxFormed,failRange,failBreakout,failBody,failCloseLocation,failSltp,failRr;
+      long nearValidSnapshots,directionAssigned,priceFieldsPass,rrPass,scorePass,candidateAcceptCalled;
+      long nearFailBoxReady,nearFailBoxFormed,nearFailBreakout,nearFailDirection,nearFailPrice,nearFailSltp,nearFailRr,nearFailScore;
       string lastRejectReason;
-      void Reset(){ called=enoughBarsPass=atrReadyPass=boxReadyPass=boxWidthPass=compressionPass=breakoutPass=spreadPass=slTpPass=rawCreated=0; expBarsReady=expIndicatorsReady=expSpreadOk=expRegimeOk=expAtrOk=expBoxReady=expBoxFormed=expRangeOk=expBreakoutConfirmed=expBodyOk=expCloseLocationOk=expPricePlanOk=expSltpOk=expRrOk=expValid=0; failBoxReady=failBoxFormed=failRange=failBreakout=failBody=failCloseLocation=failSltp=failRr=0; lastRejectReason="none"; }
+      void Reset(){ called=enoughBarsPass=atrReadyPass=boxReadyPass=boxWidthPass=compressionPass=breakoutPass=spreadPass=slTpPass=rawCreated=0; expBarsReady=expIndicatorsReady=expSpreadOk=expRegimeOk=expAtrOk=expBoxReady=expBoxFormed=expRangeOk=expBreakoutConfirmed=expBodyOk=expCloseLocationOk=expPricePlanOk=expSltpOk=expRrOk=expValid=0; failBoxReady=failBoxFormed=failRange=failBreakout=failBody=failCloseLocation=failSltp=failRr=0; nearValidSnapshots=directionAssigned=priceFieldsPass=rrPass=scorePass=candidateAcceptCalled=0; nearFailBoxReady=nearFailBoxFormed=nearFailBreakout=nearFailDirection=nearFailPrice=nearFailSltp=nearFailRr=nearFailScore=0; lastRejectReason="none"; }
      };
    ProfileType                   m_profile;
    CompressionAuditCounters      m_audit;
@@ -170,6 +172,21 @@ public:
                              m_audit.called,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.failBoxReady,m_audit.failBoxFormed,m_audit.failRange,m_audit.expBreakoutConfirmed,m_audit.failBreakout,m_audit.slTpPass,m_audit.expRrOk,m_audit.expValid,0,0,topReject);
         }
 
+
+   string ProvenBlockerSummary() const
+     {
+      long topFail=m_audit.nearFailBoxReady; string topReason="BOX_NOT_READY";
+      if(m_audit.nearFailBoxFormed>topFail){ topFail=m_audit.nearFailBoxFormed; topReason="BOX_NOT_FORMED"; }
+      if(m_audit.nearFailBreakout>topFail){ topFail=m_audit.nearFailBreakout; topReason="BREAKOUT_NOT_CONFIRMED"; }
+      if(m_audit.nearFailDirection>topFail){ topFail=m_audit.nearFailDirection; topReason="DIRECTION_MISSING"; }
+      if(m_audit.nearFailPrice>topFail){ topFail=m_audit.nearFailPrice; topReason=CANDIDATE_REASON_INVALID_PRICE_FIELDS; }
+      if(m_audit.nearFailSltp>topFail){ topFail=m_audit.nearFailSltp; topReason=CANDIDATE_REASON_INVALID_SLTP; }
+      if(m_audit.nearFailRr>topFail){ topFail=m_audit.nearFailRr; topReason=CANDIDATE_REASON_RR_TOO_LOW; }
+      if(m_audit.nearFailScore>topFail){ topFail=m_audit.nearFailScore; topReason="INVALID_SCORE"; }
+      return StringFormat("[COMPRESSION_PROVEN_BLOCKER_SUMMARY] called=%d nearValidSnapshots=%d boxReady=%d boxFormed=%d breakoutConfirmed=%d directionAssigned=%d priceFieldsPass=%d sltpPass=%d rrPass=%d scorePass=%d candidateAcceptCalled=%d finalValid=%d topFinalReason=%s",
+                         m_audit.called,m_audit.nearValidSnapshots,m_audit.expBoxReady,m_audit.expBoxFormed,m_audit.expBreakoutConfirmed,m_audit.directionAssigned,m_audit.priceFieldsPass,m_audit.slTpPass,m_audit.rrPass,m_audit.scorePass,m_audit.candidateAcceptCalled,m_audit.expValid,topReason);
+     }
+
    bool Analyze(const MarketContext &ctx,const RegimeState &regime,StrategyCandidate &candidate)
      {
       StrategyTypes::InitCandidateBase(candidate, STRATEGY_COMPRESSION_BREAKOUT);
@@ -240,6 +257,7 @@ public:
       m_audit.breakoutPass++;
 
       candidate.direction = dir;
+      if(candidate.direction!=TRADE_DIR_NONE) m_audit.directionAssigned++;
       if(candidate.direction==TRADE_DIR_NONE)
         { m_audit.lastRejectReason="DIRECTION_MISSING"; Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason); return false; }
 
@@ -294,9 +312,12 @@ public:
 
       bool directionPass=(candidate.direction==TRADE_DIR_LONG || candidate.direction==TRADE_DIR_SHORT) && (candidate.plan.direction==TRADE_DIR_LONG || candidate.plan.direction==TRADE_DIR_SHORT);
       bool pricePass=(candidate.plan.entryPrice>0.0);
+      if(pricePass) m_audit.priceFieldsPass++;
       bool slTpPass=(candidate.plan.stopLoss>0.0 && candidate.plan.takeProfit1>0.0 && candidate.plan.takeProfit2>0.0);
       bool rrPass=(candidate.plan.riskR>0.0 && MathIsValidNumber(candidate.plan.riskR));
+      if(rrPass) m_audit.rrPass++;
       bool scorePass=(MathIsValidNumber(candidate.score.totalScore) && candidate.score.totalScore>0.0);
+      if(scorePass) m_audit.scorePass++;
       string structuralReason=CANDIDATE_REASON_OK;
       bool structuralPass=StrategyTypes::IsCandidateStructurallyValid(candidate, structuralReason);
 
@@ -309,11 +330,14 @@ public:
       else if(!structuralPass) finalReason=structuralReason;
 
       bool finalValid=(finalReason==CANDIDATE_REASON_OK);
+      bool candidateAcceptCalled=false;
       if(finalValid)
         {
          m_audit.slTpPass++; m_audit.expSltpOk++; m_audit.expRrOk++; m_audit.expValid++;
          m_audit.rawCreated++;
          StrategyTypes::CandidateAccept(candidate,CANDIDATE_REASON_OK);
+         m_audit.candidateAcceptCalled++;
+         candidateAcceptCalled=true;
          candidate.rejectReason=CANDIDATE_REASON_OK;
          candidate.reason=CANDIDATE_REASON_OK;
         }
@@ -325,6 +349,21 @@ public:
          else if(finalReason==CANDIDATE_REASON_INVALID_SLTP) m_audit.failSltp++;
          else if(finalReason==CANDIDATE_REASON_RR_TOO_LOW) m_audit.failRr++;
          Reject(candidate, SUPPRESS_OTHER,m_audit.lastRejectReason);
+        }
+      bool nearValid=(m_audit.expBoxReady>0 || m_audit.expBoxFormed>0 || breakoutConfirmed || candidate.direction!=TRADE_DIR_NONE || candidate.setupFound || candidate.plan.entryPrice!=0.0 || candidate.plan.stopLoss!=0.0 || candidate.plan.takeProfit1!=0.0 || candidate.plan.takeProfit2!=0.0 || candidate.plan.riskR>0.0 || candidate.score.totalScore>0.0);
+      if(nearValid && m_audit.nearValidSnapshots<20)
+        {
+         m_audit.nearValidSnapshots++;
+         if(finalReason=="BOX_NOT_READY") m_audit.nearFailBoxReady++;
+         else if(finalReason=="BOX_NOT_FORMED") m_audit.nearFailBoxFormed++;
+         else if(finalReason=="BREAKOUT_NOT_CONFIRMED") m_audit.nearFailBreakout++;
+         else if(finalReason=="DIRECTION_MISSING") m_audit.nearFailDirection++;
+         else if(finalReason==CANDIDATE_REASON_INVALID_PRICE_FIELDS) m_audit.nearFailPrice++;
+         else if(finalReason==CANDIDATE_REASON_INVALID_SLTP) m_audit.nearFailSltp++;
+         else if(finalReason==CANDIDATE_REASON_RR_TOO_LOW) m_audit.nearFailRr++;
+         else if(finalReason=="INVALID_SCORE") m_audit.nearFailScore++;
+         Print(StringFormat("[COMPRESSION_FAILURE_SNAPSHOT] n=%d barTime=%s boxReady=%s boxFormed=%s breakoutConfirmed=%s direction=%d setupFound=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f reason=%s finalReason=%s priceFieldsPass=%s sltpPass=%s rrPass=%s scorePass=%s candidateAcceptCalled=%s returnValue=%s boxHigh=%.5f boxLow=%.5f boxWidth=%.5f insideBars=%d touches=%d close=%.5f bid=%.5f ask=%.5f atr=%.5f spread=%.2f",
+                           (int)m_audit.nearValidSnapshots,TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),(m_audit.expBoxReady>0?"true":"false"),(m_audit.expBoxFormed>0?"true":"false"),(breakoutConfirmed?"true":"false"),(int)candidate.plan.direction,(candidate.setupFound?"true":"false"),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,candidate.rejectReason,finalReason,(pricePass?"true":"false"),(slTpPass?"true":"false"),(rrPass?"true":"false"),(scorePass?"true":"false"),(candidateAcceptCalled?"true":"false"),(finalValid?"true":"false"),boxHigh,boxLow,boxWidth,(int)MathRound(insideRatio*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),ctx.currentClose,ctx.bid,ctx.ask,ctx.atr,ctx.spreadPoints));
         }
       Print(StringFormat("[COMPRESSION_CANDIDATE_BUILD] barTime=%s boxReady=%s boxFormed=%s breakoutConfirmed=%s direction=%d boxHigh=%.5f boxLow=%.5f boxWidth=%.5f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f accepted=%s reason=%s",
                          TimeToString(ctx.barTime,TIME_DATE|TIME_MINUTES),"true","true",(breakoutConfirmed?"true":"false"),(int)candidate.plan.direction,boxHigh,boxLow,boxWidth,candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,(finalValid?"true":"false"),finalReason));
