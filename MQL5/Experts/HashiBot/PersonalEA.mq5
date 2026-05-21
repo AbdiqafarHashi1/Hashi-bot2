@@ -260,7 +260,7 @@ bool StrategyPruned(const int sb,string &reason)
 
 string DirName(TradeDirection d){ if(d==TRADE_DIR_LONG) return "LONG"; if(d==TRADE_DIR_SHORT) return "SHORT"; return "NONE"; }
 string TfName(){ return EnumToString(contextTimeframe); }
-void TrackStrategyAcceptance(const StrategyId strategy,const bool accepted,const string reason)
+void TrackStrategyAcceptance(const StrategyType strategy,const bool accepted,const string reason)
   {
    if(strategy==STRATEGY_MICRO_SCALPER){ g_microSelected++; if(accepted) g_microAcceptedFinal++; else { g_microRejectedFinal++; g_microTopReason=reason; } }
    else if(strategy==STRATEGY_TREND_CONTINUATION){ g_trendSelected++; if(accepted) g_trendAcceptedFinal++; else { g_trendRejectedFinal++; g_trendTopReason=reason; } }
@@ -273,7 +273,7 @@ bool AcceptSelectedPlanByStrategy(const TradePlan &plan,const string strategyNam
    rrUsed=RRNetAfterSpread(plan,g_execCtx);
    rrRequired=StrategyMinRR(StrategyBucket(plan.strategy));
    double epsilon=(plan.strategy==STRATEGY_MICRO_SCALPER?0.02:0.0001);
-   scoreRequired=(plan.strategy==STRATEGY_MICRO_SCALPER?activeMinScore:0.68);
+   scoreRequired=(plan.strategy==STRATEGY_MICRO_SCALPER?g_execActiveMinScore:0.68);
    bool directionValid=(plan.direction==TRADE_DIR_LONG || plan.direction==TRADE_DIR_SHORT);
    bool pricesValid=(plan.entryPrice>0.0 && plan.stopLoss>0.0 && plan.takeProfit1>0.0);
    bool marketDataOk=(g_execCtx.bid>0.0 && g_execCtx.ask>0.0 && g_execCtx.point>0.0);
@@ -283,10 +283,11 @@ bool AcceptSelectedPlanByStrategy(const TradePlan &plan,const string strategyNam
    bool spreadOk=(spreadPoints<=maxSpread);
    bool rrPass=((rrUsed+epsilon)>=rrRequired);
    bool scorePass=true;
+   bool planValid=IsPlanExecutable(plan);
    if(plan.strategy==STRATEGY_MICRO_SCALPER){ scorePass=((scoreUsed+epsilon)>=scoreRequired); }
    else if(plan.strategy==STRATEGY_TREND_CONTINUATION){ scorePass=(scoreUsed>=scoreRequired); }
    else if(plan.strategy==STRATEGY_COMPRESSION_BREAKOUT){ scorePass=(scoreUsed>=scoreRequired); }
-   if(!plan.planValid) reason="invalid_plan";
+   if(!planValid) reason="invalid_plan";
    else if(!directionValid) reason="invalid_direction";
    else if(!pricesValid) reason=StringFormat("invalid_price_fields entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",plan.entryPrice,plan.stopLoss,plan.takeProfit1,plan.takeProfit2);
    else if(!marketDataOk) reason=StringFormat("market_data_invalid bid=%.5f ask=%.5f point=%.8f",g_execCtx.bid,g_execCtx.ask,g_execCtx.point);
@@ -724,6 +725,7 @@ RiskDecision g_execRisk;
 TradeState g_execTradeState;
 string g_execSymbol="";
 double g_execScore=0.0;
+double g_execActiveMinScore=0.0;
 bool g_execSelectedPlanExists=false,g_execRiskApproved=false,g_execPortfolioApproved=false,g_execRuntimeLimitsApproved=false;
 bool g_execProofPlanValid=false,g_execProofRiskReached=false,g_execProofRiskApproved=false,g_execProofOrderValidateReached=false,g_execProofOrderManagerReached=false,g_execProofOrderAttempted=false,g_execProofOrderSuccess=false;
 void PrintFinalDecision(const TradePlan &plan,
@@ -1414,13 +1416,13 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    double spreadPointsNow=(ctx.point>0.0?(ctx.ask-ctx.bid)/ctx.point:0.0);
    if(spreadPointsNow<0.0) spreadPointsNow=0.0;
    double maxSpreadPointsNow=maxSpreadPoints;
-   bool spreadOk=(spreadPointsNow<=maxSpreadPointsNow);
-   g_execCtx=ctx; g_execScore=chosenScore;
+   bool acceptanceSpreadOk=(spreadPointsNow<=maxSpreadPointsNow);
+   g_execCtx=ctx; g_execScore=chosenScore; g_execActiveMinScore=activeMinScore;
    string acceptanceReason="none"; double scoreUsed=0.0,scoreRequired=0.0,rrUsed=0.0,rrRequired=0.0;
    bool finalAccepted=AcceptSelectedPlanByStrategy(chosenPlan,StrategyName(chosenPlan.strategy),acceptanceReason,scoreUsed,scoreRequired,rrUsed,rrRequired);
    TrackStrategyAcceptance(chosenPlan.strategy,finalAccepted,acceptanceReason);
    Print(StringFormat("[FINAL_TRADE_ACCEPTANCE] strategy=%s accepted=%s reason=%s scoreUsed=%.2f scoreRequired=%.2f rrUsed=%.2f rrRequired=%.2f planValid=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f spreadPoints=%.2f maxSpreadPoints=%.2f",
-                      StrategyName(chosenPlan.strategy),(finalAccepted?"true":"false"),acceptanceReason,scoreUsed,scoreRequired,rrUsed,rrRequired,(chosenPlan.planValid?"true":"false"),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,spreadPointsNow,maxSpreadPointsNow));
+                      StrategyName(chosenPlan.strategy),(finalAccepted?"true":"false"),acceptanceReason,scoreUsed,scoreRequired,rrUsed,rrRequired,(validPlan?"true":"false"),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,spreadPointsNow,maxSpreadPointsNow));
    if(!finalAccepted){ g_rejectTrades++; g_rejectRRSum+=rrAccept; g_starveRejectedByScore++; Print(StringFormat("[NO_TRADE_DECISION] reason=%s strategy=%s",acceptanceReason,StrategyName(chosenPlan.strategy))); return; }
    g_acceptTrades++; g_acceptRRSum+=rrAccept;
    double rMult=(fb==4?0.55:(fb==1?(stratExp>0.0?1.00:0.75):(fb==0?(regime.confidence>0.55?1.10:0.85):(fb==2||fb==3?(rrAccept>=1.8?1.05:0.80):0.90))));
@@ -1529,7 +1531,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    Print(StringFormat("[SELECTED_FLOW] selectedStrategy=%s candidateToPlanOk=%s acceptanceReached=%s acceptanceOk=%s acceptanceReason=%s riskReached=%s riskApproved=%s riskReason=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s retcode=%I64d lastError=%d",
                       StrategyName(chosenPlan.strategy),(candidateToPlanOk?"true":"false"),(candidateToPlanOk?"true":"false"),(finalAccepted?"true":"false"),acceptanceReason,
                       (riskReached?"true":"false"),(risk.approved?"true":"false"),risk.reason,(enteredExecuteSelectedPlan?"true":"false"),
-                      (g_order.LastAttempted()?"true":"false"),(g_order.LastSubmitSuccess()?"true":"false"),g_order.LastRetcode(),GetLastError()));
+                      (g_order.LastAttempted()?"true":"false"),(g_execProofOrderSuccess?"true":"false"),g_order.LastRetcode(),GetLastError()));
    if(InpVerboseDiagnostics) Print(StringFormat("[SELECTED_TO_SUBMIT_PROOF] strategy=%s candidateToPlanOk=%s enteredExecuteSelectedPlan=%s planValid=%s riskReached=%s riskApproved=%s orderValidateReached=%s orderManagerReached=%s orderAttempted=%s orderSuccess=%s blocker=%s",
                       StrategyName(chosenPlan.strategy),(candidateToPlanOk?"true":"false"),(enteredExecuteSelectedPlan?"true":"false"),(g_execProofPlanValid?"true":"false"),(g_execProofRiskReached?"true":"false"),(g_execProofRiskApproved?"true":"false"),(g_execProofOrderValidateReached?"true":"false"),(g_execProofOrderManagerReached?"true":"false"),(g_execProofOrderAttempted?"true":"false"),(g_execProofOrderSuccess?"true":"false"),submitBlocker));
    if(arb.hasWinner){ int wb=StrategyBucket(arb.winningStrategy); g_arbWinnerScoreSum[wb]+=arb.winningScore; g_arbWinnerScoreCount[wb]++; if(chosenFromFallback) { g_winMicro++; g_microWinners++; } else if(arb.winningStrategy==STRATEGY_TREND_CONTINUATION) g_winTrend++; else if(arb.winningStrategy==STRATEGY_PULLBACK_CONTINUATION) g_winPullback++; else if(arb.winningStrategy==STRATEGY_COMPRESSION_BREAKOUT) g_winCompression++; else if(arb.winningStrategy==STRATEGY_EXPANSION_MOMENTUM) g_winExpansion++; }
