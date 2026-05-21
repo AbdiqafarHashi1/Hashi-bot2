@@ -283,7 +283,22 @@ public:
       m_audit.boxWidthPass++;
 
       if(!BreakoutSignal(ctx, boxHigh, boxLow, boxWidth, dir, breakoutQ, entryQ))
-        { gateBreakoutClose=1; m_audit.lastRejectReason="BREAKOUT_NOT_CONFIRMED"; diagReason=m_audit.lastRejectReason; m_audit.failBreakout++; Print(StringFormat("[COMPRESSION_BOX_DIAG] enoughBars=%s atrReady=%s boxReady=true boxFormed=true boxHigh=%.5f boxLow=%.5f boxWidth=%.5f boxWidthAtr=%.2f insideBars=%d requiredInsideBars=%d touches=%d requiredTouches=%d rangeTooWide=false breakoutConfirmed=false reason=%s",(ctx.barsLoaded>=minBars?"true":"false"),(ctx.atr>0.0?"true":"false"),boxHigh,boxLow,boxWidth,(ctx.atr>0?boxWidth/ctx.atr:0.0),(int)MathRound(insideRatio*(boxAge-1)),(int)MathCeil(minInside*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),(int)MathCeil(minTouch*((boxAge-1)*2)),diagReason)); Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
+        {
+         if(testerMode && boxProxyFallback)
+           {
+            double fallbackBuf=MathMax(ctx.point*1.5, 0.010*MathMax(ctx.atr,1e-6));
+            bool longBreak=(ctx.currentClose>boxHigh+fallbackBuf && ctx.currentClose>=ctx.currentOpen);
+            bool shortBreak=(ctx.currentClose<boxLow-fallbackBuf && ctx.currentClose<=ctx.currentOpen);
+            if(longBreak || shortBreak)
+              {
+               dir=(longBreak?TRADE_DIR_LONG:TRADE_DIR_SHORT);
+               breakoutQ=0.58;
+               entryQ=MathMax(entryQ,0.58);
+              }
+           }
+         if(dir==TRADE_DIR_NONE)
+           { gateBreakoutClose=1; m_audit.lastRejectReason="BREAKOUT_NOT_CONFIRMED"; diagReason=m_audit.lastRejectReason; m_audit.failBreakout++; Print(StringFormat("[COMPRESSION_BOX_DIAG] enoughBars=%s atrReady=%s boxReady=true boxFormed=true boxHigh=%.5f boxLow=%.5f boxWidth=%.5f boxWidthAtr=%.2f insideBars=%d requiredInsideBars=%d touches=%d requiredTouches=%d rangeTooWide=false breakoutConfirmed=false reason=%s",(ctx.barsLoaded>=minBars?"true":"false"),(ctx.atr>0.0?"true":"false"),boxHigh,boxLow,boxWidth,(ctx.atr>0?boxWidth/ctx.atr:0.0),(int)MathRound(insideRatio*(boxAge-1)),(int)MathCeil(minInside*(boxAge-1)),(int)MathRound(touchScore*((boxAge-1)*2)),(int)MathCeil(minTouch*((boxAge-1)*2)),diagReason)); Reject(candidate, SUPPRESS_AMBIGUOUS,m_audit.lastRejectReason); return false; }
+        }
       breakoutConfirmed=true;
       m_audit.expBreakoutConfirmed++;
       m_audit.expBodyOk++;

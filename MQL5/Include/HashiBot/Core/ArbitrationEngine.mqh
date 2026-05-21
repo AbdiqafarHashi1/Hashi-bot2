@@ -537,13 +537,14 @@ public:
          csum += StrategyTypes::StrategyName(result.candidates[i].strategy) + ":" + DoubleToString(result.candidates[i].score.totalScore, 2);
         }
 
+      string winnerName=(result.winningStrategy==STRATEGY_NONE?"NoWinner":StrategyTypes::StrategyName(result.winningStrategy));
       return StringFormat("arb no_trade=%s n=%d top=%.2f second=%.2f margin=%.2f winner=%s grade=%s dir=%d e=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=%s cand=[%s]",
                           (result.noTrade ? "true" : "false"),
                           result.candidateCount,
                           result.topScore,
                           result.secondScore,
                           result.scoreMargin,
-                          StrategyTypes::StrategyName(result.winningStrategy),
+                          winnerName,
                           StrategyTypes::GradeToString(result.winningGrade),
                           (int)result.plan.direction,
                           result.plan.entryPrice,
