@@ -1798,6 +1798,7 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
                       "1.14",_Symbol,TfName(),StrategyModeName(),(InpVerboseDiagnostics?"true":"false"),(InpEmergencyTesterMicroHarness?"true":"false"),
                       g_effectiveRiskPerTradePct,MaxSpreadPoints,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,MaxPositionsPerSymbol,(EnableTrailing?"true":"false"),(EnableBreakeven?"true":"false")));
    Print("[HASHIBOT_BUILD_MARKER] version=A4.20M compressionForensics=enabled file=CompressionBreakout.mqh");
+   Print("[HASHIBOT_BUILD_MARKER] version=A4.22D trendForensics=enabled file=TrendContinuation.mqh");
    Print(StringFormat("[STRATEGY_DEBUG_MODE] mode=%s trendEnabled=%s compressionEnabled=%s microEnabled=%s",
                       StrategyModeName(),
                       ((InpStrategyDebugMode==STRATEGY_DEBUG_TREND_ONLY || InpStrategyDebugMode==STRATEGY_DEBUG_TREND_COMPRESSION)?"true":"false"),
