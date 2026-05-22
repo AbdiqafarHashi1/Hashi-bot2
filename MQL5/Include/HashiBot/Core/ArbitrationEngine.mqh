@@ -76,6 +76,10 @@ private:
          Print(StringFormat("[ARBITRATION_REJECT] strategy=%s reason=%s isValid=%s rejectReason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
                             StrategyTypes::StrategyName(c.strategy),rejectReason,(c.isValid?"true":"false"),c.rejectReason,StrategyTypes::DirectionName(c.direction),
                             c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore));
+         if(c.strategy==STRATEGY_TREND_CONTINUATION)
+            Print(StringFormat("[ARBITRATION_PLAN_REJECT_TRACE] strategy=TrendContinuation reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s side=%s direction=%s",
+                               rejectReason,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore,
+                               (c.isValid?"true":"false"),StrategyTypes::DirectionName(c.direction),StrategyTypes::DirectionName(c.plan.direction)));
          return false;
         }
       if(m_candidateCount >= HASHIBOT_MAX_CANDIDATES)
@@ -86,6 +90,10 @@ private:
         }
       m_candidates[m_candidateCount] = c;
       m_candidateCount++;
+      if(c.strategy==STRATEGY_TREND_CONTINUATION)
+         Print(StringFormat("[ARBITRATION_PLAN_ACCEPT_TRACE] strategy=TrendContinuation entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s side=%s direction=%s",
+                            c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore,
+                            (c.isValid?"true":"false"),StrategyTypes::DirectionName(c.direction),StrategyTypes::DirectionName(c.plan.direction)));
       rejectReasonOut="OK";
       rejectDetailOut="";
       return true;
@@ -542,7 +550,23 @@ public:
          result.secondScore = m_candidates[second].score.totalScore;
       result.scoreMargin = MathMax(0.0, result.topScore - result.secondScore);
 
-      if(result.topScore < minTopScore) { result.noTrade = true; result.reason = "SCORE_TOO_LOW"; return result; }
+      bool isolatedTrendResearchMode=(m_researchIsolated && (m_researchStrategy=="TREND" || m_researchStrategy=="trend"));
+      bool allowTopScoreBypass=false;
+      if(isolatedTrendResearchMode && m_candidateCount==1 && m_candidates[0].strategy==STRATEGY_TREND_CONTINUATION)
+         allowTopScoreBypass=true;
+      Print(StringFormat("[ARBITRATION_TOP_SCORE_GATE_TRACE] topScore=%.5f minTopScore=%.5f bypassEligible=%s researchIsolated=%s researchStrategy=%s candidateCount=%d",
+                         result.topScore,minTopScore,(allowTopScoreBypass?"true":"false"),(m_researchIsolated?"true":"false"),m_researchStrategy,m_candidateCount));
+      if(result.topScore < minTopScore && !allowTopScoreBypass)
+        {
+         result.noTrade = true;
+         result.reason = "SCORE_TOO_LOW";
+         Print(StringFormat("[ARBITRATION_PLAN_REJECT_TRACE] strategy=TrendContinuation reason=SCORE_TOO_LOW_AT_ARB_TOP_GATE entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s side=%s direction=%s",
+                            result.plan.entryPrice,result.plan.stopLoss,result.plan.takeProfit1,result.plan.takeProfit2,result.plan.riskR,result.topScore,
+                            "true",StrategyTypes::DirectionName(result.plan.direction),StrategyTypes::DirectionName(result.plan.direction)));
+         return result;
+        }
+      if(result.topScore < minTopScore && allowTopScoreBypass)
+         Print(StringFormat("[RESEARCH_ISOLATED_TOP_SCORE_BYPASS] strategy=TREND topScore=%.5f minTopScore=%.5f reason=isolated_research_valid_plan",result.topScore,minTopScore));
       if(HasAmbiguity()) result.scoreMargin = MathMax(0.0, result.scoreMargin - 0.02);
 
       int winner = SelectWinner();
