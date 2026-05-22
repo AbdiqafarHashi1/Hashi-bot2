@@ -25,12 +25,14 @@ private:
       long nearFailNoSetup,nearFailInvalidPrice,nearFailInvalidSltp,nearFailRr,nearFailDirection,nearFailScore;
       long acceptedMomentum,acceptedReclaim,acceptedFallback;
       long selectedMomentum,selectedReclaim,selectedFallback;
+      long tierAPlus,tierA,tierB;
+      long rejectedChop,rejectedLowMomentum,rejectedLateEntry,rejectedSlTooWide,rejectedRRTooLow;
       long structureReject,momentumReject,reclaimReject,directionReject,lateEntryReject,chopReject,invalidSltpReject,rrTooLowReject,scoreReject;
       double sumSlAtr,sumTp1R,sumTp2R,sumRiskR,sumEntryDistanceAtr,sumMomentumQuality,sumLateEntryRisk,sumChopRisk,sumScore;
       long geomCount,qualityCount;
       long acceptedPlanLogs,rejectPlanLogs;
       string lastRejectReason;
-      void Reset(){ called=structurePass=momentumPass=reclaimPass=directionPass=pricePass=slTpPass=rrPass=rawCreated=0; expValid=selected=lostToMicro=0; failNoSetup=failInvalidPrice=failInvalidSltp=failRr=0; nearValidSnapshots=candidateAcceptCalled=scorePass=0; nearFailNoSetup=nearFailInvalidPrice=nearFailInvalidSltp=nearFailRr=nearFailDirection=nearFailScore=0; acceptedMomentum=acceptedReclaim=acceptedFallback=0; selectedMomentum=selectedReclaim=selectedFallback=0; structureReject=momentumReject=reclaimReject=directionReject=lateEntryReject=chopReject=invalidSltpReject=rrTooLowReject=scoreReject=0; sumSlAtr=sumTp1R=sumTp2R=sumRiskR=sumEntryDistanceAtr=sumMomentumQuality=sumLateEntryRisk=sumChopRisk=sumScore=0.0; geomCount=qualityCount=0; acceptedPlanLogs=rejectPlanLogs=0; lastRejectReason="none"; }
+      void Reset(){ called=structurePass=momentumPass=reclaimPass=directionPass=pricePass=slTpPass=rrPass=rawCreated=0; expValid=selected=lostToMicro=0; failNoSetup=failInvalidPrice=failInvalidSltp=failRr=0; nearValidSnapshots=candidateAcceptCalled=scorePass=0; nearFailNoSetup=nearFailInvalidPrice=nearFailInvalidSltp=nearFailRr=nearFailDirection=nearFailScore=0; acceptedMomentum=acceptedReclaim=acceptedFallback=0; selectedMomentum=selectedReclaim=selectedFallback=0; tierAPlus=tierA=tierB=0; rejectedChop=rejectedLowMomentum=rejectedLateEntry=rejectedSlTooWide=rejectedRRTooLow=0; structureReject=momentumReject=reclaimReject=directionReject=lateEntryReject=chopReject=invalidSltpReject=rrTooLowReject=scoreReject=0; sumSlAtr=sumTp1R=sumTp2R=sumRiskR=sumEntryDistanceAtr=sumMomentumQuality=sumLateEntryRisk=sumChopRisk=sumScore=0.0; geomCount=qualityCount=0; acceptedPlanLogs=rejectPlanLogs=0; lastRejectReason="none"; }
      };
    void TrackRejectReason(const string reason)
      {
@@ -38,10 +40,12 @@ private:
       else if(reason=="MOMENTUM_NOT_CONFIRMED") m_audit.momentumReject++;
       else if(reason=="RECLAIM_NOT_CONFIRMED") m_audit.reclaimReject++;
       else if(reason=="DIRECTION_MISSING" || reason==CANDIDATE_REASON_INVALID_DIRECTION) m_audit.directionReject++;
-      else if(reason=="LATE_ENTRY_RISK") m_audit.lateEntryReject++;
-      else if(reason=="CHOP_RISK") m_audit.chopReject++;
+      else if(reason=="LATE_ENTRY_RISK" || reason=="EXTREME_LATE_ENTRY") { m_audit.lateEntryReject++; m_audit.rejectedLateEntry++; }
+      else if(reason=="CHOP_RISK" || reason=="HIGH_CHOP_RISK") { m_audit.chopReject++; m_audit.rejectedChop++; }
+      else if(reason=="LOW_MOMENTUM_QUALITY" || reason=="VERY_LOW_MOMENTUM_QUALITY") m_audit.rejectedLowMomentum++;
+      else if(reason=="SL_TOO_WIDE_FOR_PATH") m_audit.rejectedSlTooWide++;
       else if(reason==CANDIDATE_REASON_INVALID_SLTP) m_audit.invalidSltpReject++;
-      else if(reason==CANDIDATE_REASON_RR_TOO_LOW) m_audit.rrTooLowReject++;
+      else if(reason==CANDIDATE_REASON_RR_TOO_LOW) { m_audit.rrTooLowReject++; m_audit.rejectedRRTooLow++; }
       else if(reason=="SCORE_INVALID"||reason=="INVALID_SCORE") m_audit.scoreReject++;
      }
    string MapRejectReason(const string reason) const
@@ -304,6 +308,8 @@ public:
 
       double momentumScore = MathHelpers::Clamp(0.6 * MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.5) + 0.4 * MathHelpers::Normalize01(emaSlopeAtr, 0.08, 0.9), 0.0, 1.0);
       double momentumQuality = momentumScore;
+      bool strongDirectionConfirm=(dir==TRADE_DIR_LONG?(ctx.currentClose>ctx.previousHigh):(ctx.currentClose<ctx.previousLow));
+      bool exhaustedContinuation=(bodyAtr>(testerMode?2.0:1.7) && lateEntryRisk>0.35);
       double volScore = MathHelpers::Normalize01(ctx.atr, 0.0, MathMax(ctx.currentClose * 0.01, 1e-6));
       double regimeScore = MathHelpers::Clamp(regime.confidence, 0.0, 1.0);
 
@@ -355,6 +361,7 @@ public:
         }
 
       double risk = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
+      double slAtr=MathHelpers::SafeDivide(risk,MathMax(ctx.atr,1e-6),0.0);
       if(risk <= 0.0)
         {
          m_audit.lastRejectReason=CANDIDATE_REASON_INVALID_SLTP;
@@ -369,8 +376,65 @@ public:
          Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
          return false;
         }
-      double rr1=(testerMode?0.95:1.05);
-      double rr2=(testerMode?1.80:2.00);
+      string planTier="A";
+      double rr1=1.05;
+      double rr2=2.30;
+      if(chopRisk>=0.70 || lateEntryRisk>=0.85)
+        {
+         m_audit.lastRejectReason=(chopRisk>=0.70?"HIGH_CHOP_RISK":"EXTREME_LATE_ENTRY");
+         TrackRejectReason(m_audit.lastRejectReason);
+         Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
+         return false;
+        }
+      if(momentumQuality<0.16)
+        {
+         m_audit.lastRejectReason="VERY_LOW_MOMENTUM_QUALITY";
+         TrackRejectReason(m_audit.lastRejectReason);
+         Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason);
+         return false;
+        }
+      bool isReclaimPath=(setupPath=="reclaim");
+      bool qualifiesAPlus=(!isReclaimPath && momentumQuality>=0.42 && chopRisk<=0.44 && lateEntryRisk<=0.30 && entryDistanceAtr<=1.00 && strongDirectionConfirm && !exhaustedContinuation);
+      bool qualifiesB=(isReclaimPath || lateEntryRisk>0.46 || chopRisk>0.56 || momentumQuality<0.30 || !strongDirectionConfirm);
+      if(qualifiesAPlus)
+        {
+         planTier="A_PLUS";
+         rr1=MathHelpers::Clamp(1.15 + 0.20*momentumQuality,1.15,1.35);
+         rr2=MathHelpers::Clamp(2.60 + 1.20*momentumQuality - 0.35*lateEntryRisk - 0.25*chopRisk,2.60,3.80);
+        }
+      else if(qualifiesB)
+        {
+         planTier="B";
+         if(chopRisk>=0.64 || lateEntryRisk>=0.76)
+           {
+            m_audit.lastRejectReason=(chopRisk>=0.64?"CHOP_RISK":"LATE_ENTRY_RISK");
+            TrackRejectReason(m_audit.lastRejectReason);
+            Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason);
+            return false;
+           }
+         rr1=MathHelpers::Clamp(1.00 + 0.15*momentumQuality,1.00,1.15);
+         rr2=MathHelpers::Clamp(1.60 + 0.70*momentumQuality - 0.25*lateEntryRisk,1.60,2.10);
+        }
+      else
+        {
+         planTier="A";
+         rr1=MathHelpers::Clamp(1.00 + 0.22*momentumQuality,1.00,1.20);
+         rr2=MathHelpers::Clamp(2.00 + 0.85*momentumQuality - 0.20*lateEntryRisk - 0.12*chopRisk,2.00,2.70);
+        }
+      if(slAtr>1.95 && rr2<2.30)
+        {
+         m_audit.lastRejectReason="SL_TOO_WIDE_FOR_PATH";
+         TrackRejectReason(m_audit.lastRejectReason);
+         Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
+         return false;
+        }
+      if(rr2<1.60 || rr1<0.95)
+        {
+         m_audit.lastRejectReason=CANDIDATE_REASON_RR_TOO_LOW;
+         TrackRejectReason(m_audit.lastRejectReason);
+         Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
+         return false;
+        }
       if(dir == TRADE_DIR_LONG)
         {
          candidate.plan.takeProfit1 = candidate.plan.entryPrice + rr1 * risk;
@@ -394,8 +458,9 @@ public:
       string structuralReason=CANDIDATE_REASON_OK;
       bool structuralPass=StrategyTypes::IsCandidateStructurallyValid(candidate, structuralReason);
       candidate.score.totalScore = MathMax(candidate.plan.confidence, candidate.score.scoreUnique);
-      if(setupPass && candidate.score.totalScore<0.58)
-         candidate.score.totalScore=0.58;
+      double tierScoreFloor=(planTier=="A_PLUS"?0.72:(planTier=="A"?0.60:0.48));
+      double qualityPenalty=MathHelpers::Clamp(0.18*lateEntryRisk + 0.22*chopRisk + (momentumQuality<0.30?0.08:0.0),0.0,0.35);
+      candidate.score.totalScore=MathHelpers::Clamp(MathMax(candidate.score.totalScore,tierScoreFloor)-qualityPenalty,0.0,1.0);
       bool scorePass=(MathIsValidNumber(candidate.score.totalScore) && candidate.score.totalScore>0.0);
 
       string finalReason=CANDIDATE_REASON_OK;
@@ -426,6 +491,9 @@ public:
          if(setupPath=="momentum") m_audit.acceptedMomentum++;
          else if(setupPath=="reclaim") m_audit.acceptedReclaim++;
          else m_audit.acceptedFallback++;
+         if(planTier=="A_PLUS") m_audit.tierAPlus++;
+         else if(planTier=="A") m_audit.tierA++;
+         else m_audit.tierB++;
          m_audit.geomCount++;
          m_audit.sumSlAtr+=MathHelpers::SafeDivide(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),MathMax(ctx.atr,1e-6),0.0);
          m_audit.sumTp1R+=MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0);
@@ -440,8 +508,8 @@ public:
          if(m_audit.acceptedPlanLogs<30)
            {
             m_audit.acceptedPlanLogs++;
-            Print(StringFormat("[TREND_ACCEPTED_PLAN] path=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f slAtr=%.2f tp1R=%.2f tp2R=%.2f entryDistanceAtr=%.2f trendAge=%.1f momentumQuality=%.2f reclaimConfirmed=%s lateEntryRisk=%.2f chopRisk=%.2f",
-                               setupPath,StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,MathHelpers::SafeDivide(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),MathMax(ctx.atr,1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),entryDistanceAtr,trendAge,momentumQuality,(reclaimOk?"true":"false"),lateEntryRisk,chopRisk));
+            Print(StringFormat("[TREND_ACCEPTED_PLAN] path=%s tier=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f slAtr=%.2f tp1R=%.2f tp2R=%.2f entryDistanceAtr=%.2f momentumQuality=%.2f lateEntryRisk=%.2f chopRisk=%.2f score=%.2f managementHint=%s",
+                               setupPath,planTier,StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,MathHelpers::SafeDivide(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),MathMax(ctx.atr,1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),entryDistanceAtr,momentumQuality,lateEntryRisk,chopRisk,candidate.score.totalScore,(planTier=="A_PLUS"?"slower_be_trail_preferred":"normal_shared")));
            }
         }
       else
@@ -456,8 +524,8 @@ public:
          if(m_audit.rejectPlanLogs<30)
            {
             m_audit.rejectPlanLogs++;
-            Print(StringFormat("[TREND_REJECT_NEAR_VALID] reason=%s path=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f slAtr=%.2f entryDistanceAtr=%.2f momentumQuality=%.2f reclaimConfirmed=%s lateEntryRisk=%.2f chopRisk=%.2f",
-                               MapRejectReason(finalReason),setupPath,StrategyTypes::DirectionName(dir),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,MathHelpers::SafeDivide(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),MathMax(ctx.atr,1e-6),0.0),entryDistanceAtr,momentumQuality,(reclaimOk?"true":"false"),lateEntryRisk,chopRisk));
+            Print(StringFormat("[TREND_REJECT_NEAR_VALID] reason=%s path=%s direction=%s slAtr=%.2f tp1R=%.2f tp2R=%.2f entryDistanceAtr=%.2f momentumQuality=%.2f lateEntryRisk=%.2f chopRisk=%.2f score=%.2f",
+                               MapRejectReason(finalReason),setupPath,StrategyTypes::DirectionName(dir),MathHelpers::SafeDivide(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),MathMax(ctx.atr,1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),entryDistanceAtr,momentumQuality,lateEntryRisk,chopRisk,candidate.score.totalScore));
            }
         }
       bool nearValid=(structureOK || momentumPathOk || reclaimOk || directionPass || candidate.setupFound || candidate.plan.entryPrice!=0.0 || candidate.plan.stopLoss!=0.0 || candidate.plan.takeProfit1!=0.0 || candidate.plan.takeProfit2!=0.0 || candidate.plan.riskR>0.0 || candidate.score.totalScore>0.0);
@@ -494,13 +562,13 @@ public:
                           candidate.plan.takeProfit1,
                           candidate.plan.takeProfit2);
      }
-   string ForensicCountsSummary() const { return StringFormat("[TREND_FORENSIC_COUNTS] called=%d structurePass=%d momentumPass=%d reclaimPass=%d directionPass=%d planBuilt=%d accepted=%d rejected=%d selected=%d",m_audit.called,m_audit.structurePass,m_audit.momentumPass,m_audit.reclaimPass,m_audit.directionPass,m_audit.rawCreated,m_audit.expValid,(m_audit.called-m_audit.expValid),m_audit.selected); }
+   string ForensicCountsSummary() const { return StringFormat("[TREND_FORENSIC_COUNTS] called=%d structurePass=%d momentumPass=%d reclaimPass=%d directionPass=%d planBuilt=%d accepted=%d rejected=%d selected=%d tierAPlus=%d tierA=%d tierB=%d rejectedChop=%d rejectedLowMomentum=%d rejectedLateEntry=%d rejectedSlTooWide=%d rejectedRRTooLow=%d",m_audit.called,m_audit.structurePass,m_audit.momentumPass,m_audit.reclaimPass,m_audit.directionPass,m_audit.rawCreated,m_audit.expValid,(m_audit.called-m_audit.expValid),m_audit.selected,m_audit.tierAPlus,m_audit.tierA,m_audit.tierB,m_audit.rejectedChop,m_audit.rejectedLowMomentum,m_audit.rejectedLateEntry,m_audit.rejectedSlTooWide,m_audit.rejectedRRTooLow); }
    string ForensicPathsSummary() const { return StringFormat("[TREND_FORENSIC_PATHS] acceptedMomentum=%d acceptedReclaim=%d acceptedFallback=%d selectedMomentum=%d selectedReclaim=%d selectedFallback=%d",m_audit.acceptedMomentum,m_audit.acceptedReclaim,m_audit.acceptedFallback,m_audit.selectedMomentum,m_audit.selectedReclaim,m_audit.selectedFallback); }
    string ForensicRejectsSummary() const { return StringFormat("[TREND_FORENSIC_REJECTS] structureReject=%d momentumReject=%d reclaimReject=%d directionReject=%d lateEntryReject=%d chopReject=%d invalidSltpReject=%d rrTooLowReject=%d scoreReject=%d",m_audit.structureReject,m_audit.momentumReject,m_audit.reclaimReject,m_audit.directionReject,m_audit.lateEntryReject,m_audit.chopReject,m_audit.invalidSltpReject,m_audit.rrTooLowReject,m_audit.scoreReject); }
    string ForensicAvgGeometrySummary() const { double n=MathMax(1.0,(double)m_audit.geomCount); return StringFormat("[TREND_FORENSIC_AVG_GEOMETRY] avgSlAtr=%.2f avgTp1R=%.2f avgTp2R=%.2f avgRiskR=%.2f avgEntryDistanceAtr=%.2f",m_audit.sumSlAtr/n,m_audit.sumTp1R/n,m_audit.sumTp2R/n,m_audit.sumRiskR/n,m_audit.sumEntryDistanceAtr/n); }
    string ForensicAvgQualitySummary() const { double n=MathMax(1.0,(double)m_audit.qualityCount); return StringFormat("[TREND_FORENSIC_AVG_QUALITY] avgMomentumQuality=%.2f avgLateEntryRisk=%.2f avgChopRisk=%.2f avgScore=%.2f",m_audit.sumMomentumQuality/n,m_audit.sumLateEntryRisk/n,m_audit.sumChopRisk/n,m_audit.sumScore/n); }
    string ForensicManagementSummary() const { return "[TREND_FORENSIC_MANAGEMENT] beMode=shared_lifecycle beTrigger=tp1_hit beBuffer=0.10R trailMode=shared_lifecycle trailTrigger=tp1_hit_and_rr>=1.45 trailDistance=atr_trail_plus_structure_guard timeStop=48_bars usesSharedLifecycle=true"; }
-   string ForensicNextHintSummary() const { return "[TREND_FORENSIC_NEXT_HINT] mainIssue=sl_structure_plus_rr_profile_lowers_payoff nextRecommendedPhase=A4.22C_SLTP_redesign"; }
+   string ForensicNextHintSummary() const { return "[TREND_FORENSIC_NEXT_HINT] mainIssue=tiered_quality_geometry_active checkRemaining=sl_width_vs_tp2_late_entry_chop_low_momentum_tp_ambition_or_shared_lifecycle"; }
   };
 
 #endif
