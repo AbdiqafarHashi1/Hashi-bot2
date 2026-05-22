@@ -57,7 +57,7 @@ private:
       return SIGNAL_GRADE_REJECT;
      }
 
-   void AddCandidateIfValid(const StrategyCandidate &c)
+   bool AddCandidateIfValid(const StrategyCandidate &c,string &rejectReasonOut,string &rejectDetailOut)
      {
       string rejectReason="OK",rejectDetail="";
       if(!c.isValid) { rejectReason="INVALID_FLAG_FALSE"; rejectDetail="candidate_is_valid_false"; }
@@ -71,15 +71,24 @@ private:
       else if(!MathIsValidNumber(c.score.totalScore)) { rejectReason="INVALID_SCORE_NAN"; rejectDetail="score_not_valid_number"; }
       if(rejectReason!="OK")
         {
+         rejectReasonOut=rejectReason;
+         rejectDetailOut=rejectDetail;
          Print(StringFormat("[ARBITRATION_REJECT] strategy=%s reason=%s isValid=%s rejectReason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f",
                             StrategyTypes::StrategyName(c.strategy),rejectReason,(c.isValid?"true":"false"),c.rejectReason,StrategyTypes::DirectionName(c.direction),
                             c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore));
-         return;
+         return false;
         }
       if(m_candidateCount >= HASHIBOT_MAX_CANDIDATES)
-         return;
+        {
+         rejectReasonOut="MAX_CANDIDATES_REACHED";
+         rejectDetailOut="candidate_buffer_full";
+         return false;
+        }
       m_candidates[m_candidateCount] = c;
-     m_candidateCount++;
+      m_candidateCount++;
+      rejectReasonOut="OK";
+      rejectDetailOut="";
+      return true;
      }
 
    int StrategyBucket(const StrategyType st) const
@@ -381,7 +390,18 @@ public:
             double rr=RRNetAfterSpread(c,ctx);
             if(rr<trendMinRR) { m_invalidByStrategy[b]++; trendRejectStage="RR_GATE"; trendRejectReason="RR_TOO_LOW"; trendReasonThisCall=trendRejectReason; Print(StringFormat("[ARB_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,trendMinRR)); }
             else if(c.score.totalScore<trendMinScore) { m_invalidByStrategy[b]++; trendRejectStage="SCORE_GATE"; trendRejectReason="SCORE_TOO_LOW"; trendReasonThisCall=trendRejectReason; Print(StringFormat("[ARB_REJECT] strategy=%s reason=SCORE_TOO_LOW score=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),c.score.totalScore,trendMinScore)); }
-            else { trendValid=true; trendValidThisCall=true; trendReasonThisCall="OK"; Print(StringFormat("[TREND_ARBITRATION_INPUT] path=final tier=%s direction=%s tp1R=%.2f tp2R=%.2f score=%.2f totalScore=%.2f rr=%.2f accepted=true",StrategyTypes::GradeToString(c.plan.grade),StrategyTypes::DirectionName(c.plan.direction),MathHelpers::SafeDivide(MathAbs(c.plan.takeProfit1-c.plan.entryPrice),MathMax(MathAbs(c.plan.entryPrice-c.plan.stopLoss),1e-6),0.0),MathHelpers::SafeDivide(MathAbs(c.plan.takeProfit2-c.plan.entryPrice),MathMax(MathAbs(c.plan.entryPrice-c.plan.stopLoss),1e-6),0.0),c.score.scoreUnique,c.score.totalScore,rr)); AddCandidateIfValid(c); }
+            else {
+               trendValid=true; trendValidThisCall=true; trendReasonThisCall="OK";
+               string addRejectReason="OK",addRejectDetail="";
+               bool addedToArbitration=AddCandidateIfValid(c,addRejectReason,addRejectDetail);
+               if(!addedToArbitration) trendReasonThisCall=addRejectReason;
+               Print(StringFormat("[TREND_PLAN_VALIDITY_TRACE] hasDirection=%s hasEntry=%s hasSL=%s hasTP1=%s hasTP2=%s riskDistance=%.5f tp1Distance=%.5f tp2Distance=%.5f rr=%.2f score=%.2f totalScore=%.2f planTier=%s rejectReason=%s addedToArbitration=%s countedAsValidPlan=%s",
+                                  ((c.plan.direction==TRADE_DIR_LONG || c.plan.direction==TRADE_DIR_SHORT)?"true":"false"),(c.plan.entryPrice>0.0?"true":"false"),(c.plan.stopLoss>0.0?"true":"false"),(c.plan.takeProfit1>0.0?"true":"false"),(c.plan.takeProfit2>0.0?"true":"false"),
+                                  MathAbs(c.plan.entryPrice-c.plan.stopLoss),MathAbs(c.plan.takeProfit1-c.plan.entryPrice),MathAbs(c.plan.takeProfit2-c.plan.entryPrice),rr,c.score.scoreUnique,c.score.totalScore,StrategyTypes::GradeToString(c.plan.grade),
+                                  (addedToArbitration?"OK":addRejectReason),(addedToArbitration?"true":"false"),(addedToArbitration?"true":"false")));
+               if(!addedToArbitration) Print(StringFormat("[ARBITRATION_REJECT_TRACE] strategy=%s reason=%s candidateScore=%.2f totalScore=%.2f rr=%.2f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f minScoreGate=%.2f minRRGate=%.2f hasValidPlan=%s",
+                                                         StrategyTypes::StrategyName(c.strategy),addRejectReason,c.score.scoreUnique,c.score.totalScore,rr,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,trendMinScore,trendMinRR,(c.isValid?"true":"false")));
+            }
            }
          else { m_invalidByStrategy[b]++; trendRejectStage="VALIDATION"; trendRejectReason=(c.rejectReason!=""?c.rejectReason:(vreason==""?"NO_SETUP":vreason)); trendReasonThisCall=trendRejectReason; if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=TrendContinuation",StrategyTypes::StrategyName(c.strategy),trendRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
          PrintStrategyEngineResult("TrendContinuation",true,true,c,ctx);
@@ -417,7 +437,7 @@ public:
             double rr=RRNetAfterSpread(c,ctx);
             if(rr<compMinRR) { m_invalidByStrategy[b]++; compRejectStage="RR_GATE"; compRejectReason="RR_TOO_LOW"; compReasonThisCall=compRejectReason; Print(StringFormat("[ARB_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,compMinRR)); }
             else if(c.score.totalScore<compMinScore) { m_invalidByStrategy[b]++; compRejectStage="SCORE_GATE"; compRejectReason="SCORE_TOO_LOW"; compReasonThisCall=compRejectReason; Print(StringFormat("[ARB_REJECT] strategy=%s reason=SCORE_TOO_LOW score=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),c.score.totalScore,compMinScore)); }
-            else { compValid=true; compValidThisCall=true; compReasonThisCall="OK"; AddCandidateIfValid(c); }
+            else { compValid=true; compValidThisCall=true; compReasonThisCall="OK"; string _r="",_d=""; AddCandidateIfValid(c,_r,_d); }
            }
          else { m_invalidByStrategy[b]++; compRejectStage="VALIDATION"; compRejectReason=(vreason==""?"NO_SETUP":vreason); compReasonThisCall=compRejectReason; if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=CompressionBreakout",StrategyTypes::StrategyName(c.strategy),compRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
          PrintStrategyEngineResult("CompressionBreakout",true,true,c,ctx);
@@ -447,7 +467,7 @@ public:
             double rr=RRNetAfterSpread(c,ctx);
             double microMinRR=(MQLInfoInteger(MQL_TESTER)>0?0.95:1.05);
             if(rr<microMinRR) { m_invalidByStrategy[b]++; Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f requiredRR=%.2f",StrategyTypes::StrategyName(c.strategy),rr,microMinRR)); }
-            else { microValidThisCall=true; microReasonThisCall="OK"; AddCandidateIfValid(c); }
+            else { microValidThisCall=true; microReasonThisCall="OK"; string _r="",_d=""; AddCandidateIfValid(c,_r,_d); }
           }
          else { m_invalidByStrategy[b]++; if(vreason=="") vreason=c.rejectReason; if(vreason=="micro_no_momentum_setup") vreason="NO_MOMENTUM_SETUP"; if(vreason=="") vreason="NO_SETUP"; microReasonThisCall=vreason; Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=MicroScalper",StrategyTypes::StrategyName(c.strategy),vreason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
       }
