@@ -306,7 +306,7 @@ public:
       else if(reclaimPathOk){ setupPath="reclaim"; if(entryQuality<=0.0) entryQuality=0.56; }
       m_audit.pricePass++;
 
-      double momentumScore = MathHelpers::Clamp(0.6 * MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.5) + 0.4 * MathHelpers::Normalize01(emaSlopeAtr, 0.08, 0.9), 0.0, 1.0);
+      double momentumScore = MathHelpers::Clamp(0.62 * MathHelpers::Normalize01(MathAbs(ctx.roc), 0.0, 1.1) + 0.38 * MathHelpers::Normalize01(emaSlopeAtr, 0.04, 0.75), 0.0, 1.0);
       double momentumQuality = momentumScore;
       bool strongDirectionConfirm=(dir==TRADE_DIR_LONG?(ctx.currentClose>ctx.previousHigh):(ctx.currentClose<ctx.previousLow));
       bool exhaustedContinuation=(bodyAtr>(testerMode?2.0:1.7) && lateEntryRisk>0.35);
@@ -314,10 +314,10 @@ public:
       double regimeScore = MathHelpers::Clamp(regime.confidence, 0.0, 1.0);
 
       candidate.score.scoreRegime = regimeScore;
-      candidate.score.scoreHTF = structureScore;
-      candidate.score.scoreLTF = momentumScore;
+      candidate.score.scoreHTF = MathHelpers::Clamp(0.70*structureScore + 0.30*(1.0-chopRisk),0.0,1.0);
+      candidate.score.scoreLTF = MathHelpers::Clamp(0.72*momentumScore + 0.28*(strongDirectionConfirm?1.0:0.45),0.0,1.0);
       candidate.score.scoreVol = volScore;
-      candidate.score.scoreEntry = entryQuality;
+      candidate.score.scoreEntry = MathHelpers::Clamp(0.55*entryQuality + 0.25*(1.0-lateEntryRisk) + 0.20*(1.0-chopRisk),0.0,1.0);
       double riskPlanQuality = MathHelpers::Clamp(1.0 - MathHelpers::Normalize01(MathAbs((ctx.previousHigh-ctx.previousLow)), 0.0, MathMax(4.0*ctx.atr,1e-6)), 0.0, 1.0);
       candidate.score.scoreUnique = StrategyTypes::BuildUnifiedQualityScore(regimeScore, structureScore, volScore, entryQuality, riskPlanQuality, (regime.suppression.isSuppressed ? 1.0 : 0.0));
       candidate.score.scoreSuppression = (regime.suppression.isSuppressed ? 1.0 : 0.0);
@@ -394,13 +394,13 @@ public:
          return false;
         }
       bool isReclaimPath=(setupPath=="reclaim");
-      bool qualifiesAPlus=(!isReclaimPath && momentumQuality>=0.42 && chopRisk<=0.44 && lateEntryRisk<=0.30 && entryDistanceAtr<=1.00 && strongDirectionConfirm && !exhaustedContinuation);
-      bool qualifiesB=(isReclaimPath || lateEntryRisk>0.46 || chopRisk>0.56 || momentumQuality<0.30 || !strongDirectionConfirm);
+      bool qualifiesAPlus=(!isReclaimPath && momentumQuality>=0.44 && chopRisk<=0.46 && lateEntryRisk<=0.36 && entryDistanceAtr<=1.10 && !exhaustedContinuation && (strongDirectionConfirm || momentumQuality>=0.56));
+      bool qualifiesB=(isReclaimPath || lateEntryRisk>0.60 || chopRisk>0.62 || momentumQuality<0.24);
       if(qualifiesAPlus)
         {
          planTier="A_PLUS";
-         rr1=MathHelpers::Clamp(1.15 + 0.20*momentumQuality,1.15,1.35);
-         rr2=MathHelpers::Clamp(2.60 + 1.20*momentumQuality - 0.35*lateEntryRisk - 0.25*chopRisk,2.60,3.80);
+         rr1=MathHelpers::Clamp(1.12 + 0.18*momentumQuality,1.10,1.30);
+         rr2=MathHelpers::Clamp(2.85 + 1.10*momentumQuality - 0.30*lateEntryRisk - 0.25*chopRisk,2.40,3.50);
         }
       else if(qualifiesB)
         {
@@ -412,14 +412,14 @@ public:
             Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason);
             return false;
            }
-         rr1=MathHelpers::Clamp(1.00 + 0.15*momentumQuality,1.00,1.15);
-         rr2=MathHelpers::Clamp(1.60 + 0.70*momentumQuality - 0.25*lateEntryRisk,1.60,2.10);
+         rr1=MathHelpers::Clamp(1.00 + 0.14*momentumQuality,1.00,1.15);
+         rr2=MathHelpers::Clamp(1.60 + 0.62*momentumQuality - 0.18*lateEntryRisk,1.60,2.10);
         }
       else
         {
          planTier="A";
-         rr1=MathHelpers::Clamp(1.00 + 0.22*momentumQuality,1.00,1.20);
-         rr2=MathHelpers::Clamp(2.00 + 0.85*momentumQuality - 0.20*lateEntryRisk - 0.12*chopRisk,2.00,2.70);
+         rr1=MathHelpers::Clamp(1.00 + 0.20*momentumQuality,1.00,1.20);
+         rr2=MathHelpers::Clamp(2.20 + 0.75*momentumQuality - 0.18*lateEntryRisk - 0.12*chopRisk,2.00,2.60);
         }
       if(slAtr>1.95 && rr2<2.30)
         {
@@ -458,8 +458,8 @@ public:
       string structuralReason=CANDIDATE_REASON_OK;
       bool structuralPass=StrategyTypes::IsCandidateStructurallyValid(candidate, structuralReason);
       candidate.score.totalScore = MathMax(candidate.plan.confidence, candidate.score.scoreUnique);
-      double tierScoreFloor=(planTier=="A_PLUS"?0.72:(planTier=="A"?0.60:0.48));
-      double qualityPenalty=MathHelpers::Clamp(0.18*lateEntryRisk + 0.22*chopRisk + (momentumQuality<0.30?0.08:0.0),0.0,0.35);
+      double tierScoreFloor=(planTier=="A_PLUS"?0.74:(planTier=="A"?0.62:0.50));
+      double qualityPenalty=MathHelpers::Clamp(0.14*lateEntryRisk + 0.16*chopRisk + (momentumQuality<0.24?0.10:0.0),0.0,0.28);
       candidate.score.totalScore=MathHelpers::Clamp(MathMax(candidate.score.totalScore,tierScoreFloor)-qualityPenalty,0.0,1.0);
       bool scorePass=(MathIsValidNumber(candidate.score.totalScore) && candidate.score.totalScore>0.0);
 
@@ -488,9 +488,10 @@ public:
          candidateAcceptCalled=true;
          candidate.rejectReason=CANDIDATE_REASON_OK;
          candidate.reason=CANDIDATE_REASON_OK;
-         if(setupPath=="momentum") m_audit.acceptedMomentum++;
-         else if(setupPath=="reclaim") m_audit.acceptedReclaim++;
-         else m_audit.acceptedFallback++;
+         m_audit.selected++;
+         if(setupPath=="momentum") { m_audit.acceptedMomentum++; m_audit.selectedMomentum++; }
+         else if(setupPath=="reclaim") { m_audit.acceptedReclaim++; m_audit.selectedReclaim++; }
+         else { m_audit.acceptedFallback++; m_audit.selectedFallback++; }
          if(planTier=="A_PLUS") m_audit.tierAPlus++;
          else if(planTier=="A") m_audit.tierA++;
          else m_audit.tierB++;
@@ -508,8 +509,8 @@ public:
          if(m_audit.acceptedPlanLogs<30)
            {
             m_audit.acceptedPlanLogs++;
-            Print(StringFormat("[TREND_ACCEPTED_PLAN] path=%s tier=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f slAtr=%.2f tp1R=%.2f tp2R=%.2f entryDistanceAtr=%.2f momentumQuality=%.2f lateEntryRisk=%.2f chopRisk=%.2f score=%.2f managementHint=%s",
-                               setupPath,planTier,StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,MathHelpers::SafeDivide(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),MathMax(ctx.atr,1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),entryDistanceAtr,momentumQuality,lateEntryRisk,chopRisk,candidate.score.totalScore,(planTier=="A_PLUS"?"slower_be_trail_preferred":"normal_shared")));
+            Print(StringFormat("[TREND_ACCEPTED_PLAN] path=%s tier=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f score=%.2f momentumQuality=%.2f lateEntryRisk=%.2f chopRisk=%.2f slAtr=%.2f tp1R=%.2f tp2R=%.2f",
+                               setupPath,planTier,StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,candidate.plan.riskR,candidate.score.totalScore,momentumQuality,lateEntryRisk,chopRisk,MathHelpers::SafeDivide(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),MathMax(ctx.atr,1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0)));
            }
         }
       else
@@ -524,8 +525,8 @@ public:
          if(m_audit.rejectPlanLogs<30)
            {
             m_audit.rejectPlanLogs++;
-            Print(StringFormat("[TREND_REJECT_NEAR_VALID] reason=%s path=%s direction=%s slAtr=%.2f tp1R=%.2f tp2R=%.2f entryDistanceAtr=%.2f momentumQuality=%.2f lateEntryRisk=%.2f chopRisk=%.2f score=%.2f",
-                               MapRejectReason(finalReason),setupPath,StrategyTypes::DirectionName(dir),MathHelpers::SafeDivide(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),MathMax(ctx.atr,1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),entryDistanceAtr,momentumQuality,lateEntryRisk,chopRisk,candidate.score.totalScore));
+            Print(StringFormat("[TREND_REJECT_NEAR_VALID] reason=%s path=%s tierCandidate=%s direction=%s rr=%.2f score=%.2f momentumQuality=%.2f lateEntryRisk=%.2f chopRisk=%.2f slAtr=%.2f tp1R=%.2f tp2R=%.2f",
+                               MapRejectReason(finalReason),setupPath,planTier,StrategyTypes::DirectionName(dir),candidate.plan.riskR,candidate.score.totalScore,momentumQuality,lateEntryRisk,chopRisk,MathHelpers::SafeDivide(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),MathMax(ctx.atr,1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0)));
            }
         }
       bool nearValid=(structureOK || momentumPathOk || reclaimOk || directionPass || candidate.setupFound || candidate.plan.entryPrice!=0.0 || candidate.plan.stopLoss!=0.0 || candidate.plan.takeProfit1!=0.0 || candidate.plan.takeProfit2!=0.0 || candidate.plan.riskR>0.0 || candidate.score.totalScore>0.0);
@@ -568,7 +569,7 @@ public:
    string ForensicAvgGeometrySummary() const { double n=MathMax(1.0,(double)m_audit.geomCount); return StringFormat("[TREND_FORENSIC_AVG_GEOMETRY] avgSlAtr=%.2f avgTp1R=%.2f avgTp2R=%.2f avgRiskR=%.2f avgEntryDistanceAtr=%.2f",m_audit.sumSlAtr/n,m_audit.sumTp1R/n,m_audit.sumTp2R/n,m_audit.sumRiskR/n,m_audit.sumEntryDistanceAtr/n); }
    string ForensicAvgQualitySummary() const { double n=MathMax(1.0,(double)m_audit.qualityCount); return StringFormat("[TREND_FORENSIC_AVG_QUALITY] avgMomentumQuality=%.2f avgLateEntryRisk=%.2f avgChopRisk=%.2f avgScore=%.2f",m_audit.sumMomentumQuality/n,m_audit.sumLateEntryRisk/n,m_audit.sumChopRisk/n,m_audit.sumScore/n); }
    string ForensicManagementSummary() const { return "[TREND_FORENSIC_MANAGEMENT] beMode=shared_lifecycle beTrigger=tp1_hit beBuffer=0.10R trailMode=shared_lifecycle trailTrigger=tp1_hit_and_rr>=1.45 trailDistance=atr_trail_plus_structure_guard timeStop=48_bars usesSharedLifecycle=true"; }
-   string ForensicNextHintSummary() const { return "[TREND_FORENSIC_NEXT_HINT] mainIssue=tiered_quality_geometry_active checkRemaining=sl_width_vs_tp2_late_entry_chop_low_momentum_tp_ambition_or_shared_lifecycle"; }
+   string ForensicNextHintSummary() const { return "[TREND_FORENSIC_NEXT_HINT] nextHint=trend_lifecycle_needs_strategy_specific_be_trailing mainIssue=momentum_selection_and_geometry_rebalanced checkRemaining=chop_late_entry_sl_width_tp_ambition_or_shared_lifecycle"; }
   };
 
 #endif
