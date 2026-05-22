@@ -28,11 +28,11 @@ private:
       long tierAPlus,tierA,tierB;
       long rejectedChop,rejectedLowMomentum,rejectedLateEntry,rejectedSlTooWide,rejectedRRTooLow;
       long structureReject,momentumReject,reclaimReject,directionReject,lateEntryReject,chopReject,invalidSltpReject,rrTooLowReject,scoreReject;
-      double sumSlAtr,sumTp1R,sumTp2R,sumRiskR,sumEntryDistanceAtr,sumMomentumQuality,sumLateEntryRisk,sumChopRisk,sumScore;
+      double sumSlAtr,sumTp1R,sumTp2R,sumRiskR,sumEntryDistanceAtr,sumMomentumQuality,sumLateEntryRisk,sumChopRisk,sumScore,sumTotalScore,sumFinalTp1R,sumFinalTp2R;
       long geomCount,qualityCount;
       long acceptedPlanLogs,rejectPlanLogs;
       string lastRejectReason;
-      void Reset(){ called=structurePass=momentumPass=reclaimPass=directionPass=pricePass=slTpPass=rrPass=rawCreated=0; expValid=selected=lostToMicro=0; failNoSetup=failInvalidPrice=failInvalidSltp=failRr=0; nearValidSnapshots=candidateAcceptCalled=scorePass=0; nearFailNoSetup=nearFailInvalidPrice=nearFailInvalidSltp=nearFailRr=nearFailDirection=nearFailScore=0; acceptedMomentum=acceptedReclaim=acceptedFallback=0; selectedMomentum=selectedReclaim=selectedFallback=0; tierAPlus=tierA=tierB=0; rejectedChop=rejectedLowMomentum=rejectedLateEntry=rejectedSlTooWide=rejectedRRTooLow=0; structureReject=momentumReject=reclaimReject=directionReject=lateEntryReject=chopReject=invalidSltpReject=rrTooLowReject=scoreReject=0; sumSlAtr=sumTp1R=sumTp2R=sumRiskR=sumEntryDistanceAtr=sumMomentumQuality=sumLateEntryRisk=sumChopRisk=sumScore=0.0; geomCount=qualityCount=0; acceptedPlanLogs=rejectPlanLogs=0; lastRejectReason="none"; }
+      void Reset(){ called=structurePass=momentumPass=reclaimPass=directionPass=pricePass=slTpPass=rrPass=rawCreated=0; expValid=selected=lostToMicro=0; failNoSetup=failInvalidPrice=failInvalidSltp=failRr=0; nearValidSnapshots=candidateAcceptCalled=scorePass=0; nearFailNoSetup=nearFailInvalidPrice=nearFailInvalidSltp=nearFailRr=nearFailDirection=nearFailScore=0; acceptedMomentum=acceptedReclaim=acceptedFallback=0; selectedMomentum=selectedReclaim=selectedFallback=0; tierAPlus=tierA=tierB=0; rejectedChop=rejectedLowMomentum=rejectedLateEntry=rejectedSlTooWide=rejectedRRTooLow=0; structureReject=momentumReject=reclaimReject=directionReject=lateEntryReject=chopReject=invalidSltpReject=rrTooLowReject=scoreReject=0; sumSlAtr=sumTp1R=sumTp2R=sumRiskR=sumEntryDistanceAtr=sumMomentumQuality=sumLateEntryRisk=sumChopRisk=sumScore=sumTotalScore=sumFinalTp1R=sumFinalTp2R=0.0; geomCount=qualityCount=0; acceptedPlanLogs=rejectPlanLogs=0; lastRejectReason="none"; }
      };
    void TrackRejectReason(const string reason)
      {
@@ -458,6 +458,7 @@ public:
       string structuralReason=CANDIDATE_REASON_OK;
       bool structuralPass=StrategyTypes::IsCandidateStructurallyValid(candidate, structuralReason);
       candidate.score.totalScore = MathMax(candidate.plan.confidence, candidate.score.scoreUnique);
+      double finalLocalScore=candidate.score.scoreUnique;
       double tierScoreFloor=(planTier=="A_PLUS"?0.74:(planTier=="A"?0.62:0.50));
       double qualityPenalty=MathHelpers::Clamp(0.14*lateEntryRisk + 0.16*chopRisk + (momentumQuality<0.24?0.10:0.0),0.0,0.28);
       candidate.score.totalScore=MathHelpers::Clamp(MathMax(candidate.score.totalScore,tierScoreFloor)-qualityPenalty,0.0,1.0);
@@ -499,13 +500,19 @@ public:
          m_audit.sumSlAtr+=MathHelpers::SafeDivide(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),MathMax(ctx.atr,1e-6),0.0);
          m_audit.sumTp1R+=MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0);
          m_audit.sumTp2R+=MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0);
+         m_audit.sumFinalTp1R+=MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0);
+         m_audit.sumFinalTp2R+=MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0);
          m_audit.sumRiskR+=candidate.plan.riskR;
          m_audit.sumEntryDistanceAtr+=entryDistanceAtr;
          m_audit.qualityCount++;
          m_audit.sumMomentumQuality+=momentumQuality;
          m_audit.sumLateEntryRisk+=lateEntryRisk;
          m_audit.sumChopRisk+=chopRisk;
-         m_audit.sumScore+=candidate.score.totalScore;
+         m_audit.sumScore+=finalLocalScore;
+         m_audit.sumTotalScore+=candidate.score.totalScore;
+         if(m_audit.acceptedPlanLogs<30)
+            Print(StringFormat("[TREND_FINAL_CANDIDATE] path=%s tier=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f tp1R=%.2f tp2R=%.2f score=%.2f totalScore=%.2f momentumQuality=%.2f lateEntryRisk=%.2f chopRisk=%.2f",
+                               setupPath,planTier,StrategyTypes::DirectionName(candidate.plan.direction),candidate.plan.entryPrice,candidate.plan.stopLoss,candidate.plan.takeProfit1,candidate.plan.takeProfit2,MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit1-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),MathHelpers::SafeDivide(MathAbs(candidate.plan.takeProfit2-candidate.plan.entryPrice),MathMax(MathAbs(candidate.plan.entryPrice-candidate.plan.stopLoss),1e-6),0.0),finalLocalScore,candidate.score.totalScore,momentumQuality,lateEntryRisk,chopRisk));
          if(m_audit.acceptedPlanLogs<30)
            {
             m_audit.acceptedPlanLogs++;
@@ -566,8 +573,8 @@ public:
    string ForensicCountsSummary() const { return StringFormat("[TREND_FORENSIC_COUNTS] called=%d structurePass=%d momentumPass=%d reclaimPass=%d directionPass=%d planBuilt=%d accepted=%d rejected=%d selected=%d tierAPlus=%d tierA=%d tierB=%d rejectedChop=%d rejectedLowMomentum=%d rejectedLateEntry=%d rejectedSlTooWide=%d rejectedRRTooLow=%d",m_audit.called,m_audit.structurePass,m_audit.momentumPass,m_audit.reclaimPass,m_audit.directionPass,m_audit.rawCreated,m_audit.expValid,(m_audit.called-m_audit.expValid),m_audit.selected,m_audit.tierAPlus,m_audit.tierA,m_audit.tierB,m_audit.rejectedChop,m_audit.rejectedLowMomentum,m_audit.rejectedLateEntry,m_audit.rejectedSlTooWide,m_audit.rejectedRRTooLow); }
    string ForensicPathsSummary() const { return StringFormat("[TREND_FORENSIC_PATHS] acceptedMomentum=%d acceptedReclaim=%d acceptedFallback=%d selectedMomentum=%d selectedReclaim=%d selectedFallback=%d",m_audit.acceptedMomentum,m_audit.acceptedReclaim,m_audit.acceptedFallback,m_audit.selectedMomentum,m_audit.selectedReclaim,m_audit.selectedFallback); }
    string ForensicRejectsSummary() const { return StringFormat("[TREND_FORENSIC_REJECTS] structureReject=%d momentumReject=%d reclaimReject=%d directionReject=%d lateEntryReject=%d chopReject=%d invalidSltpReject=%d rrTooLowReject=%d scoreReject=%d",m_audit.structureReject,m_audit.momentumReject,m_audit.reclaimReject,m_audit.directionReject,m_audit.lateEntryReject,m_audit.chopReject,m_audit.invalidSltpReject,m_audit.rrTooLowReject,m_audit.scoreReject); }
-   string ForensicAvgGeometrySummary() const { double n=MathMax(1.0,(double)m_audit.geomCount); return StringFormat("[TREND_FORENSIC_AVG_GEOMETRY] avgSlAtr=%.2f avgTp1R=%.2f avgTp2R=%.2f avgRiskR=%.2f avgEntryDistanceAtr=%.2f",m_audit.sumSlAtr/n,m_audit.sumTp1R/n,m_audit.sumTp2R/n,m_audit.sumRiskR/n,m_audit.sumEntryDistanceAtr/n); }
-   string ForensicAvgQualitySummary() const { double n=MathMax(1.0,(double)m_audit.qualityCount); return StringFormat("[TREND_FORENSIC_AVG_QUALITY] avgMomentumQuality=%.2f avgLateEntryRisk=%.2f avgChopRisk=%.2f avgScore=%.2f",m_audit.sumMomentumQuality/n,m_audit.sumLateEntryRisk/n,m_audit.sumChopRisk/n,m_audit.sumScore/n); }
+   string ForensicAvgGeometrySummary() const { double n=MathMax(1.0,(double)m_audit.geomCount); return StringFormat("[TREND_FORENSIC_AVG_GEOMETRY] avgSlAtr=%.2f avgTp1R=%.2f avgTp2R=%.2f avgRiskR=%.2f avgEntryDistanceAtr=%.2f avgFinalTp1R=%.2f avgFinalTp2R=%.2f",m_audit.sumSlAtr/n,m_audit.sumTp1R/n,m_audit.sumTp2R/n,m_audit.sumRiskR/n,m_audit.sumEntryDistanceAtr/n,m_audit.sumFinalTp1R/n,m_audit.sumFinalTp2R/n); }
+   string ForensicAvgQualitySummary() const { double n=MathMax(1.0,(double)m_audit.qualityCount); return StringFormat("[TREND_FORENSIC_AVG_QUALITY] avgMomentumQuality=%.2f avgLateEntryRisk=%.2f avgChopRisk=%.2f avgScore=%.2f avgFinalScore=%.2f avgFinalTotalScore=%.2f",m_audit.sumMomentumQuality/n,m_audit.sumLateEntryRisk/n,m_audit.sumChopRisk/n,m_audit.sumScore/n,m_audit.sumScore/n,m_audit.sumTotalScore/n); }
    string ForensicManagementSummary() const { return "[TREND_FORENSIC_MANAGEMENT] beMode=shared_lifecycle beTrigger=tp1_hit beBuffer=0.10R trailMode=shared_lifecycle trailTrigger=tp1_hit_and_rr>=1.45 trailDistance=atr_trail_plus_structure_guard timeStop=48_bars usesSharedLifecycle=true"; }
    string ForensicNextHintSummary() const { return "[TREND_FORENSIC_NEXT_HINT] nextHint=trend_lifecycle_needs_strategy_specific_be_trailing mainIssue=momentum_selection_and_geometry_rebalanced checkRemaining=chop_late_entry_sl_width_tp_ambition_or_shared_lifecycle"; }
   };

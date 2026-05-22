@@ -270,7 +270,10 @@ public:
 
    void ScoreCandidate(StrategyCandidate &candidate)
      {
+      double incomingTotalScore=candidate.score.totalScore;
       candidate.score.totalScore = ComputeCompositeScore(candidate);
+      if(candidate.strategy==STRATEGY_TREND_CONTINUATION && MathIsValidNumber(incomingTotalScore) && incomingTotalScore>0.0)
+         candidate.score.totalScore=MathHelpers::Clamp(incomingTotalScore,0.0,1.0);
       candidate.grade = GradeFromScore(candidate.score.totalScore);
       candidate.plan.grade = candidate.grade;
       candidate.plan.confidence = candidate.score.totalScore;
@@ -367,7 +370,7 @@ public:
             double rr=RRNetAfterSpread(c,ctx);
             if(rr<trendMinRR) { m_invalidByStrategy[b]++; trendRejectStage="RR_GATE"; trendRejectReason="RR_TOO_LOW"; trendReasonThisCall=trendRejectReason; Print(StringFormat("[ARB_REJECT] strategy=%s reason=RR_TOO_LOW rr=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),rr,trendMinRR)); }
             else if(c.score.totalScore<trendMinScore) { m_invalidByStrategy[b]++; trendRejectStage="SCORE_GATE"; trendRejectReason="SCORE_TOO_LOW"; trendReasonThisCall=trendRejectReason; Print(StringFormat("[ARB_REJECT] strategy=%s reason=SCORE_TOO_LOW score=%.2f min=%.2f",StrategyTypes::StrategyName(c.strategy),c.score.totalScore,trendMinScore)); }
-            else { trendValid=true; trendValidThisCall=true; trendReasonThisCall="OK"; AddCandidateIfValid(c); }
+            else { trendValid=true; trendValidThisCall=true; trendReasonThisCall="OK"; Print(StringFormat("[TREND_ARBITRATION_INPUT] path=final tier=%s direction=%s tp1R=%.2f tp2R=%.2f score=%.2f totalScore=%.2f rr=%.2f accepted=true",StrategyTypes::GradeToString(c.plan.grade),StrategyTypes::DirectionName(c.plan.direction),MathHelpers::SafeDivide(MathAbs(c.plan.takeProfit1-c.plan.entryPrice),MathMax(MathAbs(c.plan.entryPrice-c.plan.stopLoss),1e-6),0.0),MathHelpers::SafeDivide(MathAbs(c.plan.takeProfit2-c.plan.entryPrice),MathMax(MathAbs(c.plan.entryPrice-c.plan.stopLoss),1e-6),0.0),c.score.scoreUnique,c.score.totalScore,rr)); AddCandidateIfValid(c); }
            }
          else { m_invalidByStrategy[b]++; trendRejectStage="VALIDATION"; trendRejectReason=(c.rejectReason!=""?c.rejectReason:(vreason==""?"NO_SETUP":vreason)); trendReasonThisCall=trendRejectReason; if(c.isValid && (c.plan.entryPrice<=0.0 || c.plan.stopLoss<=0.0 || c.plan.takeProfit1<=0.0)) Print(StringFormat("[STRATEGY_CONTRACT_ERROR] strategy=%s rawCandidate=true direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f reason=engine_candidate_missing_price_fields",StrategyTypes::StrategyName(c.strategy),StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2)); Print(StringFormat("[CANDIDATE_REJECT] strategy=%s reason=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.2f source=TrendContinuation",StrategyTypes::StrategyName(c.strategy),trendRejectReason,StrategyTypes::DirectionName(c.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,RRNetAfterSpread(c,ctx))); }
          PrintStrategyEngineResult("TrendContinuation",true,true,c,ctx);
