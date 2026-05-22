@@ -1935,6 +1935,13 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
    Print(g_arb.TrendExposureSummary());
    Print(g_arb.CompressionExposureSummary());
    Print(g_arb.TrendProvenBlockerSummary());
+   Print(g_arb.TrendForensicCountsSummary());
+   Print(g_arb.TrendForensicPathsSummary());
+   Print(g_arb.TrendForensicRejectsSummary());
+   Print(g_arb.TrendForensicAvgGeometrySummary());
+   Print(g_arb.TrendForensicAvgQualitySummary());
+   Print(g_arb.TrendForensicManagementSummary());
+   Print(g_arb.TrendForensicNextHintSummary());
    Print(g_arb.CompressionProvenBlockerSummary());
    Print(StringFormat("[COMPRESSION_PROFITABILITY_SUMMARY] source=OnDeinit strategy=CompressionBreakout note=final_summary_path_active selected=%d accepted=%d rejected=%d",g_compressionSelected,g_compressionAcceptedFinal,g_compressionRejectedFinal));
    Print(StringFormat("[TREND_SELECTION_SUMMARY] trendValid=%d trendAddedToArbitration=%d trendSelected=%d trendLostToMicro=%d trendLostToCompression=%d trendRejectedByArbitration=%d topTrendArbReject=%s",
