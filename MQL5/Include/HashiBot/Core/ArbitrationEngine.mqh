@@ -41,6 +41,8 @@ private:
    ProfileType                   m_profile;
    bool                          m_enableSecondaryStrategy;
    bool                          m_enableArbitrator;
+   bool                          m_enableTrend,m_enableCompression,m_enableMicro,m_researchIsolated,m_researchDisableArbitrator;
+   string                        m_researchStrategy;
    long                          m_trendModuleCalled,m_trendEnoughBars,m_trendSessionOk,m_trendSpreadOk,m_trendIndicatorsReady,m_trendRegimeOk,m_trendTriggerFound,m_trendRawCreated;
    long                          m_compModuleCalled,m_compEnoughBars,m_compSessionOk,m_compSpreadOk,m_compAtrReady,m_compBoxReady,m_compCompressionDetected,m_compBreakoutDetected,m_compRawCreated;
    long                          m_microModuleCalled,m_microRawCreated,m_microValidCreated;
@@ -244,11 +246,12 @@ public:
       return true;
      }
 
-   void Configure(const bool enableSecondary,const bool enableArbitrator,const bool verboseDiagnostics=false)
+   void Configure(const bool enableSecondary,const bool enableArbitrator,const bool verboseDiagnostics=false,const bool enableTrend=true,const bool enableCompression=true,const bool enableMicro=true,const bool researchIsolated=false,const string researchStrategy="TREND",const bool researchDisableArbitrator=false)
      {
       m_enableSecondaryStrategy = enableSecondary;
       m_enableArbitrator = enableArbitrator;
       m_verboseDiagnostics = verboseDiagnostics;
+      m_enableTrend=enableTrend; m_enableCompression=enableCompression; m_enableMicro=enableMicro; m_researchIsolated=researchIsolated; m_researchStrategy=researchStrategy; m_researchDisableArbitrator=researchDisableArbitrator;
      }
 
    void Reset()
@@ -352,6 +355,7 @@ public:
       StrategyCandidate c;
       bool trendValidThisCall=false,compValidThisCall=false,microValidThisCall=false;
       string trendReasonThisCall="NO_SETUP",compReasonThisCall="NO_SETUP",microReasonThisCall="NO_SETUP";
+      bool onlyTrend=(m_researchIsolated && (m_researchStrategy=="TREND" || m_researchStrategy=="trend"));
       m_trendModuleCalled++;
       bool trendEnoughBars=(ctx.barsLoaded>=8); if(trendEnoughBars) m_trendEnoughBars++;
       bool trendSessionOk=true; if(trendSessionOk) m_trendSessionOk++;
@@ -359,7 +363,14 @@ public:
       bool trendIndicatorsReady=(ctx.atr>0.0 && ctx.emaFast>0.0 && ctx.emaSlow>0.0); if(trendIndicatorsReady) m_trendIndicatorsReady++;
       bool trendRegimeOk=(regime.regime==REGIME_TREND_UP || regime.regime==REGIME_TREND_DOWN || ((MQLInfoInteger(MQL_TESTER)>0) && regime.confidence>=0.40 && (ctx.emaFast>ctx.emaSlow || ctx.emaFast<ctx.emaSlow))); if(trendRegimeOk) m_trendRegimeOk++;
       Print("[PERSONALEA_CALL_STRATEGY] marker=A4.15 strategy=TrendContinuation");
-      bool trendAnalyzed=m_trend.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); {
+      bool trendAnalyzed=false;
+      if(m_enableTrend)
+        {
+         trendAnalyzed=m_trend.Analyze(ctx, regime, c);
+         ScoreCandidate(c);
+         ApplyRegimePreference(regime, c);
+        }
+      {
          int b=StrategyBucket(c.strategy); string vreason="";
          string trendRejectStage="NONE",trendRejectReason="none"; bool trendValid=false;
          if(IsDirectionValid(c.direction)) m_validDirByStrategy[b]++; else m_ambiguousDirByStrategy[b]++;
@@ -386,6 +397,8 @@ public:
                          (c.suppression.reasonCount>0?SuppressionReasonName(c.suppression.reasons[0]):"ok")));
       Print("[ARB_DISABLED] strategy=PullbackContinuation reason=phase_a_two_strategy_only");
       m_compModuleCalled++;
+      if(!onlyTrend && m_enableCompression)
+      {
       bool compEnoughBars=(ctx.barsLoaded>=7); if(compEnoughBars) m_compEnoughBars++;
       bool compSessionOk=true; if(compSessionOk) m_compSessionOk++;
       bool compSpreadOk=(ctx.spreadPoints>0.0 && ctx.spreadPoints<=maxSpread); if(compSpreadOk) m_compSpreadOk++;
@@ -418,10 +431,12 @@ public:
                          "true",(compEnoughBars?"true":"false"),(compAtrReady?"true":"false"),(compBoxReady?"true":"false"),
                          (compCompressionDetected?"true":"false"),(compAnalyzed?"true":"false"),(m_compRawCreated>0?"true":"false"),
                          (c.isValid?"true":"false"),(c.suppression.reasonCount>0?SuppressionReasonName(c.suppression.reasons[0]):"ok")));
+      }
+      else Print("[RESEARCH_ISOLATED_MODE] active=true strategy=TREND");
       Print("[ARB_DISABLED] strategy=ExpansionMomentum reason=phase_a_two_strategy_only");
       m_microModuleCalled++;
-      Print("[PERSONALEA_CALL_STRATEGY] marker=A4.15 strategy=MicroScalper");
-      bool microAnalyzed=m_micro.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c);
+      bool microAnalyzed=false;
+      if(!onlyTrend && m_enableMicro){ Print("[PERSONALEA_CALL_STRATEGY] marker=A4.15 strategy=MicroScalper"); microAnalyzed=m_micro.Analyze(ctx, regime, c); ScoreCandidate(c); ApplyRegimePreference(regime, c); }
       if(microAnalyzed) m_microRawCreated++;
       {
          int b=StrategyBucket(c.strategy); string vreason="";

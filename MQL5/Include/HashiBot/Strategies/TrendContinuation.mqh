@@ -16,6 +16,13 @@
 class CTrendContinuationStrategy
   {
 private:
+   struct TrendRuntimeConfig
+     {
+      double minStructureQuality,minMomentumQuality,minReclaimQuality,maxChopRisk,maxLateEntryRisk,maxEntryDistanceAtr,minDirectionConfidence,bodyAtrCap,slAtrMult,structureBufferAtr,minSlAtr,maxSlAtr;
+      bool rejectBodyOverextension,allowMomentumPath,allowReclaimPath,allowFallbackPath,rejectSlTooWide;
+      double tp1APlus,tp2APlus,tp1A,tp2A,tp1B,tp2B,minRR,minTp1DistanceR,maxTp2AmbitionR,scoreMin,tierAPlusScore,tierAScore,tierBScore,momentumWeight,reclaimWeight,structureWeight,chopPenaltyWeight,lateEntryPenaltyWeight,slWidthPenaltyWeight;
+      void ResetDefaults(){ minStructureQuality=0.42;minMomentumQuality=0.16;minReclaimQuality=0.56;maxChopRisk=0.70;maxLateEntryRisk=0.85;maxEntryDistanceAtr=1.10;minDirectionConfidence=0.36;rejectBodyOverextension=true;bodyAtrCap=1.90;allowMomentumPath=true;allowReclaimPath=true;allowFallbackPath=false;slAtrMult=1.45;structureBufferAtr=0.25;minSlAtr=0.0;maxSlAtr=1.95;rejectSlTooWide=true;tp1APlus=1.12;tp2APlus=2.85;tp1A=1.00;tp2A=2.20;tp1B=1.00;tp2B=1.60;minRR=1.60;minTp1DistanceR=0.95;maxTp2AmbitionR=3.50;scoreMin=0.0;tierAPlusScore=0.74;tierAScore=0.62;tierBScore=0.50;momentumWeight=0.62;reclaimWeight=0.50;structureWeight=0.70;chopPenaltyWeight=0.16;lateEntryPenaltyWeight=0.14;slWidthPenaltyWeight=0.10; }
+     };
    struct TrendAuditCounters
      {
       long called,structurePass,momentumPass,reclaimPass,directionPass,pricePass,slTpPass,rrPass,rawCreated;
@@ -58,6 +65,7 @@ private:
       return reason;
      }
    ProfileType                   m_profile;
+   TrendRuntimeConfig            m_cfg;
    TrendAuditCounters            m_audit;
    void Reject(StrategyCandidate &candidate,const SuppressionReason reason,const string rejectReason)
      {
@@ -168,7 +176,8 @@ private:
      }
 
 public:
-   bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); m_audit.Reset(); return true; }
+   bool Init(ProfileType profile=PROFILE_PERSONAL) { m_profile=(profile==PROFILE_PROP_FIRM?PROFILE_PROP_FIRM:PROFILE_PERSONAL); m_cfg.ResetDefaults(); m_audit.Reset(); return true; }
+   void Configure(const TrendRuntimeConfig &cfg){ m_cfg=cfg; }
    void Reset() { m_audit.Reset(); }
    long Called() const { return m_audit.called; }
    long EnoughBarsPass() const { return m_audit.called; }
@@ -224,7 +233,7 @@ public:
          Reject(candidate, SUPPRESS_INVALID_STRUCTURE, m_audit.lastRejectReason);
          return false;
         }
-      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:(testerMode?0.33:0.36));
+      double minRegimeConf=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_REGIME_CONF:(testerMode?0.33:m_cfg.minDirectionConfidence));
       double minMq=(m_profile==PROFILE_PROP_FIRM?TREND_MIN_MARKET_QUALITY:(testerMode?0.28:0.32));
       double maxChop=(m_profile==PROFILE_PROP_FIRM?TREND_MAX_CHOPPINESS:(testerMode?62.0:58.0));
       if((regime.confidence < minRegimeConf || ctx.marketQuality < minMq || ctx.choppiness > maxChop) && !testerMode)
@@ -287,7 +296,7 @@ public:
       double bodyAtr=MathAbs(ctx.currentClose-ctx.currentOpen)/MathMax(ctx.atr,1e-6);
       double lateEntryRisk=MathHelpers::Clamp(MathMax(0.0,entryDistanceAtr-0.60),0.0,1.0);
       double chopRisk=MathHelpers::Clamp(ctx.choppiness/100.0,0.0,1.0);
-      if(bodyAtr>(testerMode?2.40:1.90)){ m_audit.lastRejectReason="RECLAIM_NOT_CONFIRMED"; m_audit.failNoSetup++; Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason); return false; }
+      if(m_cfg.rejectBodyOverextension && bodyAtr>(testerMode?2.40:m_cfg.bodyAtrCap)){ m_audit.lastRejectReason="RECLAIM_NOT_CONFIRMED"; m_audit.failNoSetup++; Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason); return false; }
       bool reclaimOk=HasReclaimTrigger(ctx, dir, entryQuality);
       if(reclaimOk){ m_audit.reclaimPass++; setupPath="reclaim"; }
 
@@ -295,7 +304,7 @@ public:
       double minSlope=(m_profile==PROFILE_PROP_FIRM?0.12:(testerMode?0.035:0.055));
       bool slopeOk=(emaSlopeAtr >= minSlope);
       bool reclaimPathOk=(reclaimOk && (priceVsEma || slopeOk || emaOk));
-      if(!momentumPathOk && !reclaimPathOk)
+      if((!m_cfg.allowMomentumPath || !momentumPathOk) && (!m_cfg.allowReclaimPath || !reclaimPathOk))
         {
          m_audit.lastRejectReason=(reclaimOk?"MOMENTUM_NOT_CONFIRMED":"RECLAIM_NOT_CONFIRMED");
          m_audit.failNoSetup++;
@@ -325,7 +334,7 @@ public:
       // deterministic confidence blend
       candidate.plan.confidence = MathHelpers::Clamp((regimeScore + structureScore + momentumScore + entryQuality) / 4.0, 0.0, 1.0);
 
-      double atrMult=(testerMode?1.20:1.45);
+      double atrMult=(testerMode?1.20:m_cfg.slAtrMult);
       if(!StrategyTypes::BuildBasicATRTradePlan(STRATEGY_TREND_CONTINUATION, dir, ctx, atrMult, candidate.plan))
         {
          // micro-style fallback: explicit direction/entry/SL/TP construction to avoid dropping valid setup path
@@ -351,12 +360,12 @@ public:
       double atrStop = MathAbs(candidate.plan.entryPrice - candidate.plan.stopLoss);
       if(dir == TRADE_DIR_LONG)
         {
-         double structureStop = ctx.previousLow - 0.25 * ctx.atr;
+         double structureStop = ctx.previousLow - m_cfg.structureBufferAtr * ctx.atr;
          candidate.plan.stopLoss = MathMin(candidate.plan.stopLoss, structureStop);
         }
       else
         {
-         double structureStop = ctx.previousHigh + 0.25 * ctx.atr;
+         double structureStop = ctx.previousHigh + m_cfg.structureBufferAtr * ctx.atr;
          candidate.plan.stopLoss = MathMax(candidate.plan.stopLoss, structureStop);
         }
 
@@ -379,14 +388,14 @@ public:
       string planTier="A";
       double rr1=1.05;
       double rr2=2.30;
-      if(chopRisk>=0.70 || lateEntryRisk>=0.85)
+      if(chopRisk>=m_cfg.maxChopRisk || lateEntryRisk>=m_cfg.maxLateEntryRisk)
         {
          m_audit.lastRejectReason=(chopRisk>=0.70?"HIGH_CHOP_RISK":"EXTREME_LATE_ENTRY");
          TrackRejectReason(m_audit.lastRejectReason);
          Reject(candidate, SUPPRESS_MARKET_QUALITY, m_audit.lastRejectReason);
          return false;
         }
-      if(momentumQuality<0.16)
+      if(momentumQuality<m_cfg.minMomentumQuality)
         {
          m_audit.lastRejectReason="VERY_LOW_MOMENTUM_QUALITY";
          TrackRejectReason(m_audit.lastRejectReason);
@@ -399,8 +408,8 @@ public:
       if(qualifiesAPlus)
         {
          planTier="A_PLUS";
-         rr1=MathHelpers::Clamp(1.12 + 0.18*momentumQuality,1.10,1.30);
-         rr2=MathHelpers::Clamp(2.85 + 1.10*momentumQuality - 0.30*lateEntryRisk - 0.25*chopRisk,2.40,3.50);
+         rr1=MathHelpers::Clamp(m_cfg.tp1APlus + 0.18*momentumQuality,1.00,1.50);
+         rr2=MathHelpers::Clamp(m_cfg.tp2APlus + 1.10*momentumQuality - 0.30*lateEntryRisk - 0.25*chopRisk,1.60,m_cfg.maxTp2AmbitionR);
         }
       else if(qualifiesB)
         {
@@ -412,23 +421,23 @@ public:
             Reject(candidate, SUPPRESS_AMBIGUOUS, m_audit.lastRejectReason);
             return false;
            }
-         rr1=MathHelpers::Clamp(1.00 + 0.14*momentumQuality,1.00,1.15);
-         rr2=MathHelpers::Clamp(1.60 + 0.62*momentumQuality - 0.18*lateEntryRisk,1.60,2.10);
+         rr1=MathHelpers::Clamp(m_cfg.tp1B + 0.14*momentumQuality,0.90,1.30);
+         rr2=MathHelpers::Clamp(m_cfg.tp2B + 0.62*momentumQuality - 0.18*lateEntryRisk,m_cfg.minRR,2.50);
         }
       else
         {
          planTier="A";
-         rr1=MathHelpers::Clamp(1.00 + 0.20*momentumQuality,1.00,1.20);
-         rr2=MathHelpers::Clamp(2.20 + 0.75*momentumQuality - 0.18*lateEntryRisk - 0.12*chopRisk,2.00,2.60);
+         rr1=MathHelpers::Clamp(m_cfg.tp1A + 0.20*momentumQuality,0.90,1.30);
+         rr2=MathHelpers::Clamp(m_cfg.tp2A + 0.75*momentumQuality - 0.18*lateEntryRisk - 0.12*chopRisk,m_cfg.minRR,3.00);
         }
-      if(slAtr>1.95 && rr2<2.30)
+      if(m_cfg.rejectSlTooWide && slAtr>m_cfg.maxSlAtr && rr2<2.30)
         {
          m_audit.lastRejectReason="SL_TOO_WIDE_FOR_PATH";
          TrackRejectReason(m_audit.lastRejectReason);
          Reject(candidate, SUPPRESS_OTHER, m_audit.lastRejectReason);
          return false;
         }
-      if(rr2<1.60 || rr1<0.95)
+      if(rr2<m_cfg.minRR || rr1<m_cfg.minTp1DistanceR)
         {
          m_audit.lastRejectReason=CANDIDATE_REASON_RR_TOO_LOW;
          TrackRejectReason(m_audit.lastRejectReason);
@@ -459,8 +468,8 @@ public:
       bool structuralPass=StrategyTypes::IsCandidateStructurallyValid(candidate, structuralReason);
       candidate.score.totalScore = MathMax(candidate.plan.confidence, candidate.score.scoreUnique);
       double finalLocalScore=candidate.score.scoreUnique;
-      double tierScoreFloor=(planTier=="A_PLUS"?0.74:(planTier=="A"?0.62:0.50));
-      double qualityPenalty=MathHelpers::Clamp(0.14*lateEntryRisk + 0.16*chopRisk + (momentumQuality<0.24?0.10:0.0),0.0,0.28);
+      double tierScoreFloor=(planTier=="A_PLUS"?m_cfg.tierAPlusScore:(planTier=="A"?m_cfg.tierAScore:m_cfg.tierBScore));
+      double qualityPenalty=MathHelpers::Clamp(m_cfg.lateEntryPenaltyWeight*lateEntryRisk + m_cfg.chopPenaltyWeight*chopRisk + (momentumQuality<0.24?m_cfg.slWidthPenaltyWeight:0.0),0.0,0.28);
       candidate.score.totalScore=MathHelpers::Clamp(MathMax(candidate.score.totalScore,tierScoreFloor)-qualityPenalty,0.0,1.0);
       bool scorePass=(MathIsValidNumber(candidate.score.totalScore) && candidate.score.totalScore>0.0);
 

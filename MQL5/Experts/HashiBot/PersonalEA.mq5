@@ -41,6 +41,39 @@ enum StrategyDebugMode
   };
 input StrategyDebugMode InpStrategyDebugMode = STRATEGY_DEBUG_TREND_COMPRESSION;
 input bool InpVerboseDiagnostics = false;
+input bool InpResearchIsolatedMode = false;
+input string InpResearchStrategy = "TREND";
+input bool InpResearchDisableArbitrator = false;
+input bool InpEnableTrendContinuation = true;
+input bool InpEnableCompressionBreakout = true;
+input bool InpEnableMicroScalper = false;
+input double InpTrendMinStructureQuality = 0.42;
+input double InpTrendMinMomentumQuality = 0.16;
+input double InpTrendMinReclaimQuality = 0.56;
+input double InpTrendMaxChopRisk = 0.70;
+input double InpTrendMaxLateEntryRisk = 0.85;
+input double InpTrendMaxEntryDistanceAtr = 1.10;
+input double InpTrendMinDirectionConfidence = 0.36;
+input bool InpTrendRejectBodyOverextension = true;
+input double InpTrendBodyAtrCap = 1.90;
+input bool InpTrendAllowMomentumPath = true;
+input bool InpTrendAllowReclaimPath = true;
+input bool InpTrendAllowFallbackPath = false;
+input int InpTrendAtrPeriod = 14;
+input double InpTrendSlAtrMult = 1.45;
+input double InpTrendStructureBufferAtr = 0.25;
+input double InpTrendMinSlAtr = 0.00;
+input double InpTrendMaxSlAtr = 1.95;
+input bool InpTrendRejectSlTooWide = true;
+input double InpTrendTp1R_APlus = 1.12,InpTrendTp2R_APlus = 2.85,InpTrendTp1R_A = 1.00,InpTrendTp2R_A = 2.20,InpTrendTp1R_B = 1.00,InpTrendTp2R_B = 1.60;
+input double InpTrendMinRR = 1.60,InpTrendMinTp1DistanceR = 0.95,InpTrendMaxTp2AmbitionR = 3.50;
+input double InpTrendScoreMin = 0.00,InpTrendTierAPlusScore = 0.74,InpTrendTierAScore = 0.62,InpTrendTierBScore = 0.50;
+input double InpTrendMomentumWeight = 0.62,InpTrendReclaimWeight = 0.50,InpTrendStructureWeight = 0.70,InpTrendChopPenaltyWeight = 0.16,InpTrendLateEntryPenaltyWeight = 0.14,InpTrendSlWidthPenaltyWeight = 0.10;
+input bool InpTrendUseStrategySpecificLifecycle = false;
+input double InpTrendBETriggerR = 1.00,InpTrendBEBufferR = 0.10,InpTrendTrailingStartR = 1.45,InpTrendTrailingAtrMult = 1.80,InpTrendTrailingStepR = 0.20;
+input int InpTrendTimeStopBars = 48,InpTrendStagnationBars = 12;
+input bool InpTrendEarlyExitEnabled = true;
+input double InpTrendAdverseExcursionR = 0.75;
 
 // Internal locked architecture/state (not user-tuned)
 ExecutionMode executionMode = EXEC_MODE_TESTER_SIM;
@@ -1765,7 +1798,7 @@ bool RunDeterministicExecutionSelfTest()
    return reg;
   }
 
-int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_arb.Configure(EnableSecondaryStrategy,EnableArbitrator,InpVerboseDiagnostics); g_risk.Init(PROFILE_PERSONAL); ResetAttributionMaps();
+int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); g_arb.Init(PROFILE_PERSONAL); g_arb.Configure(EnableSecondaryStrategy,EnableArbitrator,InpVerboseDiagnostics,InpEnableTrendContinuation,InpEnableCompressionBreakout,InpEnableMicroScalper,InpResearchIsolatedMode,InpResearchStrategy,InpResearchDisableArbitrator); g_risk.Init(PROFILE_PERSONAL); ResetAttributionMaps();
    g_effectiveRiskPerTradePct=(RiskPercentPerTrade>0.0?RiskPercentPerTrade:0.20);
    g_effectiveMaxOpenRiskPct=(testerSimMaxOpenRiskPct>0.0?testerSimMaxOpenRiskPct:0.75);
    g_effectiveMaxTradesPerDay=(MaxTradesPerDay>0?MaxTradesPerDay:14);
@@ -1806,6 +1839,12 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
                       (InpStrategyDebugMode==STRATEGY_DEBUG_MICRO_ONLY?"true":"false")));
    Print(StringFormat("[BUILD] risk effectiveRiskPct=%.2f effectiveMaxOpenRiskPct=%.2f effectiveMaxTradesDay=%d effectiveMaxActive=%d effectiveMaxDailyLossPct=%.2f effectiveLotCap=%.2f compounding=%s",g_effectiveRiskPerTradePct,g_effectiveMaxOpenRiskPct,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,g_effectiveMaxDailyLossPct,g_effectiveLotCap,(g_effectiveCompounding?"true":"false")));
    Print(StringFormat("[BUILD] strategies trend=true pullback=false compression=true expansion=false micro=%s lifecycleFlags be=%s trailing=%s partial=%s", "true",(EnableBreakeven?"true":"false"),(EnableTrailing?"true":"false"),(enablePartialClose?"true":"false")));
+   Print(StringFormat("[INPUT_SURFACE_MASTER] enabledTrend=%s enabledCompression=%s enabledMicro=%s researchIsolated=%s researchStrategy=%s disableArbitrator=%s",(InpEnableTrendContinuation?"true":"false"),(InpEnableCompressionBreakout?"true":"false"),(InpEnableMicroScalper?"true":"false"),(InpResearchIsolatedMode?"true":"false"),InpResearchStrategy,(InpResearchDisableArbitrator?"true":"false")));
+   Print(StringFormat("[INPUT_SURFACE_TREND_ENTRY] minStructure=%.2f minMomentum=%.2f minReclaim=%.2f maxChop=%.2f maxLateEntry=%.2f maxEntryDistanceAtr=%.2f allowMomentum=%s allowReclaim=%s allowFallback=%s",InpTrendMinStructureQuality,InpTrendMinMomentumQuality,InpTrendMinReclaimQuality,InpTrendMaxChopRisk,InpTrendMaxLateEntryRisk,InpTrendMaxEntryDistanceAtr,(InpTrendAllowMomentumPath?"true":"false"),(InpTrendAllowReclaimPath?"true":"false"),(InpTrendAllowFallbackPath?"true":"false")));
+   Print(StringFormat("[INPUT_SURFACE_TREND_SL] atrPeriod=%d slAtrMult=%.2f structureBufferAtr=%.2f minSlAtr=%.2f maxSlAtr=%.2f rejectSlTooWide=%s",InpTrendAtrPeriod,InpTrendSlAtrMult,InpTrendStructureBufferAtr,InpTrendMinSlAtr,InpTrendMaxSlAtr,(InpTrendRejectSlTooWide?"true":"false")));
+   Print(StringFormat("[INPUT_SURFACE_TREND_TP_RR] tp1APlus=%.2f tp2APlus=%.2f tp1A=%.2f tp2A=%.2f tp1B=%.2f tp2B=%.2f minRR=%.2f maxTp2AmbitionR=%.2f",InpTrendTp1R_APlus,InpTrendTp2R_APlus,InpTrendTp1R_A,InpTrendTp2R_A,InpTrendTp1R_B,InpTrendTp2R_B,InpTrendMinRR,InpTrendMaxTp2AmbitionR));
+   Print(StringFormat("[INPUT_SURFACE_TREND_SCORE] scoreMin=%.2f tierAPlus=%.2f tierA=%.2f tierB=%.2f momentumWeight=%.2f reclaimWeight=%.2f structureWeight=%.2f chopPenalty=%.2f latePenalty=%.2f slPenalty=%.2f",InpTrendScoreMin,InpTrendTierAPlusScore,InpTrendTierAScore,InpTrendTierBScore,InpTrendMomentumWeight,InpTrendReclaimWeight,InpTrendStructureWeight,InpTrendChopPenaltyWeight,InpTrendLateEntryPenaltyWeight,InpTrendSlWidthPenaltyWeight));
+   Print(StringFormat("[INPUT_SURFACE_TREND_LIFECYCLE] strategyLifecycle=%s beTriggerR=%.2f beBufferR=%.2f trailingStartR=%.2f trailingAtrMult=%.2f trailingStepR=%.2f timeStopBars=%d earlyExit=%s",(InpTrendUseStrategySpecificLifecycle?"true":"false"),InpTrendBETriggerR,InpTrendBEBufferR,InpTrendTrailingStartR,InpTrendTrailingAtrMult,InpTrendTrailingStepR,InpTrendTimeStopBars,(InpTrendEarlyExitEnabled?"true":"false")));
    Print(StringFormat("[INPUTS_EFFECTIVE] executionMode=%s symbol=%s timeframe=%s riskPct=%.2f maxDailyLossPct=%.2f maxActiveTrades=%d maxTradesPerDay=%d sessionFilter=%s spreadLimit=%.1f partialClosePercent=%.1f breakeven=%s/atr=%.2f trailing=%s/atr=%.2f multiSymbol=%s symbols=%s",modeLabel,_Symbol,TfName(),g_effectiveRiskPerTradePct,g_effectiveMaxDailyLossPct,g_effectiveMaxActiveTrades,g_effectiveMaxTradesPerDay,(UseSessionFilter?"true":"false"),MaxSpreadPoints,partialClosePercent,(EnableBreakeven?"true":"false"),breakevenAtR,(EnableTrailing?"true":"false"),trailingAtrMultiplier,(g_enableMultiSymbolScannerEffective?"true":"false"),g_scannerSymbolsEffective));
    Print(StringFormat("[STARTUP_FOREX] primary=TrendContinuation secondary=CompressionBreakout secondaryEnabled=%s arbitratorEnabled=%s disabled=[PullbackContinuation,ExpansionMomentum,Micro] riskPct=%.2f maxSpread=%.1f maxTradesDay=%d maxOpen=%d maxPerSymbol=%d",(EnableSecondaryStrategy?"true":"false"),(EnableArbitrator?"true":"false"),g_effectiveRiskPerTradePct,MaxSpreadPoints,g_effectiveMaxTradesPerDay,g_effectiveMaxActiveTrades,MaxPositionsPerSymbol));
    Print("[ACTIVE_STRATEGY_GATE] strategy=TrendContinuation allowed=true moduleCalled=0 rawCandidates=0 validPlans=0 selected=0 blockedReason=none");
