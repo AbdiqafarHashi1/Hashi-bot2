@@ -202,6 +202,13 @@ public:
    string TrendExposureSummary() const { return m_trend.ExposureSummary(); }
    string CompressionExposureSummary() const { return m_compression.ExposureSummary(); }
    string TrendProvenBlockerSummary() const { return m_trend.ProvenBlockerSummary(); }
+   string TrendForensicCountsSummary() const { return m_trend.ForensicCountsSummary(); }
+   string TrendForensicPathsSummary() const { return m_trend.ForensicPathsSummary(); }
+   string TrendForensicRejectsSummary() const { return m_trend.ForensicRejectsSummary(); }
+   string TrendForensicAvgGeometrySummary() const { return m_trend.ForensicAvgGeometrySummary(); }
+   string TrendForensicAvgQualitySummary() const { return m_trend.ForensicAvgQualitySummary(); }
+   string TrendForensicManagementSummary() const { return m_trend.ForensicManagementSummary(); }
+   string TrendForensicNextHintSummary() const { return m_trend.ForensicNextHintSummary(); }
    string CompressionProvenBlockerSummary() const { return m_compression.ProvenBlockerSummary(); }
    long MicroValidCreated() const { return m_microValidCreated; }
 
