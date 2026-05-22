@@ -1423,20 +1423,24 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
         }
      }
    int trendValid=0,compressionValid=0,microValid=0;
+   int trendAddedToArbitration=0,compressionAddedToArbitration=0,microAddedToArbitration=0;
    for(int vi=0;vi<arb.candidateCount;vi++)
      {
       if(!arb.candidates[vi].isValid) continue;
       if(arb.candidates[vi].strategy==STRATEGY_TREND_CONTINUATION) trendValid++;
       else if(arb.candidates[vi].strategy==STRATEGY_COMPRESSION_BREAKOUT) compressionValid++;
      else if(arb.candidates[vi].strategy==STRATEGY_MICRO_SCALPER) microValid++;
+      if(arb.candidates[vi].strategy==STRATEGY_TREND_CONTINUATION) trendAddedToArbitration++;
+      else if(arb.candidates[vi].strategy==STRATEGY_COMPRESSION_BREAKOUT) compressionAddedToArbitration++;
+      else if(arb.candidates[vi].strategy==STRATEGY_MICRO_SCALPER) microAddedToArbitration++;
      }
    pdValidCandidateCount=(trendValid+compressionValid+microValid);
    Print(StringFormat("[ARBITRATION_INPUT] trendValid=%d compressionValid=%d microValid=%d totalValidCandidates=%d eligibleStrategies=%s",
                       trendValid,compressionValid,microValid,(trendValid+compressionValid+microValid),eligibleStrategies));
    g_trendArbValid += trendValid;
-   g_trendArbAdded += trendValid;
+   g_trendArbAdded += trendAddedToArbitration;
    g_compressionArbValid += compressionValid;
-   g_compressionArbAdded += compressionValid;
+   g_compressionArbAdded += compressionAddedToArbitration;
    if(trendValid>0 && !arb.hasWinner){ g_trendArbRejected++; if(arb.reason!="") g_trendTopArbReject=arb.reason; }
    if(compressionValid>0 && !arb.hasWinner){ g_compressionArbRejected++; if(arb.reason!="") g_compressionTopArbReject=arb.reason; }
    int rankIndex[HASHIBOT_MAX_CANDIDATES];
@@ -1986,6 +1990,8 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
    Print(StringFormat("[COMPRESSION_PROFITABILITY_SUMMARY] source=OnDeinit strategy=CompressionBreakout note=final_summary_path_active selected=%d accepted=%d rejected=%d",g_compressionSelected,g_compressionAcceptedFinal,g_compressionRejectedFinal));
    Print(StringFormat("[TREND_SELECTION_SUMMARY] trendValid=%d trendAddedToArbitration=%d trendSelected=%d trendLostToMicro=%d trendLostToCompression=%d trendRejectedByArbitration=%d topTrendArbReject=%s",
                       g_trendArbValid,g_trendArbAdded,g_trendArbWinner,g_trendArbLostToMicro,g_trendArbLostToCompression,g_trendArbRejected,g_trendTopArbReject));
+   Print(StringFormat("[TREND_PIPELINE_VALIDITY_SUMMARY] trendInternalValid=%d trendAddedToArbitration=%d arbitrationValidPlans=%d trendSelected=%d executeSelectedPlanCalled=%d topRejectReason=%s nextHint=%s",
+                      g_trendArbValid,g_trendArbAdded,g_pipePlanOk[0],g_trendArbWinner,g_pipelineExecuteSelectedPlanCalled,g_trendTopArbReject,g_arb.TrendForensicNextHintSummary()));
    Print(StringFormat("[COMPRESSION_SELECTION_SUMMARY] compressionValid=%d compressionAddedToArbitration=%d compressionSelected=%d compressionLostToMicro=%d compressionRejectedByArbitration=%d topCompressionArbReject=%s",
                       g_compressionArbValid,g_compressionArbAdded,g_compressionArbWinner,g_compressionArbLostToMicro,g_compressionArbRejected,g_compressionTopArbReject));
    if(InpVerboseDiagnostics) Print(StringFormat("[STRATEGY_TOTALS] trendRaw=%d trendValid=%d trendSelected=%d compressionRaw=%d compressionValid=%d compressionSelected=%d microRaw=%d microValid=%d microSelected=%d",
