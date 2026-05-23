@@ -1495,7 +1495,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      }
 
    g_symCandidates[symIdx]+=arb.candidateCount;
-   for(int ci=0;ci<arb.candidateCount;ci++){ StrategyType st=arb.candidates[ci].strategy; bool ok=arb.candidates[ci].isValid; int b=StrategyBucket(st); if(arb.candidates[ci].direction==TRADE_DIR_LONG || arb.candidates[ci].direction==TRADE_DIR_SHORT) g_diagValidDirCandidates[b]++; else g_diagAmbiguousDirRejects[b]++; if(st==STRATEGY_TREND_CONTINUATION){ if(ok) g_trendAccepted++; else g_trendRejected++; } else if(st==STRATEGY_PULLBACK_CONTINUATION){ if(ok) g_pullbackAccepted++; else g_pullbackRejected++; } else if(st==STRATEGY_COMPRESSION_BREAKOUT){ if(ok) g_compressionAccepted++; else g_compressionRejected++; } else if(st==STRATEGY_EXPANSION_MOMENTUM){ if(ok) g_expansionAccepted++; else g_expansionRejected++; } }
+   for(int ci=0;ci<arb.candidateCount;ci++){ StrategyType st=arb.candidates[ci].strategy; bool ok=arb.candidates[ci].isValid; int b=StrategyBucket(st); if(arb.candidates[ci].direction==TRADE_DIR_LONG || arb.candidates[ci].direction==TRADE_DIR_SHORT) g_diagValidDirCandidates[b]++; else g_diagAmbiguousDirRejects[b]++; if(st==STRATEGY_TREND_CONTINUATION){ if(ok) g_trendAccepted++; else g_trendRejected++; } else if(st==STRATEGY_PULLBACK_CONTINUATION){ if(ok) g_pullbackAccepted++; else g_pullbackRejected++; } else if(st==STRATEGY_COMPRESSION_BREAKOUT){ if(ok) g_compressionAccepted++; else g_compressionRejected++; } else if(st==STRATEGY_EXPANSION_MOMENTUM){ if(ok) g_expansionAccepted++; else g_expansionRejected++; } string candPlanReason=""; bool candPlanOk=g_order.ValidateTradePlan(arb.candidates[ci].plan, ctx, candPlanReason); if(candPlanOk){ g_pipePlanOk[b]++; g_symValidPlans[symIdx]++; g_starveValidPlans++; } else { g_pipePlanRej[b]++; g_starveRejectedBeforePlan++; if(st==STRATEGY_TREND_CONTINUATION) Print(StringFormat("[TREND_PRE_PLAN_REJECT_REASON] reason=%s hasEntry=%s hasSL=%s hasTP1=%s hasTP2=%s hasRR=%s hasSide=%s candidateValid=%s planValid=%s",candPlanReason,(arb.candidates[ci].plan.entryPrice>0.0?"true":"false"),(arb.candidates[ci].plan.stopLoss>0.0?"true":"false"),(arb.candidates[ci].plan.takeProfit1>0.0?"true":"false"),(arb.candidates[ci].plan.takeProfit2>0.0?"true":"false"),(arb.candidates[ci].plan.riskR>0.0?"true":"false"),((arb.candidates[ci].plan.direction==TRADE_DIR_LONG || arb.candidates[ci].plan.direction==TRADE_DIR_SHORT)?"true":"false"),(arb.candidates[ci].isValid?"true":"false"),"false")); } if(st==STRATEGY_TREND_CONTINUATION && candPlanOk) Print(StringFormat("[TREND_PRE_PLAN_PASS] entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f side=%s planValid=%s",arb.candidates[ci].plan.entryPrice,arb.candidates[ci].plan.stopLoss,arb.candidates[ci].plan.takeProfit1,arb.candidates[ci].plan.takeProfit2,arb.candidates[ci].plan.riskR,DirName(arb.candidates[ci].plan.direction),"true")); }
    bool candidateGradeOK=(!scalperMode || scalperAllowBGrade || arb.winningGrade>=SIGNAL_GRADE_A);
    TradePlan chosenPlan; double chosenScore=0.0; SignalGrade chosenGrade=SIGNAL_GRADE_REJECT; string selectedPlanReason=""; bool chosenFromFallback=false;
    string edgeRejectReason="none";
@@ -1543,7 +1543,7 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
    Print(StringFormat("[PIPE] plan_valid ok=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",(validPlan?"true":"false"),vreason,chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2));
    if(validPlan)
      {
-      g_pipePlanOk[sb]++; g_symValidPlans[symIdx]++; g_diagWinnerValidDir[sb]++; g_starveValidPlans++;
+      g_diagWinnerValidDir[sb]++;
       Print(StringFormat("[VALID_PLAN_SOURCE] strategy=%s rawCandidateId=%d candidateValid=true planOk=true rr=%.2f score=%.2f sl=%.5f tp=%.5f",StrategyName(chosenPlan.strategy),sb,RRNetAfterSpread(chosenPlan,ctx),chosenScore,chosenPlan.stopLoss,chosenPlan.takeProfit1));
       if(chosenPlan.strategy==STRATEGY_TREND_CONTINUATION)
          Print(StringFormat("[TREND_PLAN_BUILD_ACCEPT_TRACE] side=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s",
@@ -1551,11 +1551,10 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
      }
    else
      {
-      g_pipePlanRej[sb]++; g_r_incomplete++; g_diagWinnerBlockedInvalidPlan[sb]++; g_starveRejectedBeforePlan++;
+      g_r_incomplete++; g_diagWinnerBlockedInvalidPlan[sb]++;
       if(chosenPlan.strategy==STRATEGY_TREND_CONTINUATION)
-         Print(StringFormat("[TREND_PRE_PLAN_REJECT_TRACE] reason=%s side=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s hasEntry=%s hasSL=%s hasTP1=%s hasTP2=%s",
-                            vreason,DirName(chosenPlan.direction),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,RRNetAfterSpread(chosenPlan,ctx),chosenScore,"false",
-                            (chosenPlan.entryPrice>0.0?"true":"false"),(chosenPlan.stopLoss>0.0?"true":"false"),(chosenPlan.takeProfit1>0.0?"true":"false"),(chosenPlan.takeProfit2>0.0?"true":"false")));
+         Print(StringFormat("[TREND_PRE_PLAN_REJECT_REASON] reason=%s hasEntry=%s hasSL=%s hasTP1=%s hasTP2=%s hasRR=%s hasSide=%s candidateValid=%s planValid=%s",
+                            vreason,(chosenPlan.entryPrice>0.0?"true":"false"),(chosenPlan.stopLoss>0.0?"true":"false"),(chosenPlan.takeProfit1>0.0?"true":"false"),(chosenPlan.takeProfit2>0.0?"true":"false"),(RRNetAfterSpread(chosenPlan,ctx)>0.0?"true":"false"),((chosenPlan.direction==TRADE_DIR_LONG || chosenPlan.direction==TRADE_DIR_SHORT)?"true":"false"),"true","false"));
       return;
      }
    if(g_diagValidDirCandidates[sb]==0 && (g_pipePlanOk[sb]>0 || g_pipeWinnerSel[sb]>0))
