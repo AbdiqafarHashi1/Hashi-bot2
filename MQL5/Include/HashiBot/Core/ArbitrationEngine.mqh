@@ -606,7 +606,7 @@ public:
       int eligibleCount = 0;
       for(int wi=0; wi<m_candidateCount; wi++)
         {
-         const StrategyCandidate &wc=m_candidates[wi];
+         StrategyCandidate wc=m_candidates[wi];
          bool planValid=StrategyTypes::IsTradePlanComplete(wc.plan);
          bool directionValid=IsDirectionValid(wc.direction) && IsDirectionValid(wc.plan.direction);
          bool scoreValid=MathIsValidNumber(wc.score.totalScore) && wc.score.totalScore>0.0;
@@ -643,7 +643,7 @@ public:
         {
          for(int wi=0; wi<m_candidateCount; wi++)
            {
-            const StrategyCandidate &wc=m_candidates[wi];
+            StrategyCandidate wc=m_candidates[wi];
             if(wc.strategy!=STRATEGY_TREND_CONTINUATION) continue;
             bool planValid=StrategyTypes::IsTradePlanComplete(wc.plan);
             bool directionValid=IsDirectionValid(wc.direction) && IsDirectionValid(wc.plan.direction);
