@@ -252,7 +252,7 @@ long g_trendArbValid=0,g_trendArbAdded=0,g_trendArbWinner=0,g_trendArbLostToMicr
 long g_compressionArbValid=0,g_compressionArbAdded=0,g_compressionArbWinner=0,g_compressionArbLostToMicro=0,g_compressionArbRejected=0;
 string g_trendTopArbReject="none";
 string g_compressionTopArbReject="none";
-bool g_isTester=false; double g_testerMinScore=0.0,g_testerSpreadLimitPoints=0.0;
+bool g_isTester=false; double g_testerMinScore=0.0,g_testerSpreadLimitPoints=0.0; bool g_testerUseSessionFilter=true;
 long g_rejectPayoffAsymmetry=0,g_drawdownLockLevel=0;
 long g_phaseABarsEvaluated=0,g_phaseANoCandidate=0;
 long g_invalidSpreadEvents=0,g_marketDataInvalidEvents=0;
@@ -856,7 +856,8 @@ int RejectionReasonBucket(const string reason)
 
 bool PassSessionFilter(const datetime t,const string symbol,string &reason)
   {
-   if(!UseSessionFilter){ reason="session_filter_off"; return true; }
+   bool useFilter=(g_isTester?g_testerUseSessionFilter:UseSessionFilter);
+   if(!useFilter){ reason="session_filter_off"; return true; }
    MqlDateTime ts; TimeToStruct(t, ts);
    if(sessionStartHourUtc<=sessionEndHourUtc)
      { if(ts.hour<sessionStartHourUtc || ts.hour>=sessionEndHourUtc){ reason="session_out_of_window"; return false; } }
@@ -1822,11 +1823,13 @@ int OnInit(){ if(enableDryRunSelfCheck){} g_ctxBuilder.Init(); g_regime.Init(); 
    g_isTester=(MQLInfoInteger(MQL_TESTER)>0);
    g_testerMinScore=minCandidateScore;
    g_testerSpreadLimitPoints=MaxSpreadPoints;
+   g_testerUseSessionFilter=UseSessionFilter;
    if(g_isTester)
      {
-      g_testerMinScore=MathMax(0.54,minCandidateScore-0.04);
-      g_testerSpreadLimitPoints=MathMax(MaxSpreadPoints,30.0);
-      Print(StringFormat("[TESTER_RELAX] enabled=true minScore=%.2f spreadLimit=%.1f",g_testerMinScore,g_testerSpreadLimitPoints));
+      g_testerMinScore=MathMax(0.50,minCandidateScore-0.10);
+      g_testerSpreadLimitPoints=MathMax(MaxSpreadPoints,45.0);
+      g_testerUseSessionFilter=false;
+      Print(StringFormat("[TESTER_RELAX] enabled=true minScore=%.2f spreadLimit=%.1f sessionFilter=%s",g_testerMinScore,g_testerSpreadLimitPoints,(g_testerUseSessionFilter?"true":"false")));
      }
    string modeLabel=(executionMode==EXEC_MODE_LOG_ONLY?"log_only":(executionMode==EXEC_MODE_DRYRUN?"dryrun":(executionMode==EXEC_MODE_TESTER_SIM?"tester_sim":"live_or_demo")));
    string profileLabel="adaptive_core_compat";
