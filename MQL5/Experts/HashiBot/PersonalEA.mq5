@@ -1686,6 +1686,8 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
                          (submitExecutionMode==EXEC_MODE_DRYRUN?"true":"false"),(submitExecutionMode==EXEC_MODE_LOG_ONLY?"true":"false"),(testerMode?"true":"false"),(int)submitExecutionMode,accountModeLabel));
       g_execCtx=ctx; g_execRisk=risk; g_execTradeState=tstate; g_execSymbol=symbol; g_execScore=chosenScore;
       g_execSelectedPlanExists=validPlan; g_execRiskApproved=risk.approved; g_execPortfolioApproved=portfolioOK; g_execRuntimeLimitsApproved=runtimeLimitsApproved;
+      Print(StringFormat("[SELECTED_PLAN_HANDOFF_TRACE] hasWinner=%s selected=%d planValid=%s strategy=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f executeSelectedPlanCalledBefore=%d",
+                         (arb.hasWinner?"true":"false"),1,(validPlan?"true":"false"),StrategyName(chosenPlan.strategy),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,rrAccept,g_pipelineExecuteSelectedPlanCalled));
       enteredExecuteSelectedPlan=true;
       g_starveSelected++;
       g_pipeWinnerSel[sb]++; g_symSelected[symIdx]++; 

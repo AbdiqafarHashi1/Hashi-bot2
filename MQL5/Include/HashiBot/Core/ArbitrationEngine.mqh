@@ -603,6 +603,7 @@ public:
       int bestIndex = -1;
       int validPlanCount = 0;
       int trendValidPlanCount = 0;
+      int eligibleCount = 0;
       for(int wi=0; wi<m_candidateCount; wi++)
         {
          const StrategyCandidate &wc=m_candidates[wi];
@@ -610,15 +611,18 @@ public:
          bool directionValid=IsDirectionValid(wc.direction) && IsDirectionValid(wc.plan.direction);
          bool scoreValid=MathIsValidNumber(wc.score.totalScore) && wc.score.totalScore>0.0;
          bool eligible=(wc.isValid && planValid && directionValid && scoreValid);
+         string rejectReason="none";
+         if(!wc.isValid) rejectReason="candidate_not_valid";
+         else if(!planValid) rejectReason="plan_invalid";
+         else if(!directionValid) rejectReason="direction_invalid";
+         else if(!scoreValid) rejectReason="score_invalid";
          if(planValid && directionValid && scoreValid)
            {
             validPlanCount++;
             if(wc.strategy==STRATEGY_TREND_CONTINUATION)
                trendValidPlanCount++;
            }
-         Print(StringFormat("[WINNER_SELECTION_INPUT_TRACE] strategy=%s index=%d valid=%s planValid=%s score=%.5f totalScore=%.5f rr=%.5f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f side=%s direction=%s",
-                            StrategyTypes::StrategyName(wc.strategy),wi,(wc.isValid?"true":"false"),(planValid?"true":"false"),wc.score.totalScore,wc.score.totalScore,wc.plan.riskR,wc.plan.entryPrice,wc.plan.stopLoss,wc.plan.takeProfit1,wc.plan.takeProfit2,
-                            StrategyTypes::DirectionName(wc.plan.direction),StrategyTypes::DirectionName(wc.direction)));
+         if(eligible) eligibleCount++;
          double bestBefore=bestScore;
          string considerReason=(eligible?"eligible":"not_eligible");
          if(eligible && wc.score.totalScore > bestScore)
@@ -627,10 +631,14 @@ public:
             bestIndex=wi;
             considerReason="new_best";
            }
-         Print(StringFormat("[WINNER_SELECTION_CONSIDER_TRACE] strategy=%s index=%d eligible=%s reason=%s score=%.5f bestBefore=%.5f bestAfter=%.5f",
-                            StrategyTypes::StrategyName(wc.strategy),wi,(eligible?"true":"false"),considerReason,wc.score.totalScore,bestBefore,bestScore));
+         Print(StringFormat("[WINNER_SELECTION_CONSIDER_TRACE] index=%d strategy=%s isValid=%s planValid=%s score=%.5f rr=%.5f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f eligible=%s rejectReason=%s bestBefore=%.5f bestAfter=%.5f",
+                            wi,StrategyTypes::StrategyName(wc.strategy),(wc.isValid?"true":"false"),(planValid?"true":"false"),wc.score.totalScore,wc.plan.riskR,wc.plan.entryPrice,wc.plan.stopLoss,wc.plan.takeProfit1,wc.plan.takeProfit2,(eligible?"true":"false"),rejectReason,bestBefore,bestScore));
         }
+      Print(StringFormat("[WINNER_SELECTION_INPUT_TRACE] totalCandidates=%d validPlans=%d trendValidPlans=%d isolated=%s researchStrategy=%s minTopScore=%.5f topScore=%.5f",
+                         m_candidateCount,validPlanCount,trendValidPlanCount,(isolatedTrendOnlyCandidateSet?"true":"false"),m_researchStrategy,minTopScore,result.topScore));
       winner = bestIndex;
+      // In isolated TREND research mode, valid plan flow can provide plan-complete candidates
+      // while wc.isValid is false; fall back to best plan-complete TREND candidate only in this mode.
       if(winner < 0 && isolatedTrendOnlyCandidateSet && trendValidPlanCount>0)
         {
          for(int wi=0; wi<m_candidateCount; wi++)
@@ -653,8 +661,8 @@ public:
          result.noTrade = true;
          result.reason = "no_valid_winner";
          m_noValidWinnerCount++;
-         Print(StringFormat("[WINNER_SELECTION_ZERO_TRACE] validPlans=%d trendValidPlans=%d reason=%s bestScore=%.5f minScore=%.5f bestIndex=%d isolatedTrend=%s",
-                            validPlanCount,trendValidPlanCount,"winner_selection_failed",bestScore,minTopScore,bestIndex,(isolatedTrendOnlyCandidateSet?"true":"false")));
+         Print(StringFormat("[WINNER_SELECTION_ZERO_TRACE] reason=%s totalCandidates=%d validPlans=%d eligibleCount=%d bestScore=%.5f minTopScore=%.5f",
+                            "winner_selection_failed",m_candidateCount,validPlanCount,eligibleCount,bestScore,minTopScore));
          Print("[ARB] no_valid_winner reason=winner_selection_failed");
          return result;
         }
@@ -681,9 +689,8 @@ public:
       result.plan = m_candidates[winner].plan;
       result.reason = CANDIDATE_REASON_OK;
       if(m_candidates[winner].strategy==STRATEGY_TREND_CONTINUATION)
-         Print(StringFormat("[TREND_WINNER_SELECTED_TRACE] selectedIndex=%d score=%.5f rr=%.5f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f side=%s direction=%s",
-                            winner,m_candidates[winner].score.totalScore,m_candidates[winner].plan.riskR,m_candidates[winner].plan.entryPrice,m_candidates[winner].plan.stopLoss,m_candidates[winner].plan.takeProfit1,m_candidates[winner].plan.takeProfit2,
-                            StrategyTypes::DirectionName(m_candidates[winner].plan.direction),StrategyTypes::DirectionName(m_candidates[winner].direction)));
+         Print(StringFormat("[TREND_WINNER_SELECTED_TRACE] index=%d score=%.5f rr=%.5f entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f selected=%d",
+                            winner,m_candidates[winner].score.totalScore,m_candidates[winner].plan.riskR,m_candidates[winner].plan.entryPrice,m_candidates[winner].plan.stopLoss,m_candidates[winner].plan.takeProfit1,m_candidates[winner].plan.takeProfit2,1));
       return result;
      }
 
