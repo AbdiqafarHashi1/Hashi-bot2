@@ -551,9 +551,19 @@ public:
       result.scoreMargin = MathMax(0.0, result.topScore - result.secondScore);
 
       bool isolatedTrendResearchMode=(m_researchIsolated && (m_researchStrategy=="TREND" || m_researchStrategy=="trend"));
-      bool allowTopScoreBypass=false;
-      if(isolatedTrendResearchMode && m_candidateCount==1 && m_candidates[0].strategy==STRATEGY_TREND_CONTINUATION)
-         allowTopScoreBypass=true;
+      int trendCandidates=0;
+      int nonTrendCandidates=0;
+      for(int ci=0; ci<m_candidateCount; ci++)
+        {
+         if(m_candidates[ci].strategy==STRATEGY_TREND_CONTINUATION)
+            trendCandidates++;
+         else
+            nonTrendCandidates++;
+        }
+      bool isolatedTrendOnlyCandidateSet=(isolatedTrendResearchMode && trendCandidates>0 && nonTrendCandidates==0);
+      bool allowTopScoreBypass=isolatedTrendOnlyCandidateSet;
+      Print(StringFormat("[RESEARCH_ISOLATED_CANDIDATE_SET] researchStrategy=%s totalCandidates=%d trendCandidates=%d nonTrendCandidates=%d validTrendPlans=%d selectedTrend=%s",
+                         (isolatedTrendResearchMode?"TREND":"OTHER"),m_candidateCount,trendCandidates,nonTrendCandidates,trendCandidates,(isolatedTrendOnlyCandidateSet?"true":"false")));
       Print(StringFormat("[ARBITRATION_TOP_SCORE_GATE_TRACE] topScore=%.5f minTopScore=%.5f bypassEligible=%s researchIsolated=%s researchStrategy=%s candidateCount=%d",
                          result.topScore,minTopScore,(allowTopScoreBypass?"true":"false"),(m_researchIsolated?"true":"false"),m_researchStrategy,m_candidateCount));
       if(result.topScore < minTopScore && !allowTopScoreBypass)
