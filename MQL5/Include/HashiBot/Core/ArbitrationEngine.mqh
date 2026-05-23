@@ -73,7 +73,7 @@ private:
      {
       string rejectReason="OK",rejectDetail="";
       if(!c.isValid) { rejectReason="INVALID_FLAG_FALSE"; rejectDetail="candidate_is_valid_false"; }
-      else if(c.rejectReason != CANDIDATE_REASON_OK || c.reason != "OK") { rejectReason="REJECT_REASON_NOT_OK"; rejectDetail=StringFormat("rejectReason=%s reason=%s",c.rejectReason,c.reason); }
+      else if(c.rejectReason != CANDIDATE_REASON_OK) { rejectReason="REJECT_REASON_NOT_OK"; rejectDetail=StringFormat("rejectReason=%s reason=%s",c.rejectReason,c.reason); }
       else if(c.direction == TRADE_DIR_NONE || c.plan.direction == TRADE_DIR_NONE) { rejectReason="INVALID_DIRECTION_NONE"; rejectDetail="candidate_or_plan_direction_none"; }
       else if(c.plan.entryPrice<=0.0) { rejectReason="INVALID_ENTRY_PRICE"; rejectDetail="entry_non_positive"; }
       else if(c.plan.stopLoss<=0.0) { rejectReason="INVALID_STOP_LOSS"; rejectDetail="stop_loss_non_positive"; }
@@ -89,13 +89,16 @@ private:
                             StrategyTypes::StrategyName(c.strategy),rejectReason,(c.isValid?"true":"false"),c.rejectReason,StrategyTypes::DirectionName(c.direction),
                             c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore));
          if(c.strategy==STRATEGY_TREND_CONTINUATION)
-            Print(StringFormat("[ARBITRATION_PLAN_REJECT_TRACE] strategy=TrendContinuation reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s side=%s direction=%s",
-                               rejectReason,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore,
-                               (c.isValid?"true":"false"),StrategyTypes::DirectionName(c.direction),StrategyTypes::DirectionName(c.plan.direction)));
-         if(c.strategy==STRATEGY_TREND_CONTINUATION)
-            Print(StringFormat("[TREND_PRE_PLAN_REJECT_TRACE] reason=%s side=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s hasEntry=%s hasSL=%s hasTP1=%s hasTP2=%s",
-                               rejectReason,StrategyTypes::DirectionName(c.direction),StrategyTypes::DirectionName(c.plan.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore,"false",
-                               (c.plan.entryPrice>0.0?"true":"false"),(c.plan.stopLoss>0.0?"true":"false"),(c.plan.takeProfit1>0.0?"true":"false"),(c.plan.takeProfit2>0.0?"true":"false")));
+            Print(StringFormat("[TREND_PRE_PLAN_REJECT_REASON] reason=%s hasEntry=%s hasSL=%s hasTP1=%s hasTP2=%s hasRR=%s hasSide=%s candidateValid=%s planValid=%s",
+                               rejectReason,
+                               (c.plan.entryPrice>0.0?"true":"false"),
+                               (c.plan.stopLoss>0.0?"true":"false"),
+                               (c.plan.takeProfit1>0.0?"true":"false"),
+                               (c.plan.takeProfit2>0.0?"true":"false"),
+                               (c.plan.riskR>0.0?"true":"false"),
+                               ((c.direction==TRADE_DIR_LONG || c.direction==TRADE_DIR_SHORT || c.plan.direction==TRADE_DIR_LONG || c.plan.direction==TRADE_DIR_SHORT)?"true":"false"),
+                               (c.isValid?"true":"false"),
+                               ((c.plan.direction==TRADE_DIR_LONG || c.plan.direction==TRADE_DIR_SHORT) && c.plan.entryPrice>0.0 && c.plan.stopLoss>0.0 && c.plan.takeProfit1>0.0 && c.plan.takeProfit2>0.0 && c.plan.riskR>0.0 ? "true":"false")));
          return false;
         }
       if(m_candidateCount >= HASHIBOT_MAX_CANDIDATES)
@@ -107,12 +110,9 @@ private:
       m_candidates[m_candidateCount] = c;
       m_candidateCount++;
       if(c.strategy==STRATEGY_TREND_CONTINUATION)
-         Print(StringFormat("[ARBITRATION_PLAN_ACCEPT_TRACE] strategy=TrendContinuation entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s side=%s direction=%s",
-                            c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore,
-                            (c.isValid?"true":"false"),StrategyTypes::DirectionName(c.direction),StrategyTypes::DirectionName(c.plan.direction)));
-      if(c.strategy==STRATEGY_TREND_CONTINUATION)
-         Print(StringFormat("[TREND_PLAN_BUILD_ACCEPT_TRACE] side=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s",
-                            StrategyTypes::DirectionName(c.plan.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore,(c.isValid?"true":"false")));
+         Print(StringFormat("[TREND_PRE_PLAN_PASS] entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f side=%s planValid=%s",
+                            c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,StrategyTypes::DirectionName(c.plan.direction),
+                            ((c.plan.direction==TRADE_DIR_LONG || c.plan.direction==TRADE_DIR_SHORT) && c.plan.entryPrice>0.0 && c.plan.stopLoss>0.0 && c.plan.takeProfit1>0.0 && c.plan.takeProfit2>0.0 && c.plan.riskR>0.0 ? "true":"false")));
       rejectReasonOut="OK";
       rejectDetailOut="";
       return true;
