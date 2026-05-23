@@ -47,6 +47,18 @@ private:
    long                          m_compModuleCalled,m_compEnoughBars,m_compSessionOk,m_compSpreadOk,m_compAtrReady,m_compBoxReady,m_compCompressionDetected,m_compBreakoutDetected,m_compRawCreated;
    long                          m_microModuleCalled,m_microRawCreated,m_microValidCreated;
    bool                          m_verboseDiagnostics;
+   string NormalizeStrategyName(const string value) const
+     {
+      string normalized=value;
+      StringTrimLeft(normalized);
+      StringTrimRight(normalized);
+      StringToUpper(normalized);
+      return normalized;
+     }
+   bool IsTrendResearchMode() const
+     {
+      return (m_researchIsolated && NormalizeStrategyName(m_researchStrategy)=="TREND");
+     }
 
 private:
    SignalGrade GradeFromScore(const double score) const
@@ -80,6 +92,10 @@ private:
             Print(StringFormat("[ARBITRATION_PLAN_REJECT_TRACE] strategy=TrendContinuation reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s side=%s direction=%s",
                                rejectReason,c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore,
                                (c.isValid?"true":"false"),StrategyTypes::DirectionName(c.direction),StrategyTypes::DirectionName(c.plan.direction)));
+         if(c.strategy==STRATEGY_TREND_CONTINUATION)
+            Print(StringFormat("[TREND_PRE_PLAN_REJECT_TRACE] reason=%s side=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s hasEntry=%s hasSL=%s hasTP1=%s hasTP2=%s",
+                               rejectReason,StrategyTypes::DirectionName(c.direction),StrategyTypes::DirectionName(c.plan.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore,"false",
+                               (c.plan.entryPrice>0.0?"true":"false"),(c.plan.stopLoss>0.0?"true":"false"),(c.plan.takeProfit1>0.0?"true":"false"),(c.plan.takeProfit2>0.0?"true":"false")));
          return false;
         }
       if(m_candidateCount >= HASHIBOT_MAX_CANDIDATES)
@@ -94,6 +110,9 @@ private:
          Print(StringFormat("[ARBITRATION_PLAN_ACCEPT_TRACE] strategy=TrendContinuation entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s side=%s direction=%s",
                             c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore,
                             (c.isValid?"true":"false"),StrategyTypes::DirectionName(c.direction),StrategyTypes::DirectionName(c.plan.direction)));
+      if(c.strategy==STRATEGY_TREND_CONTINUATION)
+         Print(StringFormat("[TREND_PLAN_BUILD_ACCEPT_TRACE] side=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s",
+                            StrategyTypes::DirectionName(c.plan.direction),c.plan.entryPrice,c.plan.stopLoss,c.plan.takeProfit1,c.plan.takeProfit2,c.plan.riskR,c.score.totalScore,(c.isValid?"true":"false")));
       rejectReasonOut="OK";
       rejectDetailOut="";
       return true;
@@ -268,7 +287,7 @@ public:
       m_enableSecondaryStrategy = enableSecondary;
       m_enableArbitrator = enableArbitrator;
       m_verboseDiagnostics = verboseDiagnostics;
-      m_enableTrend=enableTrend; m_enableCompression=enableCompression; m_enableMicro=enableMicro; m_researchIsolated=researchIsolated; m_researchStrategy=researchStrategy; m_researchDisableArbitrator=researchDisableArbitrator;
+      m_enableTrend=enableTrend; m_enableCompression=enableCompression; m_enableMicro=enableMicro; m_researchIsolated=researchIsolated; m_researchStrategy=NormalizeStrategyName(researchStrategy); m_researchDisableArbitrator=researchDisableArbitrator;
      }
 
    void Reset()
@@ -372,7 +391,7 @@ public:
       StrategyCandidate c;
       bool trendValidThisCall=false,compValidThisCall=false,microValidThisCall=false;
       string trendReasonThisCall="NO_SETUP",compReasonThisCall="NO_SETUP",microReasonThisCall="NO_SETUP";
-      bool onlyTrend=(m_researchIsolated && (m_researchStrategy=="TREND" || m_researchStrategy=="trend"));
+      bool onlyTrend=IsTrendResearchMode();
       m_trendModuleCalled++;
       bool trendEnoughBars=(ctx.barsLoaded>=8); if(trendEnoughBars) m_trendEnoughBars++;
       bool trendSessionOk=true; if(trendSessionOk) m_trendSessionOk++;
@@ -550,7 +569,7 @@ public:
          result.secondScore = m_candidates[second].score.totalScore;
       result.scoreMargin = MathMax(0.0, result.topScore - result.secondScore);
 
-      bool isolatedTrendResearchMode=(m_researchIsolated && (m_researchStrategy=="TREND" || m_researchStrategy=="trend"));
+      bool isolatedTrendResearchMode=IsTrendResearchMode();
       int trendCandidates=0;
       int nonTrendCandidates=0;
       for(int ci=0; ci<m_candidateCount; ci++)
