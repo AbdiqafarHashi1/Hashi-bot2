@@ -1541,8 +1541,23 @@ void ProcessSymbol(const string symbol,const bool isNewBar)
 
    TradeState tstate; string vreason=""; bool validPlan=g_order.ValidateTradePlan(chosenPlan, ctx, vreason);
    Print(StringFormat("[PIPE] plan_valid ok=%s reason=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f",(validPlan?"true":"false"),vreason,chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2));
-   if(validPlan) { g_pipePlanOk[sb]++; g_symValidPlans[symIdx]++; g_diagWinnerValidDir[sb]++; g_starveValidPlans++; Print(StringFormat("[VALID_PLAN_SOURCE] strategy=%s rawCandidateId=%d candidateValid=true planOk=true rr=%.2f score=%.2f sl=%.5f tp=%.5f",StrategyName(chosenPlan.strategy),sb,RRNetAfterSpread(chosenPlan,ctx),chosenScore,chosenPlan.stopLoss,chosenPlan.takeProfit1)); }
-   else { g_pipePlanRej[sb]++; g_r_incomplete++; g_diagWinnerBlockedInvalidPlan[sb]++; g_starveRejectedBeforePlan++; return; }
+   if(validPlan)
+     {
+      g_pipePlanOk[sb]++; g_symValidPlans[symIdx]++; g_diagWinnerValidDir[sb]++; g_starveValidPlans++;
+      Print(StringFormat("[VALID_PLAN_SOURCE] strategy=%s rawCandidateId=%d candidateValid=true planOk=true rr=%.2f score=%.2f sl=%.5f tp=%.5f",StrategyName(chosenPlan.strategy),sb,RRNetAfterSpread(chosenPlan,ctx),chosenScore,chosenPlan.stopLoss,chosenPlan.takeProfit1));
+      if(chosenPlan.strategy==STRATEGY_TREND_CONTINUATION)
+         Print(StringFormat("[TREND_PLAN_BUILD_ACCEPT_TRACE] side=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s",
+                            DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,RRNetAfterSpread(chosenPlan,ctx),chosenScore,"true"));
+     }
+   else
+     {
+      g_pipePlanRej[sb]++; g_r_incomplete++; g_diagWinnerBlockedInvalidPlan[sb]++; g_starveRejectedBeforePlan++;
+      if(chosenPlan.strategy==STRATEGY_TREND_CONTINUATION)
+         Print(StringFormat("[TREND_PRE_PLAN_REJECT_TRACE] reason=%s side=%s direction=%s entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f rr=%.5f score=%.5f planValid=%s hasEntry=%s hasSL=%s hasTP1=%s hasTP2=%s",
+                            vreason,DirName(chosenPlan.direction),DirName(chosenPlan.direction),chosenPlan.entryPrice,chosenPlan.stopLoss,chosenPlan.takeProfit1,chosenPlan.takeProfit2,RRNetAfterSpread(chosenPlan,ctx),chosenScore,"false",
+                            (chosenPlan.entryPrice>0.0?"true":"false"),(chosenPlan.stopLoss>0.0?"true":"false"),(chosenPlan.takeProfit1>0.0?"true":"false"),(chosenPlan.takeProfit2>0.0?"true":"false")));
+      return;
+     }
    if(g_diagValidDirCandidates[sb]==0 && (g_pipePlanOk[sb]>0 || g_pipeWinnerSel[sb]>0))
      {
       g_bucketIntegrityFailed[sb]=true;
@@ -1993,8 +2008,10 @@ void OnDeinit(const int reason){ if(InpVerboseDiagnostics) Print("PersonalEA dei
    Print(StringFormat("[COMPRESSION_PROFITABILITY_SUMMARY] source=OnDeinit strategy=CompressionBreakout note=final_summary_path_active selected=%d accepted=%d rejected=%d",g_compressionSelected,g_compressionAcceptedFinal,g_compressionRejectedFinal));
    Print(StringFormat("[TREND_SELECTION_SUMMARY] trendValid=%d trendAddedToArbitration=%d trendSelected=%d trendLostToMicro=%d trendLostToCompression=%d trendRejectedByArbitration=%d topTrendArbReject=%s",
                       g_trendArbValid,g_trendArbAdded,g_trendArbWinner,g_trendArbLostToMicro,g_trendArbLostToCompression,g_trendArbRejected,g_trendTopArbReject));
-   Print(StringFormat("[TREND_PIPELINE_VALIDITY_SUMMARY] trendInternalValid=%d trendAddedToArbitration=%d arbitrationValidPlans=%d trendSelected=%d executeSelectedPlanCalled=%d topRejectReason=%s researchIsolated=%s researchStrategy=%s nextHint=%s",
-                      g_trendArbValid,g_trendArbAdded,g_pipePlanOk[0],g_trendArbWinner,g_pipelineExecuteSelectedPlanCalled,g_trendTopArbReject,(InpResearchIsolatedMode?"true":"false"),InpResearchStrategy,g_arb.TrendForensicNextHintSummary()));
+   long trendRawCandidates=g_diagValidDirCandidates[0];
+   long trendRejectedBeforePlan=MathMax(0,trendRawCandidates-g_pipePlanOk[0]);
+   Print(StringFormat("[TREND_PIPELINE_VALIDITY_SUMMARY] trendRawCandidates=%d trendRejectedBeforePlan=%d trendRejectedByRR=%d trendValidPlans=%d trendSelected=%d executeSelectedPlanCalled=%d topRejectReason=%s",
+                      trendRawCandidates,trendRejectedBeforePlan,g_noTradeRR,g_pipePlanOk[0],g_pipeWinnerSel[0],g_pipelineExecuteSelectedPlanCalled,g_trendTopArbReject));
    Print(StringFormat("[COMPRESSION_SELECTION_SUMMARY] compressionValid=%d compressionAddedToArbitration=%d compressionSelected=%d compressionLostToMicro=%d compressionRejectedByArbitration=%d topCompressionArbReject=%s",
                       g_compressionArbValid,g_compressionArbAdded,g_compressionArbWinner,g_compressionArbLostToMicro,g_compressionArbRejected,g_compressionTopArbReject));
    if(InpVerboseDiagnostics) Print(StringFormat("[STRATEGY_TOTALS] trendRaw=%d trendValid=%d trendSelected=%d compressionRaw=%d compressionValid=%d compressionSelected=%d microRaw=%d microValid=%d microSelected=%d",
