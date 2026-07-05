@@ -1,3 +1,6 @@
-declare module "node:assert/strict" { function assert(value: unknown, message?: string): asserts value; namespace assert { function equal(actual: unknown, expected: unknown, message?: string): void; } export default assert; }
-declare module "node:fs" { export function readFileSync(path: string, encoding: string): string; export function readdirSync(path: string): string[]; export function statSync(path: string): { isDirectory(): boolean }; }
-declare module "node:path" { export function join(...parts: string[]): string; }
+declare module "node:assert/strict" { function assert(value: unknown, message?: string): asserts value; namespace assert { function equal(actual: unknown, expected: unknown, message?: string): void; function ok(value: unknown, message?: string): asserts value; } export default assert; }
+declare module "node:fs" { export function readFileSync(path: string, encoding: string): string; export function writeFileSync(path: string, data: string): void; export function readdirSync(path: string): string[]; export function statSync(path: string): { isDirectory(): boolean }; export function mkdirSync(path: string, options?: { recursive?: boolean }): void; export function existsSync(path: string): boolean; export function renameSync(oldPath: string, newPath: string): void; export function mkdtempSync(prefix: string): string; }
+declare module "node:path" { export function join(...parts: string[]): string; export function dirname(path: string): string; }
+declare module "node:os" { export function tmpdir(): string; }
+declare module "node:crypto" { export function randomUUID(): string; export function createHmac(algorithm: string, key: string): { update(data: string): { digest(encoding: string): string } }; }
+declare const process: { cwd(): string; pid: number };

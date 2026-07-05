@@ -1,12 +1,22 @@
-import type { CustomerExecutionProfile, CustomerExecutionRuntimeState } from "./types";
-export class InMemoryExecutionRepository {
-  private profiles = new Map<string, CustomerExecutionProfile>();
-  private runtime = new Map<string, CustomerExecutionRuntimeState>();
-  private history = new Set<string>();
-  saveProfile(profile: CustomerExecutionProfile) { this.profiles.set(profile.customerId, structuredClone(profile)); }
-  listProfiles() { return [...this.profiles.values()].map((p) => structuredClone(p)); }
-  getRuntime(customerId: string) { return this.runtime.get(customerId); }
-  recordDispatch(key: string) { this.history.add(key); }
-  hasDispatched(key: string) { return this.history.has(key); }
-  clear() { this.profiles.clear(); this.runtime.clear(); this.history.clear(); }
+import { DurableJsonStore, clone } from "./storage";
+import type { CustomerExecutionProfile, CustomerExecutionRuntimeState, ExecutionCommand, WorkerState } from "./types";
+export class DurableExecutionRepository { constructor(readonly store = new DurableJsonStore()) {}
+  saveProfile(profile: CustomerExecutionProfile) { this.store.locked((s) => { s.profiles = s.profiles.filter((p) => p.customerId !== profile.customerId); s.profiles.push(clone(profile)); }); }
+  listProfiles(offset = 0, limit = Number.MAX_SAFE_INTEGER) { return this.store.read().profiles.slice(offset, offset + limit).map(clone); }
+  getRuntime(customerId: string) { return clone(this.store.read().runtime.find((r) => r.customerId === customerId)); }
+  upsertRuntime(runtime: CustomerExecutionRuntimeState) { this.store.locked((s) => { s.runtime = s.runtime.filter((r) => r.customerId !== runtime.customerId); s.runtime.push(clone(runtime)); }); }
+  recordDispatch(key: string) { this.store.locked((s) => { if (!s.dispatchHistory.includes(key)) s.dispatchHistory.push(key); }); }
+  hasDispatched(key: string) { const s = this.store.read(); return s.dispatchHistory.includes(key) || Boolean(s.idempotencyRecords[key]); }
+  reserveIdempotency(key: string, commandId: string, ttlMs?: number) { return this.store.locked((s) => { const now = Date.now(); const rec = s.idempotencyRecords[key]; if (rec && (!rec.expiresAt || Date.parse(rec.expiresAt) > now)) { s.duplicatePreventionCount++; return false; } s.idempotencyRecords[key] = { commandId, createdAt: new Date(now).toISOString(), expiresAt: ttlMs ? new Date(now + ttlMs).toISOString() : undefined }; if (!s.dispatchHistory.includes(key)) s.dispatchHistory.push(key); return true; }); }
+  insertCommand(command: ExecutionCommand) { return this.store.locked((s) => { if (s.commands.some((c) => c.commandId === command.commandId || c.idempotencyKey === command.idempotencyKey)) return false; s.commands.push(clone(command)); return true; }); }
+  updateCommand(commandId: string, patch: Partial<ExecutionCommand>) { return this.store.locked((s) => { const c = s.commands.find((x) => x.commandId === commandId); if (!c) return undefined; Object.assign(c, clone(patch), { updatedAt: new Date().toISOString() }); return clone(c); }); }
+  compareAndSetCommand(commandId: string, expected: Partial<ExecutionCommand>, patch: Partial<ExecutionCommand>) { return this.store.locked((s) => { const c = s.commands.find((x) => x.commandId === commandId); if (!c) return false; if (Object.entries(expected).some(([k, v]) => (c as any)[k] !== v)) return false; Object.assign(c, clone(patch), { updatedAt: new Date().toISOString() }); return true; }); }
+  listCommands(predicate: (c: ExecutionCommand) => boolean = () => true, limit = Number.MAX_SAFE_INTEGER) { return this.store.read().commands.filter(predicate).slice(0, limit).map(clone); }
+  moveToDeadLetter(commandId: string) { this.store.locked((s) => { const idx = s.commands.findIndex((c) => c.commandId === commandId); if (idx >= 0) s.deadLetters.push(s.commands.splice(idx, 1)[0]!); }); }
+  saveWorkerState(worker: WorkerState) { this.store.locked((s) => { s.workerState = s.workerState.filter((w) => w.workerId !== worker.workerId); s.workerState.push(clone(worker)); }); }
+  recordVerification(entry: any) { this.store.locked((s) => { s.verificationHistory.push(clone(entry)); }); }
+  cleanup(ttlMs: number) { const cutoff = Date.now() - ttlMs; this.store.locked((s) => { s.events = s.events.filter((e) => Date.parse(e.timestamp) >= cutoff); for (const [k, v] of Object.entries(s.idempotencyRecords)) if (v.expiresAt && Date.parse(v.expiresAt) < Date.now()) delete s.idempotencyRecords[k]; }); }
+  recover(now = new Date()) { return this.store.locked((s) => { let n = 0; for (const c of s.commands) if ((c.status === "leased" || c.status === "started" || c.status === "sent") && c.leaseExpiration && Date.parse(c.leaseExpiration) <= now.getTime()) { c.status = "queued"; c.leasedBy = undefined; c.leaseExpiration = undefined; n++; } s.recoveryCount += n; return n; }); }
+  telemetry() { const s = this.store.read(); const done = s.commands.filter((c) => c.status === "completed" || c.status === "verified").length; const total = s.commands.length + s.deadLetters.length || 1; return { queueDepth: s.commands.filter((c) => ["queued", "retry_scheduled"].includes(c.status)).length, workerHealth: Object.fromEntries(s.workerState.map((w) => [w.workerId, w.status])), averageLatencyMs: 0, failureRate: s.deadLetters.length / total, retryRate: s.commands.filter((c) => c.retryCount > 0).length / total, completionRate: done / total, verificationRate: s.verificationHistory.length / total, recoveryCount: s.recoveryCount, duplicatePreventionCount: s.duplicatePreventionCount }; }
+  clear() { this.store.clear(); }
 }
