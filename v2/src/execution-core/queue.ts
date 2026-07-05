@@ -1,13 +1,18 @@
-import type { CommandStatus, ExecutionCommand } from "./types";
-export class InMemoryCommandQueue {
-  private commands: ExecutionCommand[] = [];
-  private idempotency = new Map<string, ExecutionCommand>();
-  enqueue(command: ExecutionCommand): { enqueued: boolean; command: ExecutionCommand; reason?: string } { const existing = this.idempotency.get(command.idempotencyKey); if (existing) return { enqueued: false, command: existing, reason: "duplicate_command_prevented" }; this.commands.push(command); this.idempotency.set(command.idempotencyKey, command); return { enqueued: true, command }; }
-  dequeue() { return this.commands.find((c) => c.status === "queued" || (c.status === "retry_scheduled" && (!c.retryAt || Date.parse(c.retryAt) <= Date.now()))); }
-  peek() { return this.commands[0]; }
-  findByIdempotencyKey(key: string) { return this.idempotency.get(key); }
-  private mark(commandId: string, status: CommandStatus, extra: Partial<ExecutionCommand> = {}) { const cmd = this.commands.find((c) => c.commandId === commandId); if (!cmd) return undefined; Object.assign(cmd, extra, { status, updatedAt: new Date().toISOString() }); return cmd; }
-  markSent(id: string) { return this.mark(id, "sent"); } markAcknowledged(id: string) { return this.mark(id, "acknowledged"); } markCompleted(id: string) { return this.mark(id, "completed"); } markVerified(id: string) { return this.mark(id, "verified"); } markFailed(id: string, reason: string) { return this.mark(id, "failed", { failureReason: reason }); } scheduleRetry(id: string, retryAt: string) { return this.mark(id, "retry_scheduled", { retryAt }); }
-  byCustomer(customerId: string) { return this.commands.filter((c) => c.customerId === customerId); } byExecutor(executorId: string) { return this.commands.filter((c) => c.executorId === executorId); } byAccount(accountId: string) { return this.commands.filter((c) => c.accountId === accountId); }
-  snapshot() { return this.commands.map((c) => ({ ...c })); } clear() { this.commands = []; this.idempotency.clear(); }
+import { DurableExecutionRepository } from "./repositories";
+import type { CommandStatus, ExecutionCommand, FailureCategory } from "./types";
+export class DurableCommandQueue { constructor(private readonly repo = new DurableExecutionRepository(), private readonly visibilityTimeoutMs = 30_000, private readonly maxRetries = 5) {}
+  enqueue(command: ExecutionCommand) { const reserved = this.repo.reserveIdempotency(command.idempotencyKey, command.commandId); if (!reserved) { const existing = this.repo.listCommands((c) => c.idempotencyKey === command.idempotencyKey, 1)[0]; return { enqueued: false, command: existing ?? command, reason: "duplicate_command_prevented" }; } const enqueued = this.repo.insertCommand(command); return { enqueued, command, reason: enqueued ? undefined : "duplicate_command_prevented" }; }
+  dequeue(workerId = "worker", batchSize = 1) { return this.lease(workerId, batchSize)[0]; }
+  lease(workerId: string, batchSize = 1) { const now = Date.now(); const due = this.repo.listCommands((c) => (c.status === "queued" || c.status === "retry_scheduled") && (!c.retryAt || Date.parse(c.retryAt) <= now)).sort((a,b)=>b.priority-a.priority || Date.parse(a.createdAt)-Date.parse(b.createdAt)); const leased: ExecutionCommand[] = []; for (const c of due.slice(0, batchSize)) if (this.repo.compareAndSetCommand(c.commandId, { status: c.status }, { status: "leased", leasedBy: workerId, leaseExpiration: new Date(now + this.visibilityTimeoutMs).toISOString() })) leased.push(this.repo.listCommands((x)=>x.commandId===c.commandId,1)[0]!); return leased; }
+  renewLease(commandId: string, workerId: string) { return this.repo.compareAndSetCommand(commandId, { leasedBy: workerId }, { leaseExpiration: new Date(Date.now() + this.visibilityTimeoutMs).toISOString() }); }
+  releaseLease(commandId: string, workerId: string) { return this.repo.compareAndSetCommand(commandId, { leasedBy: workerId }, { status: "queued", leasedBy: undefined, leaseExpiration: undefined }); }
+  ack(commandId: string) { return this.mark(commandId, "completed"); }
+  mark(commandId: string, status: CommandStatus, extra: Partial<ExecutionCommand> = {}) { return this.repo.updateCommand(commandId, { ...extra, status }); }
+  markSent(id: string) { return this.mark(id, "sent"); } markAcknowledged(id: string) { return this.mark(id, "acknowledged"); } markCompleted(id: string) { return this.mark(id, "completed"); } markVerified(id: string) { return this.mark(id, "verified"); }
+  markFailed(id: string, reason: string, category: FailureCategory = "Permanent") { return this.mark(id, "failed", { failureReason: reason, failureCategory: category }); }
+  scheduleRetry(id: string, retryAt?: string, reason?: string, category: FailureCategory = "Transient") { const c = this.repo.listCommands((x)=>x.commandId===id,1)[0]; if (!c) return undefined; const retryCount = c.retryCount + 1; if (retryCount > this.maxRetries || ["Permanent","Authentication","ManualInterventionRequired","Duplicate"].includes(category)) { this.mark(id, "dead_lettered", { retryCount, failureReason: reason, failureCategory: category }); this.repo.moveToDeadLetter(id); return undefined; } return this.mark(id, "retry_scheduled", { retryCount, retryAt: retryAt ?? new Date(Date.now() + retryCount * 1000).toISOString(), failureReason: reason, failureCategory: category, leasedBy: undefined, leaseExpiration: undefined }); }
+  recoverExpiredLeases() { return this.repo.recover(); }
+  peek() { return this.repo.listCommands(() => true, 1)[0]; } findByIdempotencyKey(key: string) { return this.repo.listCommands((c)=>c.idempotencyKey===key,1)[0]; }
+  byCustomer(customerId: string) { return this.repo.listCommands((c)=>c.customerId===customerId); } byExecutor(executorId: string) { return this.repo.listCommands((c)=>c.executorId===executorId); } byAccount(accountId: string) { return this.repo.listCommands((c)=>c.accountId===accountId); }
+  snapshot() { return this.repo.listCommands(); } clear() { this.repo.clear(); }
 }
