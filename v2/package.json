@@ -6,7 +6,8 @@
     "lint": "tsx tests/no-forbidden-imports.test.ts",
     "typecheck": "tsc --noEmit",
     "test:contracts": "tsx tests/execution-core.test.ts",
-    "test:execution-core": "tsx tests/execution-core.test.ts"
+    "test:execution-core": "tsx tests/execution-core.test.ts",
+    "test:adapters": "tsx tests/adapters/crypto-adapter-certification.test.ts"
   },
   "devDependencies": {}
 }
